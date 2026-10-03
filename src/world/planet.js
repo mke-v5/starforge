@@ -15,9 +15,9 @@ const VERT = /* glsl */`
 #include <logdepthbuf_pars_vertex>
 attribute float aH;
 uniform vec3 uCenter;
-varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH;
+varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH; varying vec3 vB;
 void main(){
-  vUv = uv; vH = aH;
+  vUv = uv; vH = aH; vB = uCenter + position;
   mat3 R = mat3(modelMatrix);
   vN = R * normal;
   vSN = R * normalize(uCenter + position);
@@ -66,11 +66,51 @@ const FRAG_MOON = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_fragment>
 uniform sampler2D map; uniform vec3 uImg; uniform vec3 uSun; uniform float uEarthshine;
-varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH;
+varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH; varying vec3 vB;
+float h31(vec3 p){ p = fract(p * vec3(0.1031, 0.1030, 0.0973)); p += dot(p, p.yzx + 33.33); return fract((p.x + p.y) * p.z); }
+vec3 h33(vec3 p){ p = fract(p * vec3(0.1031, 0.1030, 0.0973)); p += dot(p, p.yxz + 33.33); return fract((p.xxy + p.yxx) * p.zyx); }
+float vnoise(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(h31(i), h31(i + vec3(1,0,0)), f.x), mix(h31(i + vec3(0,1,0)), h31(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(h31(i + vec3(0,0,1)), h31(i + vec3(1,0,1)), f.x), mix(h31(i + vec3(0,1,1)), h31(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+// small impact craters: a bowl with a raised rim per random cell; returns the height gradient and an albedo tweak
+vec3 craterField(vec3 p, float cell, out float alb){
+  vec3 g = vec3(0.0); alb = 0.0;
+  vec3 b = floor(p / cell - 0.5);
+  for (int i = 0; i < 8; i++) {
+    vec3 c = b + vec3(float(i - (i / 2) * 2), float((i / 2) - (i / 4) * 2), float(i / 4));
+    vec3 rnd = h33(c);
+    if (rnd.z > 0.55) continue;                              // not every cell has a crater
+    vec3 ctr = (c + 0.25 + 0.5 * rnd) * cell;
+    float r = cell * (0.12 + 0.3 * h31(c + 7.1));
+    vec3 d = p - ctr; float dl = length(d);
+    if (dl > r * 1.6 || dl < 1e-3) continue;
+    float x = dl / r;
+    // height (in units of r): parabolic bowl 0.2·(x²-1) inside, gaussian rim 0.06·exp(-(x-1)²/0.045)
+    float e = exp(-(x - 1.0) * (x - 1.0) / 0.045);
+    float dh = (x < 1.0 ? 0.4 * x : 0.0) - 0.06 * 2.0 * (x - 1.0) / 0.045 * e;   // slope d(height)/d(distance)
+    g += d / dl * dh;
+    alb += (x < 0.9 ? -0.05 : 0.0) + 0.08 * exp(-(x - 1.0) * (x - 1.0) / 0.03);
+  }
+  return g;
+}
 void main(){
   #include <logdepthbuf_fragment>
   vec3 alb = texture2D(map, uImg.xy + vUv * uImg.z).rgb;
   vec3 N = normalize(vN), SN = normalize(vSN);
+  // close-up detail, fading in near the camera (the imagery is ~100 m per pixel)
+  float dist = length(vW);
+  float w1 = 1.0 - smoothstep(900.0, 3500.0, dist), w2 = 1.0 - smoothstep(3500.0, 14000.0, dist);
+  if (w2 > 0.0) {
+    float a1 = 0.0, a2 = 0.0;
+    vec3 g = craterField(vB, 180.0, a2) * w2;
+    if (w1 > 0.0) g += craterField(vB, 40.0, a1) * w1;
+    g -= SN * dot(g, SN);                                    // keep the slope in the ground plane
+    N = normalize(N - g * 0.9);
+    float n = vnoise(vB / 3.0) * 0.5 + vnoise(vB / 11.0) * 0.3 + vnoise(vB / 41.0) * 0.2;
+    alb *= 1.0 + ((n - 0.5) * 0.22 + a1 * w1 + a2) * w2;
+  }
   float ndl = max(dot(N, uSun), 0.0);
   float sd = dot(SN, uSun);
   float lit = mix(max(sd, 0.0), ndl, 0.8);

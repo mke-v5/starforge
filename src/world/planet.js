@@ -55,9 +55,13 @@ void main(){
   float Hs = 8000.0;
   float hc = max(uCamAlt, 0.0), hf = max(vH, 0.0), dh = hc - hf;
   float dens = abs(dh) < 100.0 ? exp(-hf / Hs) : Hs * (exp(-hf / Hs) - exp(-hc / Hs)) / dh;
-  float fog = 1.0 - exp(-length(vW) * dens * uFogK);
-  vec3 haze = mix(vec3(1.0, 0.55, 0.32), vec3(0.56, 0.68, 0.88), smoothstep(0.0, 0.35, sd)) * smoothstep(-0.18, 0.12, sd);
-  col = mix(col, haze, clamp(fog, 0.0, 1.0));
+  // haze: greyish (aerosols) seen from low down, strongly blue (Rayleigh) when looking down from high up
+  float od = length(vW) * dens * uFogK;
+  float hiCam = smoothstep(4000.0, 60000.0, hc);
+  vec3 kRGB = mix(vec3(0.92, 1.0, 1.1), vec3(0.4, 0.75, 1.6), hiCam);
+  vec3 fog = 1.0 - exp(-od * kRGB);
+  vec3 haze = mix(vec3(1.0, 0.55, 0.32), mix(vec3(0.56, 0.68, 0.88), vec3(0.45, 0.62, 0.95), hiCam), smoothstep(0.0, 0.35, sd)) * smoothstep(-0.18, 0.12, sd);
+  col = col * (1.0 - fog) + haze * fog;
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 }`;

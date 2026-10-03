@@ -76,10 +76,12 @@ void main(){ vP = position; vN = normalize(normalMatrix * normal); vec4 mv = mod
 uniform float uI; uniform float uTime; varying vec3 vN; varying vec3 vV; varying vec3 vP;
 void main(){
 #include <logdepthbuf_fragment>
-  float rim = pow(1.0 - abs(dot(vN, vV)), 1.5);
-  float front = smoothstep(-0.2, 1.0, -vP.y);
-  float n = 0.75 + 0.25 * sin(uTime * 40.0 + vP.y * 6.0 + vP.x * 3.0);
-  vec3 col = mix(vec3(1.0, 0.35, 0.12), vec3(1.0, 0.75, 0.95), front) * (rim * 0.9 + front * 0.5) * uI * n;
+  // a thin shock layer on the windward side: bright where the sheath is seen edge-on, pink-white at the
+  // stagnation point fading to orange toward its edges, nothing on the lee side
+  float rim = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.2);
+  float front = smoothstep(0.05, 1.0, -vP.y);
+  float n = 0.8 + 0.2 * sin(uTime * 37.0 + vP.y * 7.0 + vP.x * 5.0) * sin(uTime * 23.0 + vP.z * 6.0);
+  vec3 col = mix(vec3(1.0, 0.32, 0.08), vec3(1.0, 0.72, 0.9), front * front) * (rim * 1.1 + pow(front, 4.0) * 0.25) * front * uI * n;
   gl_FragColor = vec4(col, 1.0);
 }`,
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
@@ -87,6 +89,37 @@ void main(){
     this.plasma = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), this.plasmaMat);
     this.plasma.visible = false;
     this.plasma.renderOrder = 20;
+    // glowing wake of ionised air streaming behind the craft
+    this.trailMat = new THREE.ShaderMaterial({
+      uniforms: { uI: { value: 0 }, uTime: { value: 0 } },
+      vertexShader: /* glsl */`
+#include <common>
+#include <logdepthbuf_pars_vertex>
+varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+void main(){ vUv = uv; vN = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position,1.0); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv;
+#include <logdepthbuf_vertex>
+}`,
+      fragmentShader: /* glsl */`
+#include <common>
+#include <logdepthbuf_pars_fragment>
+uniform float uI; uniform float uTime; varying vec2 vUv; varying vec3 vN; varying vec3 vV;
+void main(){
+#include <logdepthbuf_fragment>
+  float along = 1.0 - vUv.y;                                   // 0 at the craft, 1 at the end of the wake
+  float fade = pow(1.0 - along, 1.8);
+  float streak = 0.55 + 0.45 * sin(vUv.x * 6.2832 * 9.0 + along * 14.0 - uTime * 30.0) * sin(vUv.x * 6.2832 * 4.0 - along * 9.0 + uTime * 17.0);
+  float soft = pow(abs(dot(normalize(vN), normalize(vV))), 1.2);
+  vec3 col = mix(vec3(1.0, 0.62, 0.75), vec3(1.0, 0.28, 0.06), smoothstep(0.0, 0.5, along)) * fade * streak * soft * uI * 0.9;
+  gl_FragColor = vec4(col, 1.0);
+}`,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const tg = new THREE.CylinderGeometry(1, 0.25, 1, 32, 1, true);
+    tg.translate(0, -0.5, 0);
+    this.trail = new THREE.Mesh(tg, this.trailMat);
+    this.trail.visible = false;
+    this.trail.renderOrder = 21;
+    this.trail.frustumCulled = false;
     this.plasmaLight = new THREE.PointLight(0xff7a3d, 0, 200, 1.5);
     this.flash = new THREE.PointLight(0xffaa55, 0, 400, 2);
     scene.add(this.flash);
@@ -115,7 +148,9 @@ void main(){
       this.plumes.push({ P, mesh, style, r, hybridRocket: e.type === 'hybrid' });
     }
     if (this.plasma.parent) this.plasma.parent.remove(this.plasma);
+    if (this.trail.parent) this.trail.parent.remove(this.trail);
     craft.group.add(this.plasma);
+    craft.group.add(this.trail);
     craft.group.add(this.plasmaLight);
     const b = craft.box;
     this.plasmaBox = { c: b.getCenter(new THREE.Vector3()), s: b.getSize(new THREE.Vector3()) };
@@ -146,6 +181,7 @@ void main(){
     // reentry plasma
     const pi = clamp((heatFlux - 1.5e5) / 1.2e6, 0, 1);
     this.plasma.visible = pi > 0.01;
+    this.trail.visible = pi > 0.03;
     this.plasmaLight.intensity = pi * 400;
     if (this.plasma.visible) {
       const V = vAirBody.length();
@@ -159,6 +195,13 @@ void main(){
       this.plasmaMat.uniforms.uI.value = pi;
       this.plasmaMat.uniforms.uTime.value = this.time;
       this.plasmaLight.position.copy(this.plasma.position).addScaledVector(dir, rad);
+      // wake: starts at the craft centre and streams back against the direction of travel
+      this.trail.position.copy(this.plasmaBox.c);
+      this.trail.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      const tl = rad * (2.5 + pi * 4.0);
+      this.trail.scale.set(rad * 0.85, tl, rad * 0.85);
+      this.trailMat.uniforms.uI.value = pi;
+      this.trailMat.uniforms.uTime.value = this.time;
     }
   }
 

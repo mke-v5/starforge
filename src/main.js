@@ -820,7 +820,7 @@ class Game {
     const g = E.body.mu / Math.pow(E.body.R + E.h, 2);
     x.twr = T / (craft.mass * g);
     const airborne = ship.contacts === 0;
-    x.stall = airborne && E.q > 50 && E.vSurf > 20 && craft.wings.some((P) => P.wing.stalled && P.wing.area > 4);
+    x.stall = airborne && E.q > 50 && E.vSurf > 20 && E.mach < 2.5 && craft.wings.some((P) => P.wing.stalled && P.wing.area > 4);
     x.pullUp = airborne && E.vVert < -25 && E.agl < -E.vVert * 7 && E.agl < 1500;
     x.gearUp = airborne && !ship.ctl.gear && E.agl < 250 && E.vVert < -1 && craft.gears.length > 0;
     let fuelFrac = 1; for (const k of ['LF', 'OX', 'FU']) { const cap = craft.capacity(k); if (cap > 0) fuelFrac = Math.min(fuelFrac, craft.amount(k) / cap); }

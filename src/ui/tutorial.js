@@ -27,7 +27,7 @@ export function flightSchool() {
     { title: 'Climb', text: 'Climb to 1,000 m — watch RAD at the top. Let go of the stick: the fly-by-wire holds your climb angle for you.',
       check: (g) => g.ship.env.agl > 1000 },
     { title: 'Level off', text: T ? 'Push the stick up a little until V/S reads about 0, then let go. Bring the throttle back to about 60%.' : 'Tap <kbd>W</kbd> until V/S reads about 0, then let go. Ease the throttle to about 60% (<kbd>Ctrl</kbd>).',
-      check: (g, dt) => { mem.lvl = Math.abs(g.ship.env.vVert) < 4 ? (mem.lvl || 0) + dt : 0; return mem.lvl > 3; } },
+      check: (g, dt) => { const E = g.ship.env; mem.lvl = Math.abs(E.vVert) < Math.max(4, E.vSurf * 0.03) ? (mem.lvl || 0) + dt : 0; return mem.lvl > 2.5; } },
     { title: 'Turn', text: T ? 'Move the stick left or right to bank, then let go — the bank holds and the turn is coordinated. Turn about 90° (watch HDG).' : 'Hold <kbd>A</kbd> or <kbd>D</kbd> to bank, then let go — the bank holds and the turn is coordinated. Turn about 90° (watch HDG).',
       start: (g) => { mem.h0 = attitude(g.ship).hdg; },
       check: (g) => Math.abs(angDiff(attitude(g.ship).hdg, mem.h0)) > 80 },

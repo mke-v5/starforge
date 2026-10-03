@@ -150,7 +150,7 @@ export class Controller {
         if (bank > 1.17 && p > 0) p = Math.min(p, (1.17 - bank) * 2.2);
         if (bank < -1.17 && p < 0) p = Math.max(p, (-1.17 - bank) * 2.2);
       } else {
-        if (this.bankHold == null) this.bankHold = Math.abs(bank) < 0.12 ? 0 : clamp(bank, -0.61, 0.61);
+        if (this.bankHold == null) this.bankHold = Math.abs(bank) < 0.18 ? 0 : clamp(bank, -0.61, 0.61);
         if (alpha > 0.26) this.bankHold = clamp(this.bankHold, -0.2, 0.2);
         p = clamp((this.bankHold - bank) * 2.2, -1.2, 1.2);
       }

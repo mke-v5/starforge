@@ -302,7 +302,11 @@ export class Hud {
     const hc = heat > 0.85 ? 'var(--red)' : heat > 0.7 ? 'var(--amber)' : 'var(--green)';
     html += `<div class="ln"><span>Heat</span><span>${craft.hottest ? Math.round(craft.hottest.temp) + ' K' : '—'}</span></div><div class="bar"><i style="width:${Math.min(100, heat * 100).toFixed(0)}%;background:${hc}"></i></div>`;
     html += `<div class="more">`;
-    if (ship.env.rho > 0.05 && isFinite(extra.endurance) && craft.engines.some((P) => P.eng.flame > 0 && (P.eng.mode === 'jet' || P.eng.mode === 'air'))) html += `<div class="ln"><span>Fuel time</span><span>${fmtTime(extra.endurance)}</span></div>`;
+    // air-breathing flight is about how long the fuel lasts; rocket flight is about delta-v
+    const jetsOnly = !craft.engines.some((P) => P.alive !== false && (P.eng.mode === 'rocket' || P.eng.e.type === 'hybrid'));
+    const jetsBurning = craft.engines.some((P) => P.eng.flame > 0 && (P.eng.mode === 'jet' || P.eng.mode === 'air'));
+    if (ship.env.rho > 0.05 && isFinite(extra.endurance) && jetsBurning) html += `<div class="ln"><span>Fuel time</span><span>${fmtTime(extra.endurance)}</span></div>`;
+    else if (jetsOnly) html += `<div class="ln"><span>Fuel time</span><span>${isFinite(extra.endurance) ? fmtTime(extra.endurance) : 'engines idle'}</span></div>`;
     else html += `<div class="ln"><span>Δv</span><span>${fmtNum(extra.dv)} m/s</span></div>`;
     html += `<div class="ln"><span>TWR</span><span>${extra.twr.toFixed(2)}</span></div>`;
     html += `<div class="ln"><span>Mass</span><span>${(craft.mass / 1000).toFixed(1)} t</span></div>`;

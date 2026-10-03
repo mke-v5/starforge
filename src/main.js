@@ -29,7 +29,11 @@ class Game {
     this.canvas = $('gl');
     const mobile = matchMedia('(pointer:coarse)').matches;
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: !mobile, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.settings.quality === 'high' ? 2 : mobile ? 1.5 : 1.75));
+    // resolution scale: the quality setting sets the ceiling, and it drops automatically if frames get slow
+    this.prMax = () => Math.min(window.devicePixelRatio || 1, { low: 1, medium: mobile ? 1.35 : 1.5, high: 2 }[this.settings.quality] || 1.5);
+    this.pr = this.prMax();
+    this.perf = { acc: 0, n: 0, good: 0 };
+    this.renderer.setPixelRatio(this.pr);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.autoClear = true;
@@ -157,6 +161,7 @@ class Game {
     this.audio.setOn(this.settings.sound !== '0');
     this.input.invertPitch = this.settings.invert === '1';
     this.world.buildings.enabled = this.settings.buildings !== '0';
+    if (this.pr > this.prMax()) { this.pr = this.prMax(); this.renderer.setPixelRatio(this.pr); this.resize(); }
   }
   syncSettings() { for (const seg of document.querySelectorAll('.seg')) for (const b of seg.children) b.classList.toggle('on', String(this.settings[seg.dataset.set]) === b.dataset.v); }
   openSettings() { this.syncSettings(); this.modal('settings'); }
@@ -635,6 +640,7 @@ class Game {
     requestAnimationFrame((t) => this.frame(t));
     let dt = (now - this.last) / 1000; this.last = now;
     if (!(dt > 0)) dt = 0.016;
+    this.adaptResolution(dt);
     dt = Math.min(dt, this.maxDt || 0.05);
     const inp = this.input.poll();
     const keys = this.input.take();
@@ -644,6 +650,22 @@ class Game {
     else if (this.state === 'hangar' && this.builder) { this.builder.frame(dt, camIn, keys); return; }
     else this.idleFrame(dt);
     this.render(dt);
+  }
+
+  // dynamic resolution: keep the frame rate up on weaker GPUs and phones
+  adaptResolution(dt) {
+    if (dt > 0.25 || document.hidden) return;          // tab switches and hitches don't count
+    const P = this.perf;
+    P.acc += dt; P.n++;
+    if (P.acc < 2) return;
+    const fps = P.n / P.acc;
+    P.acc = 0; P.n = 0;
+    const max = this.prMax(), min = Math.min(max, 0.75);
+    let pr = this.pr;
+    if (fps < 38 && pr > min) { pr = Math.max(min, pr - 0.2); P.good = 0; }
+    else if (fps > 56) { if (++P.good >= 3 && pr < max) { pr = Math.min(max, pr + 0.1); P.good = 0; } }
+    else P.good = 0;
+    if (Math.abs(pr - this.pr) > 1e-3) { this.pr = pr; this.renderer.setPixelRatio(pr); this.resize(); }
   }
 
   idleFrame(dt) {

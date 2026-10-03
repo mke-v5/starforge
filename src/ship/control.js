@@ -130,6 +130,9 @@ export class Controller {
         nCmd = level + (inp.pitch > 0 ? inp.pitch * 6 : inp.pitch * 2.8);
       } else {
         if (this.gammaHold == null) this.gammaHold = gamma;
+        // low-speed protection: a climb the engines can't sustain bleeds off speed; near the stall, ease the
+        // held climb angle down so the plane keeps flying
+        if (alpha > 0.22 && this.gammaHold > -0.05) this.gammaHold -= dt * 0.1 * clamp((alpha - 0.22) / 0.06, 0, 1);
         nCmd = level + clamp((this.gammaHold - gamma) * V / g * 0.7, -1.5, 2);
       }
       nCmd = clamp(nCmd, -2.5, 7.5);
@@ -138,10 +141,17 @@ export class Controller {
       if (alpha > 0.30 && q > 0) q *= clamp((0.42 - alpha) / 0.12, 0, 1);
       if (alpha < -0.22 && q < 0) q *= clamp((alpha + 0.34) / 0.12, 0, 1);
       // roll: rate command, or hold bank (snap to wings level when close)
+      // bank protection (like an airliner's): up to 67° while you hold the stick; let go past 35° and it
+      // rolls back to 35°; close to the stall it levels the wings so the wing can recover
       let p;
-      if (Math.abs(inp.roll) > 0.03) { this.bankHold = null; p = inp.roll * Math.abs(inp.roll) * 2.2 + inp.roll * 0.25; }
-      else {
-        if (this.bankHold == null) this.bankHold = Math.abs(bank) < 0.12 ? 0 : clamp(bank, -1.2, 1.2);
+      if (Math.abs(inp.roll) > 0.03) {
+        this.bankHold = null;
+        p = inp.roll * Math.abs(inp.roll) * 2.2 + inp.roll * 0.25;
+        if (bank > 1.17 && p > 0) p = Math.min(p, (1.17 - bank) * 2.2);
+        if (bank < -1.17 && p < 0) p = Math.max(p, (-1.17 - bank) * 2.2);
+      } else {
+        if (this.bankHold == null) this.bankHold = Math.abs(bank) < 0.12 ? 0 : clamp(bank, -0.61, 0.61);
+        if (alpha > 0.26) this.bankHold = clamp(this.bankHold, -0.2, 0.2);
         p = clamp((this.bankHold - bank) * 2.2, -1.2, 1.2);
       }
       // turn coordination: feed forward the turn rate and kill sideslip

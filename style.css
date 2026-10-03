@@ -233,3 +233,10 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   .hb-stats{top:calc(94px + var(--st));width:170px}
   .infopanel{display:none}
 }
+/* narrow windows: keep the flight-school card clear of the info panel */
+@media (max-width:900px) and (min-height:441px){
+  .tut{left:calc(196px + var(--sl));transform:none;width:min(460px,calc(100vw - 210px - var(--sl) - var(--sr)))}
+}
+@media (max-width:600px) and (orientation:portrait){
+  .tut{left:50%;transform:translateX(-50%);width:calc(100vw - 24px);top:calc(70px + var(--st))}
+}

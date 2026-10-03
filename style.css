@@ -51,7 +51,8 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
 /* launch */
 #launch.show{display:flex;align-items:center;justify-content:center;background:rgba(3,5,9,.5)}
 .launch-panel{width:min(560px,calc(100vw - 24px));max-height:calc(100vh - 24px);padding:14px;display:grid;gap:10px;grid-template-rows:auto auto auto auto 1fr auto auto}
-.ship-pick{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;touch-action:pan-x}
+.ship-pick{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;touch-action:pan-x;min-height:40px}
+.launch-panel .list{min-height:0}
 .ship-pick button{flex:none;min-height:36px;padding:0 12px;border:1px solid var(--line2);background:rgba(20,28,43,.9);border-radius:4px;font:600 13px var(--display);letter-spacing:.06em;text-transform:uppercase}
 .ship-pick button.on{border-color:var(--amber);color:var(--amber)}
 .tabs{display:flex;gap:4px;flex-wrap:wrap}
@@ -195,6 +196,13 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   .infopanel{width:150px;font-size:9.5px}
   .hb-parts{width:210px}.hb-stats{width:190px;font-size:10.5px}
   .sas button{height:24px;font-size:10px}
+  .launch-panel{gap:6px;padding:10px}
+  .launch-panel .ph h2{font-size:17px}
+  .launch-panel .field{min-height:38px}
+  .launch-panel .tab{min-height:30px}
+  #l-go{min-height:40px}
+  .panel.narrow{gap:6px;padding:12px}
+  .dbtns .btn{min-height:36px}
 }
 /* portrait phones */
 @media (max-width:600px) and (orientation:portrait){

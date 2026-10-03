@@ -166,7 +166,7 @@ export class MapView {
     const center = body === EARTH ? new THREE.Vector3() : moonNow;
     if (el.e < 1 && el.ev.length() > 1e-4) {
       const peDir = el.ev.clone().normalize();
-      add(center.clone().addScaledVector(peDir, el.pe), `Pe ${U.dist(el.pe - body.R)}`);
+      if (el.pe > body.R) add(center.clone().addScaledVector(peDir, el.pe), `Pe ${U.dist(el.pe - body.R)}`);
       if (isFinite(el.ap)) add(center.clone().addScaledVector(peDir, -el.ap), `Ap ${U.dist(el.ap - body.R)}`);
     }
     add(moonNow, 'MOON', 'moon');
@@ -187,7 +187,7 @@ export class MapView {
     const el = elements(rs.r, rs.v, rs.mu);
     let h = `<div><b>${body.name}</b> · ${U.dist(ship.env.h)} up · ${U.speed(rs.v.length()).join(' ')}</div>`;
     h += `<div>Apoapsis <b>${isFinite(el.ap) ? U.dist(el.ap - body.R) : 'escape'}</b></div>`;
-    h += `<div>Periapsis <b>${U.dist(el.pe - body.R)}</b></div>`;
+    h += `<div>Periapsis <b>${el.pe < body.R ? 'below the surface' : U.dist(el.pe - body.R)}</b></div>`;
     h += `<div>Inclination <b>${(el.inc * 57.2958).toFixed(1)}°</b></div>`;
     if (el.e < 1) h += `<div>Period <b>${fmtTime(el.period)}</b> · Ap in <b>${fmtTime(el.tAp)}</b></div>`;
     const P = this.pred;

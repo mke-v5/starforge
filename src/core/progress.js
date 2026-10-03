@@ -1,6 +1,7 @@
 // Milestones (logbook). Each check runs on the flight state; achieved milestones persist.
 import { load, save } from './store.js';
 import { EARTH, MOON } from './geo.js';
+import { relState, elements } from '../ship/orbit.js';
 
 export const MILESTONES = [
   { id: 'firstFlight', name: 'Wheels up', desc: 'Take off from an airport.' },
@@ -51,6 +52,14 @@ export class Progress {
     } else {
       F.visitedMoon = true;
       this.unlock('moonSoi');
+    }
+    // orbit milestones (checked every couple of seconds, not only while the map is open)
+    F.orbT = (F.orbT || 0) + dt;
+    if (F.orbT > 2) {
+      F.orbT = 0;
+      const rs = relState(ship, E.body);
+      const el = elements(rs.r, rs.v, rs.mu);
+      if (el.e < 1) this.orbitCheck(E.body, el.pe);
     }
   }
   orbitCheck(body, pe) {

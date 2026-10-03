@@ -263,14 +263,16 @@ export class Hud {
     this.updateInfo(ship, ctl, extra);
     // orbit bar
     const ob = $('h-orbit');
-    if (E.h > 25000 || E.body === MOON) {
+    if ((E.h > 25000 || E.body === MOON) && !(ship.parked || (ship.contacts > 0 && E.vSurf < 5))) {
       const rs = relState(ship, E.body);
       const el = elements(rs.r, rs.v, rs.mu);
       const R = E.body.R;
       const ap = isFinite(el.ap) ? U.dist(el.ap - R) : 'escape';
-      const pe = U.dist(el.pe - R);
+      const sub = el.pe < R;
+      const pe = sub ? 'suborbital' : U.dist(el.pe - R);
       let html = `<div><span class="dim">${E.body.name.toUpperCase()}</span> Ap <b>${ap}</b> · Pe <b>${pe}</b></div>`;
-      if (el.e < 1) html += `<div class="dim">Ap in ${fmtTime(el.tAp)} · Pe in ${fmtTime(el.tPe)} · ${fmtTime(el.period)} orbit</div>`;
+      if (el.e < 1 && !sub) html += `<div class="dim">Ap in ${fmtTime(el.tAp)} · Pe in ${fmtTime(el.tPe)} · ${fmtTime(el.period)} orbit</div>`;
+      else if (el.e < 1 && el.tAp < el.period / 2) html += `<div class="dim">Ap in ${fmtTime(el.tAp)}</div>`;
       if (extra.encounter) html += `<div style="color:var(--violet)">${extra.encounter}</div>`;
       ob.innerHTML = html; ob.hidden = false;
     } else ob.hidden = true;

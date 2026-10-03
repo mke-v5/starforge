@@ -117,6 +117,15 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
 .warnings span.caut{background:rgba(255,179,71,.15);border-color:var(--amber);color:var(--amber);animation:none}
 @keyframes blink{50%{opacity:.35}}
 .apbar{position:absolute;top:calc(86px + var(--st));left:50%;transform:translateX(-50%);display:flex;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--ice);border-radius:4px;padding:4px 6px 4px 10px;font-size:12px;color:var(--ice)}
+.tut{position:absolute;top:calc(122px + var(--st));left:50%;transform:translateX(-50%);width:min(460px,calc(100vw - 32px));background:var(--panel2);border:1px solid var(--amber);border-radius:6px;padding:10px 12px;pointer-events:auto;transition:border-color .3s,background .3s;z-index:3}
+.tut.done{border-color:var(--green);background:rgba(18,40,32,.92)}
+.tut-k{font:600 10px var(--display);letter-spacing:.14em;text-transform:uppercase;color:var(--amber)}
+.tut.done .tut-k{color:var(--green)}
+.tut-h{font:700 18px/1.1 var(--display);letter-spacing:.05em;text-transform:uppercase;margin:2px 0 4px}
+.tut-t{font-size:12.5px;line-height:1.45;color:var(--text)}
+.tut-t kbd{border:1px solid var(--line2);border-radius:3px;padding:0 4px;font-size:11px}
+.tut-b{display:flex;justify-content:flex-end;margin-top:6px}
+.tut-b button{height:26px;border:1px solid var(--line2);background:transparent;border-radius:3px;padding:0 8px;font-size:11px;color:var(--muted)}
 .apbar button{height:28px;border:1px solid var(--line2);background:transparent;border-radius:3px;padding:0 8px;font-size:11px}
 .orbitbar{position:absolute;top:calc(58px + var(--st));right:calc(8px + var(--sr));background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:11px;line-height:1.5}
 #toasts{position:fixed;top:30%;left:50%;transform:translateX(-50%);display:grid;gap:6px;justify-items:center;pointer-events:none;z-index:40}
@@ -211,6 +220,8 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   .menu{gap:5px;margin-top:6px}
   .menu .btn{min-height:34px}
   .credits{font-size:8px}
+  .tut{top:calc(64px + var(--st));width:min(380px,calc(100vw - 340px));padding:6px 9px}
+  .tut-h{font-size:15px}.tut-t{font-size:11px}
 }
 /* portrait phones */
 @media (max-width:600px) and (orientation:portrait){

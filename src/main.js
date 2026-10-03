@@ -18,6 +18,7 @@ import { Hud, fmtWarp } from './ui/hud.js';
 import { LaunchScreen } from './ui/launch.js';
 import { MapView } from './ui/mapview.js';
 import { HELP_HTML } from './ui/help.js';
+import { Tutorial, flightSchool } from './ui/tutorial.js';
 
 const $ = (id) => document.getElementById(id);
 const WARPS = [1, 2, 4, 10, 50, 100, 1000, 10000, 100000];
@@ -121,6 +122,7 @@ class Game {
 
   bindUi() {
     $('t-fly').onclick = () => { this.audio.click(); this.openLaunch(); };
+    $('t-school').onclick = () => { this.audio.click(); this.startSchool(); };
     $('t-continue').onclick = () => { this.audio.click(); if (this.lastSite) this.relaunch(this.lastSite); };
     $('t-hangar').onclick = () => { this.audio.click(); this.openHangar(); };
     $('t-settings').onclick = () => this.openSettings();
@@ -208,6 +210,7 @@ class Game {
   }
 
   endFlight() {
+    if (this.tutorial && !this._keepTut) this.tutorial.stop();
     if (this.ship) {
       this.scene.remove(this.craft.group);
       this.craft.dispose();
@@ -569,6 +572,20 @@ class Game {
     if (rocket) opts.push(['Plan burns in the map…', () => this.toggleMap()]);
     this.dialog('Autopilot', '', opts);
   }
+  // Flight school: the Kestrel on San Francisco's runway 28R with guided steps
+  async startSchool() {
+    const A = this.world.airports;
+    const L = this.shipList();
+    this.setDesign(L.find((d) => /kestrel/i.test(d.name)) || L[0]);
+    const sfo = A.search('SFO', 1)[0];
+    const rw = sfo && sfo.runways.find((r) => r.he === '28R' || r.le === '28R') || (sfo && sfo.runways[0]);
+    if (!rw) { this.openLaunch(); return; }
+    this.tutorial = this.tutorial || new Tutorial(this);
+    this.tutorial.stop();
+    await this.startFlight({ type: 'runway', rw, airport: sfo, fromLe: rw.he === '28R' ? false : true });
+    // (startFlight ends the previous flight, which also stops any lesson; the new one starts below)
+    if (this.ship) this.tutorial.start(flightSchool());
+  }
   terrainFn() { return (la, lo) => this.world.groundAt(EARTH, la, lo); }
   // best runway to land on: the longest runway of the nearest few airports, favouring big ones
   landingRunway() {
@@ -722,6 +739,7 @@ class Game {
     if (holdBrake) C.input.brake = wasBrake;
     this.eph.update(ship.t);
     this.flightTime += dt;
+    if (this.tutorial) this.tutorial.update(dt);
     this._saveT = (this._saveT || 0) + dt;
     if (this._saveT > 5) { this._saveT = 0; this.saveFlight(); }
     this.handleEvents();

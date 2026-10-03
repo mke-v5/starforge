@@ -226,7 +226,8 @@ export class Controller {
       let he = this.gHeading - hdg; he = Math.atan2(Math.sin(he), Math.cos(he));
       const yawCmd = clamp(-inp.yaw * 0.7 + clamp(-he * 3 - yawRate * 2.5, -1, 1) * (Math.abs(inp.yaw) > 0.05 ? 0 : 1), -1, 1);
       ctl.steer = clamp(inp.yaw + inp.roll * 0.8 + (Math.abs(inp.yaw) + Math.abs(inp.roll) > 0.05 ? 0 : clamp(he * 2.5 + yawRate * 1.5, -0.6, 0.6)), -1, 1);
-      tReq.set((inp.pitch + clamp(-w.x * 2, -0.3, 0.3)) * auth.x, yawCmd * auth.y, clamp(-inp.roll * 0.5 + bank * 4 + w.z * 0, -1, 1) * auth.z);
+      const pitchIn = apOut && apOut.pitchCmd !== undefined ? apOut.pitchCmd : inp.pitch;   // autopilots rotate for take-off this way
+      tReq.set((pitchIn + clamp(-w.x * 2, -0.3, 0.3)) * auth.x, yawCmd * auth.y, clamp(-inp.roll * 0.5 + bank * 4 + w.z * 0, -1, 1) * auth.z);
     } else this.gHeading = null;
     if (!assisted && (stick || this.sas === 'off')) {
       // direct control: stick maps to full actuator authority
@@ -854,7 +855,7 @@ export function reentryAp(target = null) {
 // Ascent to orbit: vertical rockets and spaceplanes from Earth, and any lander from the Moon
 // (lift thrusters for the first few hundred metres, then the main engine).
 export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
-  let phase = 'init', plane = false, circ = null, hasMain = false, hasLift = false, mainOn = false;
+  let phase = 'init', plane = false, circ = null, hasMain = false, hasLift = false, hasJets = false, mainOn = false, hybrid = false, wasPlane = false;
   return {
     name: 'Ascent',
     cancelOnStick: true,
@@ -876,6 +877,8 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         const alive = craft.engines.filter((P) => P.alive !== false);
         hasMain = alive.some((P) => engineClass(P) === 'main');
         hasLift = alive.some((P) => engineClass(P) === 'lift');
+        hasJets = alive.some((P) => engineClass(P) === 'jets');
+        hybrid = alive.some((P) => P.eng.e.type === 'hybrid');
         phase = 'climb';
         ship.ctl.gear = true;
       }
@@ -912,6 +915,7 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         let s = clamp(aVert / aT, -0.25, 1);
         pitch = Math.asin(s) / D2R;
         if (moon) { if (E.agl < 400 || !mainOn && hasLift && hasMain) pitch = 90; else pitch = Math.max(pitch, E.agl < 3000 ? 20 : E.agl < 8000 ? 3 : -15); }
+        else if (wasPlane) pitch = clamp(pitch, 3, 70);          // a spaceplane already flying: no vertical launch phase
         else if (h < 1500 || E.vSurf < 80) pitch = 90;
         else if (h < 12000) pitch = Math.max(pitch, 90 - (h - 1500) / 10500 * 35);
         const dir = up.clone().multiplyScalar(Math.sin(pitch * D2R)).addScaledVector(hdg, Math.cos(pitch * D2R)).normalize();
@@ -923,25 +927,52 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         if (!moon || E.agl > 30) ship.ctl.gear = E.agl < 200;
         return { dir, axis, up: upRef, throttle: thr, engines, status: moon ? (mainOn || !hasLift ? 'Climbing to orbit' : 'Lift-off') : undefined };
       }
-      // spaceplane profile
+      // spaceplane profile: take off and climb on the jets, then light the rocket / fusion engines.
+      // Hover thrusters stay off. Hybrid engines switch modes by themselves.
       ship.ctl.engineMode = 'auto';
       const onGround = ship.contacts > 0;
       const S = craft.wings.reduce((s, P) => s + P.wing.area, 0);
       const vRot = Math.sqrt((2 * craft.mass * 9.81) / (1.225 * S * 1.1)) * 1.15;
       const mach = E.mach, h = E.h;
-      const rocket = craft.engines.some((P) => P.eng.mode === 'rocket' && P.eng.flame > 0);
+      let engines;
+      if (hybrid) engines = 'all';
+      else if (hasJets && hasMain) { if (!mainOn && (h > 6000 || (!onGround && E.rho < 0.6))) mainOn = true; engines = mainOn ? 'main' : 'jets'; }
+      else if (hasMain) engines = 'main';
+      else if (hasJets) engines = 'jets';
+      const rocket = craft.engines.some((P) => P.eng.active && P.eng.mode === 'rocket' && P.eng.flame > 0);
+      // Low-thrust spaceplanes can't climb on the rocket alone: fly a lifting ascent through the fly-by-wire,
+      // following a dynamic-pressure corridor that thins as speed builds (keeps heating down), then pull up
+      // to orbit with the rocket guidance once close to orbital speed.
+      if (rocket && !onGround) {
+        const vI = rs.v.length(), V = Math.max(1, E.vSurf);
+        const twr = maxAccel(ship) / (body.mu / (rs.r.length() ** 2));
+        if (vI > 6300 || E.h > 62000 || (E.q < 500 && E.h > 30000) || twr > 1.0) { plane = false; wasPlane = true; return { throttle: 1, engines, dir: rs.v.clone().normalize(), axis: NOSE, status: 'Pull-up to orbit' }; }
+        const qT = clamp(20000 - (V - 1000) * 3.4, 3000, 20000);
+        const rhoT = (2 * qT) / (V * V);
+        const hT = -7200 * Math.log(Math.max(1e-7, rhoT) / 1.225);
+        const vzT = clamp((hT - E.h) / 30, -60, 250);
+        C.gammaHold = Math.asin(clamp(vzT / V, -0.15, 0.4));
+        const north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y).normalize();
+        const eastL = new THREE.Vector3().crossVectors(north, up);
+        const track = Math.atan2(E.vAir.dot(eastL), E.vAir.dot(north));
+        const want = Math.atan2(hdg.dot(eastL), hdg.dot(north));
+        C.bankHold = clamp(Math.atan2(Math.sin(want - track), Math.cos(want - track)) * 1.2, -0.35, 0.35);
+        if (C.sas !== 'hold' && C.sas !== 'off') C.sas = 'hold';
+        if (E.agl > 50) ship.ctl.gear = false;
+        return { throttle: 1, engines, gear: false, status: `Lifting climb · Mach ${mach.toFixed(1)} · ${Math.round(E.h / 1000)} km` };
+      }
       if (onGround) pitch = E.vSurf > vRot ? 10 : 0;
       else if (h < 9000 && !rocket) pitch = 14;
       else if (!rocket && mach < 4.6) pitch = h < 21000 ? 6 : h < 25000 ? 2 : 0;
       else pitch = clamp(22 - (h - 30000) / 4000, 8, 25);
-      if (onGround && E.vSurf < vRot) {
-        // keep the nose on the runway heading
-        const f = ship.dirToBody(NOSE, _a);
-        return { dir: null, throttle: 1 };
+      if (onGround) {
+        // roll down the runway (the ground law keeps it on the centre line), rotate at take-off speed
+        const pitchNow = Math.asin(clamp(new THREE.Vector3(0, 0, -1).applyQuaternion(ship.q).dot(up), -1, 1)) / D2R;
+        return { throttle: 1, gear: true, engines, pitchCmd: E.vSurf > vRot ? clamp((10 - pitchNow) * 0.12, -0.3, 0.6) : 0, status: E.vSurf > vRot ? 'Rotate' : 'Take-off roll' };
       }
       if (!onGround && E.agl > 50) ship.ctl.gear = false;
       const dir = up.clone().multiplyScalar(Math.sin(pitch * D2R)).addScaledVector(hdg, Math.cos(pitch * D2R)).normalize();
-      return { dir, axis: NOSE, up, throttle: 1 };
+      return { dir, axis: NOSE, up, throttle: 1, engines, status: rocket ? `Rocket climb · Ap ${Math.round(apAlt / 1000)} km` : `Jet climb · Mach ${mach.toFixed(1)}` };
     },
   };
 }

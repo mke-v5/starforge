@@ -539,7 +539,7 @@ export function landAp() {
       }
 
       // final: vertical descent, kill horizontal drift, land upright
-      const anet = Math.max(0.3, amax * 0.75 - g);
+      const anet = Math.max(0.6, amax * 0.85 - g);
       const vzT = -clamp(Math.sqrt(2 * anet * agl) * 0.5, 1.3, 80);
       const vert = 0.9 * (vzT - vz) + g;
       const hor = vH.clone().multiplyScalar(agl < 30 ? -1.0 : -0.6);

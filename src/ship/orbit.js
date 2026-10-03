@@ -186,7 +186,14 @@ export function planPeriapsis(ship, targetAlt, now = false) {
   return { t: st.t, dv: pro.clone().multiplyScalar((lo + hi) / 2), body, label: `Set periapsis ${Math.round(targetAlt / 1000)} km` };
 }
 
-const yieldFrame = () => new Promise((r) => setTimeout(r, 0));
+// Long planners hand control back to the browser now and then so the game keeps drawing. Only after ~25 ms
+// of work since the last break: each break costs a whole frame, which is slow on weak devices.
+let _lastYield = 0;
+const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+const yieldFrame = () => {
+  if (_now() - _lastYield < 25) return Promise.resolve();
+  return new Promise((r) => setTimeout(() => { _lastYield = _now(); r(); }, 0));
+};
 
 // thrust and mass flow of the active engines in vacuum (with thrust trim)
 function vacPerf(ship) {

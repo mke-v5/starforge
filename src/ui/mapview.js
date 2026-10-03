@@ -186,11 +186,18 @@ export class MapView {
     const rs = relState(ship, body);
     const el = elements(rs.r, rs.v, rs.mu);
     let h = `<div><b>${body.name}</b> · ${U.dist(ship.env.h)} up · ${U.speed(rs.v.length()).join(' ')}</div>`;
-    h += `<div>Apoapsis <b>${isFinite(el.ap) ? U.dist(el.ap - body.R) : 'escape'}</b></div>`;
-    h += `<div>Periapsis <b>${el.pe < body.R ? 'below the surface' : U.dist(el.pe - body.R)}</b></div>`;
-    h += `<div>Inclination <b>${(el.inc * 57.2958).toFixed(1)}°</b></div>`;
-    if (el.e < 1) h += `<div>Period <b>${fmtTime(el.period)}</b> · Ap in <b>${fmtTime(el.tAp)}</b></div>`;
     const P = this.pred;
+    const arr = this.arrival();
+    if (arr) {
+      // on the way to Earth the two-body numbers are skewed by the Moon: show the predicted arrival instead
+      h += `<div>Arrival periapsis <b>${arr.peAlt < 0 ? 'below the surface' : U.dist(arr.peAlt)}</b> in <b>${fmtTime(arr.t - ship.t)}</b></div>`;
+      h += `<div>Arrival inclination <b>${(arr.inc * 57.2958).toFixed(1)}°</b></div>`;
+    } else {
+      h += `<div>Apoapsis <b>${isFinite(el.ap) ? U.dist(el.ap - body.R) : 'escape'}</b></div>`;
+      h += `<div>Periapsis <b>${el.pe < body.R ? 'below the surface' : U.dist(el.pe - body.R)}</b></div>`;
+      h += `<div>Inclination <b>${(el.inc * 57.2958).toFixed(1)}°</b></div>`;
+      if (el.e < 1) h += `<div>Period <b>${fmtTime(el.period)}</b> · Ap in <b>${fmtTime(el.tAp)}</b></div>`;
+    }
     if (P) {
       if (P.soiIn) h += `<div style="color:var(--violet)">Moon encounter in ${fmtTime(P.soiIn - ship.t)}</div>`;
       if (P.closeMoon && P.closeMoon.d < MOON.soi) h += `<div style="color:var(--violet)">Closest to Moon: ${U.dist(P.closeMoon.d - MOON.R)}</div>`;
@@ -201,6 +208,16 @@ export class MapView {
     $('m-info').innerHTML = h;
     if (!this.busy && (this.planDirty || this.planButtons().map((b) => b[0]).join('|') !== this._planSig)) { this.planDirty = false; this.renderPlan(); }
     this.renderNode();
+  }
+
+  // the predicted approach to Earth when coming back from far out (null in ordinary orbits)
+  arrival() {
+    const ship = this.game.ship, P = this.pred;
+    if (!P || ship.env.body !== EARTH || ship.env.h < 2e6 || P.soiIn) return null;
+    const pe = P.earthPe;
+    if (!pe || !isFinite(pe.d) || pe.t < ship.t + 60 || pe.t > P.tEnd - 60) return null;
+    const hl = Math.hypot(pe.hx, pe.hy, pe.hz);
+    return { peAlt: P.impact && P.impact.body === EARTH ? -1 : pe.d - EARTH.R, t: pe.t, inc: Math.acos(clamp(pe.hy / Math.max(1, hl), -1, 1)) };
   }
 
   // ----- planning panel -----
@@ -216,14 +233,15 @@ export class MapView {
       const toMoon = P && P.soiIn;
       const farOut = el.e >= 1 || el.ap - EARTH.R > 5e6;
       if (inAtmo && el.pe - EARTH.R < 140000) btns.push(['Autopilot: ascend to orbit', () => this.game.engage(ascentAp())]);
-      const peAlt = el.pe - EARTH.R;
+      const arr = this.arrival();
+      const peAlt = arr ? arr.peAlt : el.pe - EARTH.R;
       if (toMoon && !inAtmo) btns.push(['Fine-tune Moon approach (100 km)', () => this.planAsync((cb) => planCorrection(ship, MOON, 100000, cb), 'Already on course')]);
       if (farOut && !toMoon && !inAtmo && el.e < 1 && peAlt > 140000) btns.push(['Brake into low orbit at periapsis', () => this.plan(() => planCircularize(ship, false))]);
       const hm = this.homeAirport();
       if (farOut && !toMoon && !inAtmo && el.e < 1.2 && this.canGlideHome()) btns.push(['Autopilot: fly me home…', () => this.pickHome((a) => this.flyHomeAll(a))]);
       if (farOut && !toMoon && !inAtmo && peAlt > 140000) btns.push([`Fine-tune arrival (Pe 250 km${hm ? ', lined up for ' + this.code(hm) : ''})`, () => this.planAsync((cb) => planCorrection(ship, EARTH, 250000, cb, { iMin: this.iMinFor(hm) }), 'Already on course')]);
       if (farOut && !toMoon && !inAtmo) btns.push(['Fine-tune reentry (Pe 45 km, hot!)', () => this.planAsync((cb) => planCorrection(ship, EARTH, 45000, cb), 'Already on course')]);
-      if (peAlt < 100000 && E.h > 60000 && E.vSurf > 2500) btns.push(['Autopilot: reentry', () => { this.game.engage(reentryAp()); this.game.toggleMap(); }]);
+      if (peAlt < 100000 && E.h > 60000 && E.h < 400000 && E.vSurf > 2500) btns.push(['Autopilot: reentry', () => { this.game.engage(reentryAp()); this.game.toggleMap(); }]);
       if (el.e < 1 && el.ap - EARTH.R > 140000 && !toMoon) btns.push(['Circularize at apoapsis',() => this.plan(() => planCircularize(ship, true))]);
       if (el.pe - EARTH.R > 140000 && !farOut) {
         if (this.canGlideHome()) btns.push(['Fly home to an airport…', () => this.pickHome()]);

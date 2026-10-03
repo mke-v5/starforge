@@ -62,7 +62,7 @@ export class Effects {
     this.spriteTex = new THREE.CanvasTexture(c);
     // reentry glow
     this.plasmaMat = new THREE.ShaderMaterial({
-      uniforms: { uI: { value: 0 }, uTime: { value: 0 } },
+      uniforms: { uI: { value: 0 }, uTime: { value: 0 }, uFlow: { value: new THREE.Vector3(0, -1, 0) } },
       vertexShader: /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_vertex>
@@ -73,13 +73,13 @@ void main(){ vP = position; vN = normalize(normalMatrix * normal); vec4 mv = mod
       fragmentShader: /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_fragment>
-uniform float uI; uniform float uTime; varying vec3 vN; varying vec3 vV; varying vec3 vP;
+uniform float uI; uniform float uTime; uniform vec3 uFlow; varying vec3 vN; varying vec3 vV; varying vec3 vP;
 void main(){
 #include <logdepthbuf_fragment>
   // a thin shock layer on the windward side: bright where the sheath is seen edge-on, pink-white at the
   // stagnation point fading to orange toward its edges, nothing on the lee side
   float rim = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.2);
-  float front = smoothstep(0.05, 1.0, -vP.y);
+  float front = smoothstep(0.05, 1.0, dot(normalize(vP), uFlow));
   float n = 0.8 + 0.2 * sin(uTime * 37.0 + vP.y * 7.0 + vP.x * 5.0) * sin(uTime * 23.0 + vP.z * 6.0);
   vec3 col = mix(vec3(1.0, 0.32, 0.08), vec3(1.0, 0.72, 0.9), front * front) * (rim * 1.1 + pow(front, 4.0) * 0.25) * front * uI * n;
   gl_FragColor = vec4(col, 1.0);
@@ -188,10 +188,11 @@ void main(){
       const dir = vAirBody.clone().divideScalar(Math.max(1, V));      // direction of travel through the air (body)
       const s = this.plasmaBox.s;
       const rad = Math.max(s.x, s.y, s.z) * 0.55 + 1.5;
-      this.plasma.position.copy(this.plasmaBox.c).addScaledVector(dir, rad * 0.2);
-      // stretch backwards along the flow: sphere's -Y axis points into the flow
-      this.plasma.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
-      this.plasma.scale.set(rad, rad * (1.1 + pi * 0.8), rad);
+      // shock layer: an ellipsoid hugging the craft, pushed a little toward the windward side
+      this.plasma.position.copy(this.plasmaBox.c).addScaledVector(dir, Math.min(s.x, s.y, s.z) * 0.15 + 0.4);
+      this.plasma.quaternion.identity();
+      this.plasma.scale.set(s.x * 0.58 + 0.8, s.y * 0.62 + 0.8, s.z * 0.56 + 0.8);
+      this.plasmaMat.uniforms.uFlow.value.copy(dir);
       this.plasmaMat.uniforms.uI.value = pi;
       this.plasmaMat.uniforms.uTime.value = this.time;
       this.plasmaLight.position.copy(this.plasma.position).addScaledVector(dir, rad);

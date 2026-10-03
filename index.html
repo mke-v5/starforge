@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#05070c">
+<title>Starforge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--ink:#05070c;--panel:rgba(9,14,23,.84);--line:#243149;--text:#e3ebf7;--muted:#8393aa;--amber:#ffb347;--ice:#7fd4ff;--display:"Saira Condensed","Arial Narrow",Arial,sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--ink);color:var(--text);font:13px var(--mono);overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block}
+[hidden]{display:none!important}
+button,input{font:inherit;color:inherit}
+.hud{position:fixed;z-index:2}
+#searchbox{top:calc(10px + env(safe-area-inset-top,0px));left:16px;right:16px;max-width:380px}
+#q{width:100%;min-height:42px;padding:0 12px;border:1px solid var(--line);background:var(--panel);border-radius:3px;font-size:16px;-webkit-user-select:text;user-select:text}
+#q::placeholder{color:var(--muted)}
+#results{margin-top:4px;background:var(--panel);border:1px solid var(--line);border-radius:3px;max-height:44vh;overflow-y:auto;touch-action:pan-y}
+#results button{display:flex;justify-content:space-between;gap:10px;width:100%;min-height:42px;align-items:center;padding:0 12px;border:0;border-bottom:1px solid var(--line);background:transparent;text-align:left;cursor:pointer}
+#results button:last-child{border-bottom:0}
+.d{color:var(--muted)}
+#readout{top:calc(62px + env(safe-area-inset-top,0px));left:16px;display:grid;gap:2px;text-shadow:0 0 8px #000;pointer-events:none}
+#readout b{font:700 30px/1 var(--display);letter-spacing:.04em;color:var(--amber)}
+#readout .s{font-size:11px;color:#c9d6ea}
+#attr{left:16px;right:16px;bottom:calc(4px + env(safe-area-inset-bottom,0px));font-size:9px;color:rgba(227,235,247,.55);text-align:center;pointer-events:none}
+#stickwrap{left:16px;bottom:calc(28px + env(safe-area-inset-bottom,0px))}
+#stick{width:128px;height:128px;border-radius:50%;border:1px solid var(--line);background:radial-gradient(circle,rgba(255,179,71,.08),rgba(9,14,23,.7));position:relative;touch-action:none}
+#stick::before,#stick::after{content:"";position:absolute;background:var(--line)}
+#stick::before{left:50%;top:10px;bottom:10px;width:1px}
+#stick::after{top:50%;left:10px;right:10px;height:1px}
+#knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:var(--amber);opacity:.85}
+#mid{left:50%;transform:translateX(-50%);bottom:calc(28px + env(safe-area-inset-bottom,0px));display:grid;gap:8px}
+.pill{min-height:40px;min-width:84px;padding:0 12px;border:1px solid var(--line);background:var(--panel);border-radius:3px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;font-size:11px}
+#thrwrap{right:16px;bottom:calc(28px + env(safe-area-inset-bottom,0px));display:grid;justify-items:center;gap:6px}
+#thrlbl{font-size:10px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
+#thr{width:52px;height:150px;border:1px solid var(--line);background:var(--panel);border-radius:3px;position:relative;touch-action:none;overflow:hidden}
+#thrfill{position:absolute;left:0;right:0;bottom:0;height:0;background:linear-gradient(0deg,#6b4513,var(--amber))}
+#stop{min-height:34px;width:52px;border:1px solid var(--line);background:var(--panel);border-radius:3px;cursor:pointer;font-size:11px;letter-spacing:.1em}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div class="hud" id="searchbox">
+  <input id="q" type="search" placeholder="Search a city" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search a city">
+  <div id="results" hidden></div>
+</div>
+
+<div class="hud" id="readout">
+  <b id="alt">&nbsp;</b>
+  <div class="s" id="pos"></div>
+  <div class="s" id="spd"></div>
+  <div class="s d" id="net"></div>
+</div>
+
+<div class="hud" id="stickwrap"><div id="stick"><div id="knob"></div></div></div>
+<div class="hud" id="mid">
+  <button class="pill" id="level">Level</button>
+  <button class="pill" id="orbit">Orbit</button>
+  <button class="pill" id="down">Ground</button>
+</div>
+<div class="hud" id="thrwrap">
+  <div id="thrlbl">Speed</div>
+  <div id="thr"><div id="thrfill"></div></div>
+  <button id="stop">STOP</button>
+</div>
+<div class="hud" id="attr">Imagery &copy; EOX Sentinel-2 cloudless (CC BY-NC-SA) &middot; NASA GIBS &middot; Terrain: Mapzen/AWS Open Data &middot; Cities: GeoNames</div>
+
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

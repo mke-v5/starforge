@@ -32,7 +32,7 @@ class Game {
     // resolution scale: the quality setting sets the ceiling, and it drops automatically if frames get slow
     this.prMax = () => Math.min(window.devicePixelRatio || 1, { low: 1, medium: mobile ? 1.35 : 1.5, high: 2 }[this.settings.quality] || 1.5);
     this.pr = this.prMax();
-    this.perf = { acc: 0, n: 0, good: 0 };
+    this.perf = { acc: 0, n: 0, good: 0, bad: 0 };
     this.renderer.setPixelRatio(this.pr);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NoToneMapping;
@@ -662,9 +662,10 @@ class Game {
     P.acc = 0; P.n = 0;
     const max = this.prMax(), min = Math.min(max, 0.75);
     let pr = this.pr;
-    if (fps < 38 && pr > min) { pr = Math.max(min, pr - 0.2); P.good = 0; }
-    else if (fps > 56) { if (++P.good >= 3 && pr < max) { pr = Math.min(max, pr + 0.1); P.good = 0; } }
-    else P.good = 0;
+    // drop after two slow windows in a row (loading hitches come and go), recover after three fast ones
+    if (fps < 40) { P.good = 0; if (++P.bad >= 2 && pr > min) { pr = Math.max(min, pr - 0.15); P.bad = 0; } }
+    else if (fps > 56) { P.bad = 0; if (++P.good >= 3 && pr < max) { pr = Math.min(max, pr + 0.1); P.good = 0; } }
+    else { P.good = 0; P.bad = 0; }
     if (Math.abs(pr - this.pr) > 1e-3) { this.pr = pr; this.renderer.setPixelRatio(pr); this.resize(); }
   }
 

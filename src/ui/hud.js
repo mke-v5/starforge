@@ -249,9 +249,16 @@ export class Hud {
     const apb = $('h-ap');
     if (ctl.ap || extra.apMsg) {
       apb.hidden = false;
-      apb.innerHTML = `<span>${ctl.ap ? ctl.ap.name + (extra.apMsg ? ' · ' + extra.apMsg : '') : extra.apMsg}</span>` + (ctl.ap ? '<button id="ap-x">Stop</button>' : '');
-      const x = $('ap-x'); if (x) x.onclick = () => { ctl.cancelAp(); ship.ctl.throttle = 0; ctl.input.throttle = 0; };
-    } else apb.hidden = true;
+      const txt = ctl.ap ? ctl.ap.name + (extra.apMsg ? ' · ' + extra.apMsg : '') : extra.apMsg;
+      // rebuild only when it changes, so a tap on Stop isn't lost to a re-created button
+      if (apb._has !== !!ctl.ap) {
+        apb._has = !!ctl.ap;
+        apb.innerHTML = '<span></span>' + (ctl.ap ? '<button id="ap-x">Stop</button>' : '');
+        const x = $('ap-x'); if (x) x.onclick = () => { ctl.cancelAp(); ship.ctl.throttle = 0; ctl.input.throttle = 0; };
+        apb._txt = null;
+      }
+      if (apb._txt !== txt) { apb._txt = txt; apb.firstChild.textContent = txt; }
+    } else { apb.hidden = true; apb._has = undefined; }
     // info panel
     this.updateInfo(ship, ctl, extra);
     // orbit bar

@@ -7,7 +7,7 @@ import { Progress, MILESTONES } from './core/progress.js';
 import { World } from './world/world.js';
 import { Craft } from './ship/craft.js';
 import { Ship } from './ship/physics.js';
-import { Controller, landAp, ascentAp, nodeExec } from './ship/control.js';
+import { Controller, landAp, ascentAp, nodeExec, reentryAp } from './ship/control.js';
 import { PRESETS } from './ship/designs.js';
 import { PART } from './ship/parts.js';
 import { deltaV, elements, relState, predict, engineClass } from './ship/orbit.js';
@@ -220,6 +220,7 @@ class Game {
     const ship = new Ship(craft, this.world, this.eph, this.settings);
     this.ship = ship;
     const C = this.controller = new Controller(this.settings);
+    C.onEngineGroup = (g) => { this.engGroup = this.availableGroups().includes(g) ? g : 'all'; };
     this.effects.attach(craft);
     this.setupLights(craft);
     this.engGroup = 'all';
@@ -423,6 +424,7 @@ class Game {
   }
   applyEngGroup() {
     for (const P of this.craft.parts) if (P.eng) P.eng.active = this.engGroup === 'all' || this.engineClass(P) === this.engGroup;
+    if (this.controller) this.controller.engGroup = this.engGroup;
   }
   setSas(m) {
     if (!this.controller) return;
@@ -440,8 +442,9 @@ class Game {
     const ship = this.ship, C = this.controller;
     const opts = [];
     if (C.ap) opts.push(['Stop autopilot', () => C.cancelAp()]);
-    if (ship.env.body === EARTH && ship.env.h < 120000) opts.push(['Ascend to orbit', () => this.engage(ascentAp())]);
-    opts.push(['Powered landing (hover down)', () => { const lift = this.availableGroups().includes('lift'); if (lift) { this.engGroup = 'lift'; this.applyEngGroup(); } this.engage(landAp()); }]);
+    if ((ship.env.body === EARTH && ship.env.h < 120000) || (ship.env.body === MOON && ship.env.agl < 20000)) opts.push([ship.env.body === MOON ? 'Take off to lunar orbit' : 'Ascend to orbit', () => this.engage(ascentAp())]);
+    { const E = ship.env; if (E.body === EARTH && E.h < 400000 && E.vSurf > 2500 && (E.vVert < 0 || E.h < EARTH.atmoTop)) opts.push(['Reentry: belly-first, then hand back control', () => this.engage(reentryAp())]); }
+    opts.push([ship.env.body === MOON || (ship.env.h > EARTH.atmoTop && ship.env.body === EARTH) ? 'Land here (deorbit, brake, touch down)' : 'Powered landing (hover down)', () => this.engage(landAp())]);
     if (ship.env.body === EARTH && ship.env.rho > 0.05) opts.push(['Cruise: hold altitude & heading', () => this.engage(cruiseAp(ship))]);
     if (C.node) opts.push(['Fly the planned burn', () => this.engage(nodeExec(C.node))]);
     opts.push(['Plan burns in the map…', () => this.toggleMap()]);
@@ -551,6 +554,13 @@ class Game {
         for (const lv of WARPS) if (lv * dt * 3 < left && this.canWarp(lv) === true) w = lv;
         ship.warp = w;
       }
+    }
+    // autopilots that coast for a long time say when they need control again: warp there automatically,
+    // and never warp past it
+    if (C.ap && C.ap.wakeAt != null) {
+      if (C.ap.wakeAt !== this._apWake) { this._apWake = C.ap.wakeAt; if (C.ap.wakeAt - ship.t > 30) this.warpTarget = C.ap.wakeAt; }
+      const left = C.ap.wakeAt - ship.t;
+      while (ship.warp > (left > 0 ? 1 : 4) && ship.warp * dt * 3 > left) ship.warp = WARPS[Math.max(0, WARPS.indexOf(ship.warp) - 1)];
     }
     if (ship.warp > 4 && this.canWarp(ship.warp) !== true && !ship.parked) ship.warp = 1;
     // simulate
@@ -684,8 +694,8 @@ class Game {
     let fuelFrac = 1; for (const k of ['LF', 'OX', 'FU']) { const cap = craft.capacity(k); if (cap > 0) fuelFrac = Math.min(fuelFrac, craft.amount(k) / cap); }
     x.lowFuel = fuelFrac < 0.1;
     x.flameout = ship.ctl.throttle > 0.1 && craft.engines.some((P) => P.eng.active && P.eng.thr > 0.2) && craft.engines.every((P) => !P.eng.active || P.eng.flame < 0.01);
-    x.apMsg = C.status || '';
-    if (C.status) { this.hud.toast(C.status); C.status = ''; x.apMsg = ''; }
+    if (C.status) { this.hud.toast(C.status); C.status = ''; }
+    x.apMsg = C.ap ? C.apStatus || '' : '';
     if (C.ap && C.node && C.ap.name === 'Burn') {
       const left = (C.node.dvLeft || C.node.dv).length();
       x.apMsg = C.node.started ? `${Math.round(left)} m/s to go` : `burn in ${Math.round(C.node.tStart - ship.t)} s`;

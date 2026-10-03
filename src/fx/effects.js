@@ -5,22 +5,31 @@ import { clamp, smoothstep } from '../core/geo.js';
 const PLUME_VERT = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_vertex>
-varying vec2 vUv;
-void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+varying vec2 vUv; varying vec3 vN; varying vec3 vV; varying float vDist;
+void main(){
+  vUv = uv;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); vDist = -mv.z;
+  gl_Position = projectionMatrix * mv;
   #include <logdepthbuf_vertex>
 }`;
 const PLUME_FRAG = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_fragment>
 uniform vec3 uCore; uniform vec3 uEdge; uniform float uI; uniform float uDiamonds; uniform float uTime;
-varying vec2 vUv;
+varying vec2 vUv; varying vec3 vN; varying vec3 vV; varying float vDist;
 void main(){
   #include <logdepthbuf_fragment>
   float along = 1.0 - vUv.y;                      // 0 at the nozzle, 1 at the tail
   float fall = pow(1.0 - along, 1.6);
   float flick = 0.85 + 0.15 * sin(uTime * 60.0 + along * 30.0);
   float d = uDiamonds * smoothstep(0.55, 1.0, sin(along * 40.0)) * (1.0 - along);
-  vec3 col = mix(uEdge, uCore, fall) * (fall * 1.4 + d * 0.8) * uI * flick;
+  // soft, gas-like edges: bright where we look through the middle of the jet, fading at its silhouette
+  // (and when looking straight down its axis); fade out right next to the camera so it never fills the view
+  float facing = abs(dot(normalize(vN), normalize(vV)));
+  float soft = pow(facing, 1.3);
+  float nearFade = smoothstep(1.5, 18.0, vDist);
+  vec3 col = mix(uEdge, uCore, fall) * (fall * 1.25 + d * 0.8) * uI * flick * soft * nearFade;
   gl_FragColor = vec4(col, 1.0);
 }`;
 

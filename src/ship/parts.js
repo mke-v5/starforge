@@ -109,7 +109,7 @@ export const PARTS = [
     engine: { type: 'jet', thrust: 75000, isp: 6000, fuel: { LF: 1 }, maxMach: 2.2, ceiling: 19000, spool: 2.5, gimbal: 0, heat: 25000 } },
 
   // ---------------- wings ----------------
-  { id: 'wg-delta-l', cat: 'wing', name: 'Big delta wing', desc: 'Large high-speed delta with elevons. Great for spaceplanes and reentry.', mass: 1400, maxT: 1800, crash: 8,
+  { id: 'wg-delta-l', cat: 'wing', name: 'Big delta wing', desc: 'Large high-speed delta with elevons and a carbon thermal skin. Made for spaceplanes and reentry.', mass: 1400, maxT: 2100, crash: 8,
     wing: { root: 9, tip: 1.2, span: 6.5, sweep: 0.95, thick: 0.45, ctrl: 0.22 }, nodes: [], surface: true, mesh: 'wing', heatTiles: true },
   { id: 'wg-delta-m', cat: 'wing', name: 'Delta wing', desc: 'Mid-size delta with elevons.', mass: 650, maxT: 1700, crash: 8,
     wing: { root: 5.2, tip: 0.8, span: 4.2, sweep: 0.9, thick: 0.3, ctrl: 0.22 }, nodes: [], surface: true, mesh: 'wing', heatTiles: true },

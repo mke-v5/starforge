@@ -8,6 +8,7 @@ import { G0, clamp, smoothstep } from '../core/geo.js';
 
 const SIGMA = 5.670e-8;
 const _t = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _f = new THREE.Vector3();
+const _r2 = new THREE.Vector3();
 
 export class Craft {
   constructor(design, opts = {}) {
@@ -52,6 +53,8 @@ export class Craft {
           area: w.area, ar: w.ar, ctrl: w.ctrl, tau: clamp(1.25 * Math.sqrt(w.ctrl), 0, 1), defl: 0, maxDefl: w.ctrl >= 1 ? 0.35 : 0.44,
           torq: new THREE.Vector3(),
         };
+        // control surfaces sit near the trailing edge (all-moving surfaces pivot near the quarter chord)
+        P.wing.ctrlPt = new THREE.Vector3(w.ac[0], w.ac[1] - (w.ctrl >= 1 ? 0.1 : 0.6) * (w.mac || 1), 0).applyMatrix4(T);
         P.Asurf = w.area * 2.1;
       } else {
         P.Asurf = Math.PI * dia * L + Math.PI * dia * dia / 2;
@@ -248,6 +251,33 @@ export class Craft {
   }
   fuelMix(P) { const e = P.eng.e; return P.eng.mode === 'rocket' && e.type === 'hybrid' ? e.rocket.fuel : e.fuel; }
 
+  // Thrust trim: per-engine throttle factors (P.eng.bal, 0..1) so the active engines' combined thrust passes
+  // through the centre of mass. Like a real flight computer splitting power between lift fans.
+  balanceEngines(env) {
+    const list = [];
+    for (const P of this.engines) {
+      if (!P.alive || !P.eng.active) { P.eng.bal = 1; continue; }
+      const T = this.engineOutput(P, env)[0];
+      if (T <= 0) { P.eng.bal = 1; continue; }
+      const r = P.eng.pos.clone().sub(this.com);
+      list.push({ P, T, tau: new THREE.Vector3().crossVectors(r, P.eng.dir.clone().multiplyScalar(T)) });
+    }
+    if (list.length < 2) { for (const L of list) L.P.eng.bal = 1; return; }
+    const s = list.map(() => 1);
+    let norm = 0; for (const L of list) norm += L.tau.lengthSq();
+    const sumT = list.reduce((a, L) => a + L.T, 0);
+    const tol = sumT * 0.02;               // 2 cm of lever arm is close enough
+    const net = new THREE.Vector3();
+    for (let it = 0; it < 60; it++) {
+      net.set(0, 0, 0);
+      list.forEach((L, i) => net.addScaledVector(L.tau, s[i]));
+      if (net.length() < tol) break;
+      list.forEach((L, i) => { s[i] = Math.min(1, Math.max(0, s[i] - 0.9 * net.dot(L.tau) / norm)); });
+    }
+    const mx = Math.max(...s);
+    list.forEach((L, i) => { L.P.eng.bal = mx > 0.05 ? s[i] / mx : 1; });
+  }
+
   get intakeBonus() { return this._intake ?? (this._intake = this.parts.reduce((s, P) => s + (P.alive && P.def.intake ? P.def.intake : 0), 0)); }
 
   // ---------- aerodynamics ----------
@@ -279,6 +309,38 @@ export class Craft {
     }
   }
 
+  // lift and drag coefficients of a wing at angle of attack a with control deflection defl
+  wingCoef(W, a, defl, M) {
+    const ar = W.ar;
+    let cla = (2 * Math.PI * ar) / (ar + 2);
+    if (M < 0.9) cla /= Math.sqrt(1 - Math.min(0.75, M * M) * 0.9);
+    else if (M > 1.2) cla = Math.min(cla, 4 / Math.sqrt(M * M - 1));
+    else cla *= 1.05;
+    const stall = 0.30;
+    const sa = Math.sin(a), ca = Math.cos(a);
+    // effective angle including control deflection on the movable part
+    const ad = a + defl * W.tau;
+    const lin = cla * Math.sin(ad) * Math.cos(ad);
+    const plate = 1.1 * Math.sin(2 * ad);
+    const k = smoothstep(stall, stall + 0.25, Math.abs(ad));
+    let cl = lin * (1 - k) + plate * k;
+    let cd = 0.006 + (M > 0.85 ? 0.012 * smoothstep(0.85, 1.1, M) : 0) + (cl * cl) / (Math.PI * 0.85 * ar) * (1 - k) + 1.2 * sa * sa * k + Math.abs(defl) * 0.02;
+    let dCl = cla * W.tau * (1 - k * 0.7);           // lift change per radian of control deflection
+    // hypersonic flow (Newtonian impact): normal force 2·sin²(incidence) on the fixed part and on the moving
+    // control surface, which sees its full deflection — flaps get stronger at high angles of attack
+    const hyp = smoothstep(2.5, 5, M);
+    if (hyp > 0) {
+      const fC = W.ctrl > 0 ? 0.3 : 0;
+      const ns = (x) => Math.sin(x) * Math.abs(Math.sin(x));
+      const af = a + defl;
+      const cn = 2 * ((1 - fC) * ns(a) + fC * ns(af));
+      cl = cl * (1 - hyp) + cn * ca * hyp;
+      cd = cd * (1 - hyp) + (0.008 + 2 * ((1 - fC) * Math.abs(ns(a)) + fC * Math.abs(ns(af))) * Math.abs(sa)) * hyp;
+      dCl = dCl * (1 - hyp) + 2 * fC * Math.abs(Math.sin(2 * af)) * Math.max(0.2, ca) * hyp;
+    }
+    return { cl, cd, dCl, k };
+  }
+
   wingForce(P, vAir, w, env, F, Tq) {
     const W = P.wing;
     _r.copy(W.ac).sub(this.com);
@@ -289,34 +351,27 @@ export class Craft {
     const V = Math.sqrt(V2);
     const alpha = Math.atan2(-vn, vc);
     const M = env.mach;
-    const ar = W.ar;
-    let cla = (2 * Math.PI * ar) / (ar + 2);
-    if (M < 0.9) cla /= Math.sqrt(1 - Math.min(0.75, M * M) * 0.9);
-    else if (M > 1.2) cla = Math.min(cla, 4 / Math.sqrt(M * M - 1));
-    else cla *= 1.05;
-    const stall = 0.30;
-    const a = alpha, sa = Math.sin(a), ca = Math.cos(a);
-    // effective angle including control deflection on the movable part
-    const ad = a + W.defl * W.tau;
-    let cl;
-    const lin = cla * Math.sin(ad) * Math.cos(ad) / (Math.abs(ad) < 1e-6 ? 1 : 1);
-    const plate = 1.1 * Math.sin(2 * ad);
-    const k = smoothstep(stall, stall + 0.25, Math.abs(ad));
-    cl = lin * (1 - k) + plate * k;
-    const cd = 0.006 + (M > 0.85 ? 0.012 * smoothstep(0.85, 1.1, M) : 0) + (cl * cl) / (Math.PI * 0.85 * ar) * (1 - k) + 1.2 * sa * sa * k + Math.abs(W.defl) * 0.02;
     const q = 0.5 * env.rho * V2 * W.area;
-    // lift direction: perpendicular to the flow in the wing's chord-normal plane
+    // lift direction: perpendicular to the flow in the wing's chord-normal plane; drag along the in-plane flow
     _u.copy(W.n).multiplyScalar(vc).addScaledVector(W.c, -vn).divideScalar(V);
-    _f.copy(_u).multiplyScalar(q * cl);
-    // drag opposes the in-plane flow; also a little skin friction from spanwise flow
     _w.copy(W.c).multiplyScalar(vc).addScaledVector(W.n, vn).divideScalar(V);
-    _f.addScaledVector(_w, -q * cd);
+    const base = this.wingCoef(W, alpha, 0, M);
+    _f.copy(_u).multiplyScalar(q * base.cl).addScaledVector(_w, -q * base.cd);
     _f.addScaledVector(W.s, -0.5 * env.rho * _v.dot(W.s) * Math.abs(_v.dot(W.s)) * W.area * 0.01);
     F.add(_f);
     Tq.add(_t.copy(_r).cross(_f));
+    // the control surface's extra force acts at the trailing edge, well behind the aerodynamic centre
+    _r2.copy(W.ctrlPt).sub(this.com);
+    let full = base;
+    if (W.ctrl > 0 && W.defl !== 0) {
+      full = this.wingCoef(W, alpha, W.defl, M);
+      _f.copy(_u).multiplyScalar(q * (full.cl - base.cl)).addScaledVector(_w, -q * (full.cd - base.cd));
+      F.add(_f);
+      Tq.add(_t.copy(_r2).cross(_f));
+    }
     // torque sensitivity to deflection (for control allocation), per radian, at current dynamic pressure
-    W.torq.copy(_r).cross(_u).multiplyScalar(q * cla * W.tau * (1 - k * 0.7));
-    W.stalled = k > 0.5;
+    W.torq.copy(_r2).cross(_u).multiplyScalar(q * full.dCl);
+    W.stalled = full.k > 0.5;
     W.alpha = alpha;
   }
 
@@ -340,6 +395,8 @@ export class Craft {
       } else {
         const ua = vhat.dot(P.axis);
         exp = (ua > 0 ? P.Af : P.Ab) * Math.abs(ua) + (P.As || 0) * 0.12 * Math.sqrt(Math.max(0, 1 - ua * ua));
+        // retracted landing gear sits behind its doors
+        if (P.gear) exp *= 0.08 + 0.92 * (P.gear.deployed ?? 1);
       }
       const rn = P.wing ? 0.6 : Math.max(0.3, P.dia / 2);
       let Qin = exp * q0 / Math.sqrt(rn) * Math.max(0, 1 - P.temp / Math.max(Taw, 300));

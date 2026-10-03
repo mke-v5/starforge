@@ -142,6 +142,7 @@ export class Ship {
     const n = Math.min(64, Math.max(1, Math.ceil(total / h)));
     const dt = total / n;
     this.lastV.copy(this.v);
+    craft.balanceEngines(this.env);
     for (let i = 0; i < n; i++) {
       this.updateEnv(this.t);
       if (controller && i % 2 === 0) controller.update(this, dt * 2);
@@ -194,7 +195,7 @@ export class Ship {
       eng.thr += clamp(cmd - eng.thr, -rate * dt, rate * dt);
       if (eng.thr < 1e-4) { eng.flame = 0; eng.thrust = 0; continue; }
       const [Tmax, isp] = craft.engineOutput(P, E);
-      let T = Tmax * eng.thr;
+      let T = Tmax * eng.thr * (eng.bal ?? 1);
       if (T <= 0 || isp <= 0) { eng.flame = 0; eng.thrust = 0; continue; }
       const mdot = T / (isp * G0);
       const mix = craft.fuelMix(P);
@@ -219,12 +220,15 @@ export class Ship {
       _T.add(_c.crossVectors(_b, _a));
     }
     this.thrustNow = thrustTotal;
+    (this.thrustB || (this.thrustB = new THREE.Vector3())).copy(_F);   // net engine force, body frame
     if (this.dbg) this.dbg.eng.copy(_T);
     // ---- aerodynamics (body frame) ----
+    if (this.aeroB) this.aeroB.set(0, 0, 0);
     if (E.rho > 0) {
       const vb = this.dirToBody(E.vAir, _d);
       craft.aero(vb, this.w, E, _Fa, _Ta);
       _F.add(_Fa); _T.add(_Ta);
+      (this.aeroB || (this.aeroB = new THREE.Vector3())).copy(_Fa);   // aerodynamic force, body frame
       if (this.dbg) this.dbg.aero.copy(_Ta);
     }
     // ---- reaction wheels and RCS ----
@@ -291,6 +295,8 @@ export class Ship {
   contactForces(dt, Fw, Tb) {
     const craft = this.craft, E = this.env, com = craft.com, ctl = this.ctl;
     const body = E.body;
+    // gear doors: deploy / retract over three seconds (anywhere, so drag and heating see it)
+    for (const P of craft.gears) { const G = P.gear; G.deployed += clamp((ctl.gear ? 1 : 0) - G.deployed, -dt / 3, dt / 3); }
     if (E.agl > craft.size + 30 && !this.world.nearBuildings) { this.contacts = 0; for (const P of craft.gears) { P.gear.contact = false; P.gear.comp = 0; } return; }
     let contacts = 0;
     const m = craft.mass;
@@ -298,8 +304,6 @@ export class Ship {
     // gear
     for (const P of craft.gears) {
       const G = P.gear, g = G.g;
-      const wantDeploy = ctl.gear ? 1 : 0;
-      G.deployed += clamp(wantDeploy - G.deployed, -dt / 3, dt / 3);
       if (G.deployed < 0.95) { G.contact = false; G.comp = 0; continue; }
       _p.copy(G.ext).multiplyScalar(g.len + g.wheel).add(G.mount);       // wheel bottom (body)
       const res = this.probe(_p, body);

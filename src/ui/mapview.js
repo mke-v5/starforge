@@ -2,8 +2,8 @@
 import * as THREE from 'three';
 import { EARTH, MOON, clamp, fmtTime } from '../core/geo.js';
 import { moonPos, moonVel } from '../core/astro.js';
-import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, burnTime, deltaV } from '../ship/orbit.js';
-import { nodeExec, landAp, ascentAp } from '../ship/control.js';
+import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, planCorrection, burnTime, deltaV } from '../ship/orbit.js';
+import { nodeExec, landAp, ascentAp, reentryAp } from '../ship/control.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,6 +26,8 @@ export class MapView {
     this.lineNode = mk(0x5aa8ff, 0.9);
     this.lineNodeMoon = mk(0x5aa8ff, 0.9);
     this.lineMoonOrbit = mk(0xffffff, 0.25);
+    this.lineEarthAfter = mk(0xffb347, 0.55);   // after leaving the Moon's sphere of influence
+    this.lineNodeAfter = mk(0x5aa8ff, 0.5);
     // ship marker
     const c = document.createElement('canvas'); c.width = c.height = 64;
     const x = c.getContext('2d'); x.fillStyle = '#7fd4ff'; x.beginPath(); x.moveTo(32, 6); x.lineTo(54, 56); x.lineTo(32, 44); x.lineTo(10, 56); x.closePath(); x.fill();
@@ -103,26 +105,33 @@ export class MapView {
     }
     // draw relative to the camera
     const moonNow = moonPos(ship.t, new THREE.Vector3());
-    const setLine = (line, pts, stride, offset) => {
+    const setLine = (line, pts, stride, offset, i0 = 0, i1 = Infinity) => {
       const a = line.geometry.attributes.position.array;
-      const n = Math.min(pts ? pts.length / stride : 0, a.length / 3);
-      for (let i = 0; i < n; i++) {
-        a[i * 3] = pts[i * stride] + offset.x - this.camI.x;
-        a[i * 3 + 1] = pts[i * stride + 1] + offset.y - this.camI.y;
-        a[i * 3 + 2] = pts[i * stride + 2] + offset.z - this.camI.z;
+      const total = pts ? pts.length / stride : 0;
+      const s0 = Math.max(0, i0), s1 = Math.min(total, i1);
+      const n = Math.max(0, Math.min(s1 - s0, a.length / 3));
+      for (let k = 0; k < n; k++) {
+        const i = s0 + k;
+        a[k * 3] = pts[i * stride] + offset.x - this.camI.x;
+        a[k * 3 + 1] = pts[i * stride + 1] + offset.y - this.camI.y;
+        a[k * 3 + 2] = pts[i * stride + 2] + offset.z - this.camI.z;
       }
       line.geometry.attributes.position.needsUpdate = true;
       line.geometry.setDrawRange(0, n);
+      line.visible = n > 1;
     };
-    const zero = new THREE.Vector3();
-    if (this.pred) {
-      setLine(this.lineEarth, this.pred.earthPts, 3, zero);
-      setLine(this.lineMoon, this.pred.moonPts, 4, moonNow);
-      this.lineMoon.visible = this.pred.moonPts.length > 0;
-    }
-    if (this.predNode) { setLine(this.lineNode, this.predNode.earthPts, 3, zero); setLine(this.lineNodeMoon, this.predNode.moonPts, 4, moonNow); }
-    this.lineNode.visible = this.lineNodeMoon.visible = !!this.predNode;
-    if (this.moonOrbit) setLine(this.lineMoonOrbit, this.moonOrbit.pts, 3, zero);
+    // Earth-frame path up to the Moon's sphere of influence, the Moon-relative path around the Moon, then the path after leaving it
+    const drawPred = (P, lE, lM, lA) => {
+      if (!P) { lE.visible = lM.visible = lA.visible = false; return; }
+      const zero = new THREE.Vector3();
+      if (P.startInSoi) lE.visible = false;
+      else setLine(lE, P.earthPts, 3, zero, 0, P.soiInIdx >= 0 ? P.soiInIdx + 1 : Infinity);
+      setLine(lM, P.moonPts, 4, moonNow);
+      if (P.soiOutIdx >= 0) setLine(lA, P.earthPts, 3, zero, P.soiOutIdx); else lA.visible = false;
+    };
+    drawPred(this.pred, this.lineEarth, this.lineMoon, this.lineEarthAfter);
+    drawPred(this.predNode, this.lineNode, this.lineNodeMoon, this.lineNodeAfter);
+    if (this.moonOrbit) setLine(this.lineMoonOrbit, this.moonOrbit.pts, 3, new THREE.Vector3());
     this.shipMark.position.copy(ship.r).sub(this.camI);
     this.updateLabels(camera, moonNow);
     return this.camI;
@@ -166,6 +175,7 @@ export class MapView {
     if (P && P.closeMoon && P.closeMoon.d < MOON.soi && P.moonPts.length) {
       add(moonNow.clone().add(P.closeMoon.r), `Moon Pe ${U.dist(P.closeMoon.d - MOON.R)}`, 'moon');
     }
+    if (P && P.soiIn && !P.startInSoi) add(moonPos(P.soiIn, new THREE.Vector3()), 'Moon at encounter', 'moon');
     if (P && P.impact) add(P.impact.body === EARTH ? P.impact.r : moonNow.clone().add(P.impact.r), P.impact.body === EARTH ? 'Impact/Reentry' : 'Lunar impact', 'moon');
     if (this.predNode && this.predNode.start) add(this.predNode.start, 'Burn', 'node');
   }
@@ -189,32 +199,54 @@ export class MapView {
     h += `<div class="dim">Δv left ≈ ${Math.round(deltaV(ship.craft)).toLocaleString('en-US')} m/s (vacuum)</div>`;
     this.game.progress.orbitCheck(body, el.pe);
     $('m-info').innerHTML = h;
-    if (this.planDirty) { this.planDirty = false; this.renderPlan(); }
+    if (!this.busy && (this.planDirty || this.planButtons().map((b) => b[0]).join('|') !== this._planSig)) { this.planDirty = false; this.renderPlan(); }
     this.renderNode();
   }
 
   // ----- planning panel -----
-  renderPlan() {
-    const ship = this.game.ship, C = this.game.controller;
+  planButtons() {
+    const ship = this.game.ship, E = ship.env;
     const body = ship.env.body;
     const rs = relState(ship, body);
     const el = elements(rs.r, rs.v, rs.mu);
-    const p = $('m-plan');
+    const P = this.pred;
     const btns = [];
     const inAtmo = body === EARTH && ship.env.h < EARTH.atmoTop;
     if (body === EARTH) {
+      const toMoon = P && P.soiIn;
+      const farOut = el.e >= 1 || el.ap - EARTH.R > 5e6;
       if (inAtmo && el.pe - EARTH.R < 140000) btns.push(['Autopilot: ascend to orbit', () => this.game.engage(ascentAp())]);
-      if (el.e < 1 && el.ap - EARTH.R > 140000) btns.push(['Circularize at apoapsis', () => this.plan(() => planCircularize(ship, true))]);
-      if (el.pe - EARTH.R > 140000) {
+      const peAlt = el.pe - EARTH.R;
+      if (toMoon && !inAtmo) btns.push(['Fine-tune Moon approach (100 km)', () => this.planAsync((cb) => planCorrection(ship, MOON, 100000, cb), 'Already on course')]);
+      if (farOut && !toMoon && !inAtmo && el.e < 1 && peAlt > 140000) btns.push(['Brake into low orbit at periapsis', () => this.plan(() => planCircularize(ship, false))]);
+      if (farOut && !toMoon && !inAtmo && peAlt > 140000) btns.push(['Fine-tune arrival (Pe 250 km)', () => this.planAsync((cb) => planCorrection(ship, EARTH, 250000, cb), 'Already on course')]);
+      if (farOut && !toMoon && !inAtmo) btns.push(['Fine-tune reentry (Pe 45 km, hot!)', () => this.planAsync((cb) => planCorrection(ship, EARTH, 45000, cb), 'Already on course')]);
+      if (peAlt < 100000 && E.h > 60000 && E.vSurf > 2500) btns.push(['Autopilot: reentry', () => { this.game.engage(reentryAp()); this.game.toggleMap(); }]);
+      if (el.e < 1 && el.ap - EARTH.R > 140000 && !toMoon) btns.push(['Circularize at apoapsis',() => this.plan(() => planCircularize(ship, true))]);
+      if (el.pe - EARTH.R > 140000 && !farOut) {
         btns.push(['Go to the Moon', () => this.planAsync((cb) => planMoonTransfer(ship, 120000, cb))]);
         btns.push(['Deorbit for reentry (Pe 40 km)', () => this.plan(() => planPeriapsis(ship, 40000))]);
       }
     } else {
+      const peAlt = el.pe - MOON.R;
+      if (el.e >= 1 && (peAlt < 30000 || peAlt > 400000)) btns.push(['Adjust approach (Pe 100 km)', () => this.planAsync((cb) => planCorrection(ship, MOON, 100000, cb), 'Already on course')]);
       if (el.e >= 1 || el.ap - MOON.R > 3000000) btns.push(['Capture into lunar orbit', () => this.plan(() => planCapture(ship))]);
-      if (el.e < 1) btns.push(['Return to Earth', () => this.planAsync((cb) => planReturn(ship, 45000, cb))]);
+      if (el.e < 1) {
+        // spaceplanes come home into Earth orbit and reenter from there; heat-shielded craft can dive straight in
+        const shield = ship.craft.parts.some((P) => P.alive && P.def.shield);
+        btns.push([shield ? 'Return to Earth (direct reentry)' : 'Return to Earth orbit', () => this.planAsync((cb) => planReturn(ship, shield ? 45000 : 250000, cb))]);
+      }
+      if (E.agl < 20000 && E.vSurf < 300) btns.push(['Autopilot: take off to lunar orbit', () => { this.game.engage(ascentAp()); this.game.toggleMap(); }]);
       if (el.e < 1) btns.push(['Circularize at apoapsis', () => this.plan(() => planCircularize(ship, true))]);
       btns.push(['Autopilot: land on the Moon', () => { this.game.engage(landAp()); this.game.toggleMap(); }]);
     }
+    return btns;
+  }
+
+  renderPlan() {
+    const p = $('m-plan');
+    const btns = this.planButtons();
+    this._planSig = btns.map((b) => b[0]).join('|');
     let h = '<div class="dim small">Plan a burn — the autopilot can fly it for you.</div>';
     p.innerHTML = h;
     for (const [label, fn] of btns) {
@@ -232,14 +264,14 @@ export class MapView {
     if (!node) { this.game.hud.toast('No solution from here', 'bad'); return; }
     this.setNode(node);
   }
-  async planAsync(fn) {
+  async planAsync(fn, failMsg = 'No transfer found — try from a circular orbit') {
     if (this.busy) return;
     const pg = $('m-prog'); pg.hidden = false;
     this.busy = true;
     this.game.hud.toast('Computing trajectory…');
     try {
       const node = await fn((f) => { pg.firstChild.style.width = (f * 100).toFixed(0) + '%'; });
-      if (!node) this.game.hud.toast('No transfer found — try from a circular orbit', 'bad');
+      if (!node) this.game.hud.toast(failMsg, 'bad');
       else this.setNode(node);
     } finally { this.busy = false; pg.hidden = true; this.predT = 0; }
   }
@@ -258,7 +290,9 @@ export class MapView {
     const dv = (n.dvLeft || n.dv).length();
     const bt = burnTime(ship, dv);
     const executing = C.ap && C.ap.name === 'Burn';
-    el.innerHTML = `<div class="node"><div><b>${n.label}</b></div><div>Δv <b>${Math.round(dv)} m/s</b> · burn ${isFinite(bt) ? fmtTime(bt) : 'no thrust'}</div><div>In <b>${fmtTime(n.t - ship.t)}</b>${n.moonPe !== undefined ? ` · Moon Pe ${this.game.hud.units.dist(n.moonPe)}` : ''}${n.earthPe !== undefined ? ` · Earth Pe ${this.game.hud.units.dist(n.earthPe)}` : ''}</div></div>`;
+    const have = deltaV(ship.craft, false, (P) => P.eng.active);
+    const short = dv > have * 0.98 ? `<div style="color:var(--red)">Not enough fuel: ${Math.round(have)} m/s left on the active engines</div>` : '';
+    el.innerHTML = `<div class="node"><div><b>${n.label}</b></div><div>Δv <b>${Math.round(dv)} m/s</b> · burn ${isFinite(bt) ? fmtTime(bt) : 'no thrust'}</div>${short}<div>In <b>${fmtTime(n.t - ship.t)}</b>${n.moonPe !== undefined ? ` · Moon Pe ${this.game.hud.units.dist(n.moonPe)}` : ''}${n.earthPe !== undefined ? ` · Earth Pe ${this.game.hud.units.dist(n.earthPe)}` : ''}</div></div>`;
     const row = document.createElement('div'); row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px';
     const b1 = document.createElement('button'); b1.className = 'btn sm primary'; b1.textContent = executing ? 'Flying…' : 'Autopilot';
     b1.disabled = executing;

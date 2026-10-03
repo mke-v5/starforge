@@ -194,7 +194,10 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   #navball-slot{width:116px;height:116px}
   .toggles{grid-template-columns:repeat(2,56px)}.toggles button{height:32px;font-size:11px}
   .infopanel{width:150px;font-size:9.5px}
-  .hb-parts{width:210px}.hb-stats{width:190px;font-size:10.5px}
+  .hb-parts{width:210px}.hb-stats{width:180px;font-size:10px;padding:7px;max-height:calc(100vh - 130px - var(--st) - var(--sb));overflow-y:auto;touch-action:pan-y}
+  .hb-stats .row{padding:1px 0}
+  .hb-hint{display:none}
+  .hb-tools{padding:4px;gap:4px}.hb-tools .tool{min-width:38px;height:36px}
   .sas button{height:24px;font-size:10px}
   .launch-panel{gap:6px;padding:10px}
   .launch-panel .ph h2{font-size:17px}
@@ -203,6 +206,11 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   #l-go{min-height:40px}
   .panel.narrow{gap:6px;padding:12px}
   .dbtns .btn{min-height:36px}
+  .logo.big{font-size:38px}
+  .tag{font-size:12px}
+  .menu{gap:5px;margin-top:6px}
+  .menu .btn{min-height:34px}
+  .credits{font-size:8px}
 }
 /* portrait phones */
 @media (max-width:600px) and (orientation:portrait){

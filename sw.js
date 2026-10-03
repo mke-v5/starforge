@@ -1,5 +1,5 @@
 // Service worker: app shell cached for offline start, map tiles cached as you fly (bounded).
-const VERSION = 'starforge-v2';
+const VERSION = 'starforge-v3';
 const SHELL = ['./', './index.html', './style.css', './manifest.webmanifest', './icon.svg', './icon-192.png', './vendor/three.module.js', './data/airports.json', './data/cities.json'];
 const TILE_CACHE = 'starforge-tiles';
 const TILE_LIMIT = 1500;
@@ -28,7 +28,11 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   if (u.startsWith(self.registration.scope)) {
-    // network first for the app (fresh code), fall back to cache offline
-    e.respondWith(fetch(e.request).then((r) => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); } return r; }).catch(() => caches.match(e.request)));
+    // network first for the app, always revalidated (so an update never mixes old and new code files),
+    // falling back to the cache offline
+    const nav = e.request.mode === 'navigate';
+    const req = nav ? new Request(e.request.url, { cache: 'no-cache', credentials: 'same-origin' }) : new Request(e.request, { cache: 'no-cache' });
+    e.respondWith(fetch(req).then((r) => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); } return r; })
+      .catch(() => caches.match(e.request, { ignoreSearch: nav }).then((r) => r || (nav ? caches.match('./index.html') : undefined))));
   }
 });

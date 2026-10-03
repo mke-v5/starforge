@@ -835,6 +835,8 @@ class Game {
 
   onLanded() {
     const ship = this.ship, E = ship.env;
+    if (ship.warp > 1) ship.warp = 1;
+    this.warpTarget = null;
     let ap = null;
     if (E.body === EARTH) {
       const n = this.world.airports.nearestRunway(E.lat, E.lon, 5000);

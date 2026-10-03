@@ -620,18 +620,21 @@ export function landRunwayAp(A, rw, label = '', terrain = null) {
         if (terrain) {
           const uA = -rw.len / 2 + Math.min(350, rw.len * 0.15);
           const el0 = A.elevAt(rw, 0);
+          // the clearance an approach needs grows with distance from the runway (30 m near the threshold,
+          // 150 m from about 4 km out); score each direction by its worst shortfall
+          const need = (d) => clamp(d * 0.04, 30, 150);
           const check = (dir) => {
-            let minClr = Infinity, needTan = Math.tan(3 * D2R);
+            let worst = 0, needTan = Math.tan(3 * D2R);
             for (let d = 600; d <= 15000; d += 400) {
               const [la, lo] = rwLL(dir * (uA - d), 0);
               const g = terrain(la, lo);
-              minClr = Math.min(minClr, el0 + d * Math.tan(3 * D2R) + 15 - g);
-              needTan = Math.max(needTan, (g + 150 - el0 - 15) / d);
+              worst = Math.max(worst, need(d) - (el0 + d * Math.tan(3 * D2R) + 15 - g));
+              needTan = Math.max(needTan, (g + need(d) - el0 - 15) / d);
             }
-            return { minClr, needTan };
+            return { worst, needTan };
           };
           const here = check(s), other = check(-s);
-          if (here.minClr < 150 && other.minClr > here.minClr + 50) { s = -s; tanGs = Math.min(Math.tan(6 * D2R), other.needTan); }
+          if (here.worst > 0 && other.worst < here.worst - 30) { s = -s; tanGs = Math.min(Math.tan(6 * D2R), other.needTan); }
           else tanGs = Math.min(Math.tan(6 * D2R), here.needTan);
         }
         const S = craft.wings.reduce((a, P) => a + (P.alive !== false ? P.wing.area : 0), 0);

@@ -583,9 +583,15 @@ function estimateBrakeStart(ship, amax, groundRef) {
 // speed with the throttle, gear down, flare, and brake to a stop on the centre line. Works through the
 // fly-by-wire (flight-path angle and bank holds), so it flies like a pilot would.
 // `A` is the airports database (local runway coordinates), `rw` a runway record.
-export function landRunwayAp(A, rw, label = '') {
+export function landRunwayAp(A, rw, label = '', terrain = null) {
   let s = 0, phase = 'enroute', integ = 0, thrPrev = 0.4, Vref = null, hasJets = false;
-  const tan3 = Math.tan(3 * D2R);
+  let tanGs = Math.tan(3 * D2R), floorT = -1e9, floorH = 0;
+  const R = EARTH.R;
+  // lat/lon of a point in runway coordinates (along the runway's own direction, metres right of it)
+  const rwLL = (along, cross) => {
+    const x = along * rw.dx + cross * rw.dy, y = along * rw.dy - cross * rw.dx;
+    return [rw.latC + (y / R) / D2R, rw.lonC + (x / (R * rw.cosC)) / D2R];
+  };
   return {
     name: 'Auto-land',
     cancelOnStick: true,
@@ -599,8 +605,25 @@ export function landRunwayAp(A, rw, label = '') {
       const ve = v.dot(east), vn = v.dot(north);
       const L = A.local(rw, E.lat, E.lon);
       if (!s) {
-        // land toward whichever end we are approaching from
+        // land toward whichever end we are approaching from, unless terrain blocks that approach
         s = L.along < 0 ? 1 : -1;
+        if (terrain) {
+          const uA = -rw.len / 2 + Math.min(350, rw.len * 0.15);
+          const el0 = A.elevAt(rw, 0);
+          const check = (dir) => {
+            let minClr = Infinity, needTan = Math.tan(3 * D2R);
+            for (let d = 600; d <= 15000; d += 400) {
+              const [la, lo] = rwLL(dir * (uA - d), 0);
+              const g = terrain(la, lo);
+              minClr = Math.min(minClr, el0 + d * Math.tan(3 * D2R) + 15 - g);
+              needTan = Math.max(needTan, (g + 150 - el0 - 15) / d);
+            }
+            return { minClr, needTan };
+          };
+          const here = check(s), other = check(-s);
+          if (here.minClr < 150 && other.minClr > here.minClr + 50) { s = -s; tanGs = Math.min(Math.tan(6 * D2R), other.needTan); }
+          else tanGs = Math.min(Math.tan(6 * D2R), here.needTan);
+        }
         const S = craft.wings.reduce((a, P) => a + (P.alive !== false ? P.wing.area : 0), 0);
         const vs = Math.sqrt((2 * craft.mass * 9.81) / (1.225 * Math.max(5, S) * 1.25));
         Vref = clamp(vs * 1.3, 55, 110);
@@ -640,13 +663,20 @@ export function landRunwayAp(A, rw, label = '') {
         if (dPt < 2500) phase = 'final';
         wantTrack = rwHdg + Math.atan2(dx, du);              // runway frame -> compass heading
         hT = elev + clamp(800 + (dPt - 2500) * 0.06, 800, 4500);
+        // stay well above the hills between here and the line-up point
+        if (terrain && ship.t - floorT > 2) {
+          floorT = ship.t; floorH = 0;
+          const [la1, lo1] = rwLL(s * pu, 0);
+          for (let k = 1; k <= 6; k++) { const f = k / 6; floorH = Math.max(floorH, terrain(E.lat + (la1 - E.lat) * f, E.lon + (lo1 - E.lon) * f)); }
+        }
+        hT = Math.max(hT, floorH + 450);
         Vt = Math.max(Vref * 1.45, Math.min(V, 160));
         gear = false;
       }
       if (phase === 'final' || phase === 'flare') {
         const lead = clamp(dist * 0.25, 600, 3000);
         wantTrack = rwHdg + clamp(Math.atan2(-x - vx * 4, lead), -0.6, 0.6);
-        hT = elev + Math.max(0, dist) * tan3 + 15;
+        hT = elev + Math.max(0, dist) * tanGs + 15;
         Vt = Vref + clamp(dist / 1000, 0, 25);
         gear = hAgl < 700 ? true : undefined;
       }
@@ -659,7 +689,10 @@ export function landRunwayAp(A, rw, label = '') {
         Vt = 0;
       } else {
         const k = phase === 'final' ? 1 / 300 : 1 / 2500;
-        gamma = clamp((phase === 'final' ? -tan3 : 0) + (hT - E.h) * k * (phase === 'final' ? 0.18 : 1), -0.2, 0.15);
+        gamma = clamp((phase === 'final' ? -tanGs : 0) + (hT - E.h) * k * (phase === 'final' ? 0.18 : 1), -0.2, 0.15);
+        // terrain floor: never descend toward the ground short of the runway
+        if (phase === 'enroute' && E.agl < 350) gamma = Math.max(gamma, 0.08);
+        if (phase === 'final' && dist > 1500 && E.agl < Math.min(120, hAgl * 0.6)) gamma = Math.max(gamma, 0.02);
       }
       C.gammaHold = gamma;
       // ---- lateral -> bank ----

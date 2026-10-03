@@ -345,7 +345,7 @@ export class MapView {
     b1.onclick = () => {
       if (home) {
         const g = this.game, A = g.world.airports, name = n.target.name;
-        C.engage(sequenceAp(`Home to ${name}`, [() => nodeExec(n), () => coastToAp(), () => reentryAp(n.target), () => landRunwayAp(A, n.runway, name)]));
+        C.engage(sequenceAp(`Home to ${name}`, [() => nodeExec(n), () => coastToAp(), () => reentryAp(n.target), () => landRunwayAp(A, n.runway, name, g.terrainFn())]));
         g.hud.toast(`Autopilot: deorbit, reentry and landing at ${name}`);
       } else { C.engage(nodeExec(n)); this.game.hud.toast('Autopilot will fly the burn'); }
       this.renderNode();

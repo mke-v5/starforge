@@ -564,11 +564,12 @@ class Game {
     if (canHover && !ship.parked && ship.contacts === 0) opts.push([ship.env.body === MOON || (ship.env.h > EARTH.atmoTop && ship.env.body === EARTH) ? 'Land here (deorbit, brake, touch down)' : 'Powered landing (hover down)', () => this.engage(landAp())]);
     if (ship.env.body === EARTH && ship.env.rho > 0.05) opts.push(['Cruise: hold altitude & heading', () => this.engage(cruiseAp(ship))]);
     { const E = ship.env, rw = E.body === EARTH && E.h < 25000 && ship.contacts === 0 && this.craft.wings.length ? this.landingRunway() : null;
-      if (rw) opts.push([`Land at ${rw.name} (${this.hud.units.dist(rw.d)})`, () => this.engage(landRunwayAp(this.world.airports, rw.rw, rw.name))]); }
+      if (rw) opts.push([`Land at ${rw.name} (${this.hud.units.dist(rw.d)})`, () => this.engage(landRunwayAp(this.world.airports, rw.rw, rw.name, this.terrainFn()))]); }
     if (C.node) opts.push(['Fly the planned burn', () => this.engage(nodeExec(C.node))]);
     if (rocket) opts.push(['Plan burns in the map…', () => this.toggleMap()]);
     this.dialog('Autopilot', '', opts);
   }
+  terrainFn() { return (la, lo) => this.world.groundAt(EARTH, la, lo); }
   // best runway to land on: the longest runway of the nearest few airports, favouring big ones
   landingRunway() {
     const A = this.world.airports, E = this.ship.env;

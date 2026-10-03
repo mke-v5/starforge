@@ -55,18 +55,24 @@ export class Airports {
   search(q, limit = 8) {
     q = q.trim().toLowerCase();
     if (!q || !this.ready) return [];
-    const out = [];
     const up = q.toUpperCase();
-    for (const a of this.airports) if (a.iata === up || a.ident === up) out.push(a);
+    const hits = [];
     for (const a of this.airports) {
-      if (out.length >= limit) break;
-      if (a.type <= 1 && a.l.includes(q) && !out.includes(a)) out.push(a);
+      if (a.type > 2) continue;
+      let sc;
+      if (a.iata === up || a.ident === up) sc = 0;
+      else {
+        const i = a.l.indexOf(q);
+        if (i < 0) continue;
+        // big airports first; a match at the start of the city or name beats one in the middle of a word
+        const city = (a.city || '').toLowerCase();
+        const start = city.startsWith(q) || a.l.startsWith(q) ? 0 : (i > 0 && a.l[i - 1] === ' ' ? 1 : 2);
+        sc = 1 + a.type * 3 + start;
+      }
+      hits.push([sc, a.name.length, a]);
     }
-    for (const a of this.airports) {
-      if (out.length >= limit) break;
-      if (a.type === 2 && a.l.includes(q) && !out.includes(a)) out.push(a);
-    }
-    return out.slice(0, limit);
+    hits.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+    return hits.slice(0, limit).map((h) => h[2]);
   }
 
   nearest(lat, lon, n = 8, maxType = 2) {

@@ -1,8 +1,8 @@
 // Flight control computer: fly-by-wire rate control, SAS pointing modes, actuator mixing and autopilots.
 
 import * as THREE from 'three';
-import { EARTH, MOON, G0, clamp, smoothstep, D2R, fmtTime } from '../core/geo.js';
-import { elements, relState, burnTime, planCircularize, propagate, engineClass } from './orbit.js';
+import { EARTH, MOON, G0, clamp, smoothstep, D2R, fmtTime, gcDist, gcBearing } from '../core/geo.js';
+import { elements, relState, burnTime, planCircularize, propagate, engineClass, ENTRY_GLIDE, glideRange, coastGround } from './orbit.js';
 import { moonPos, moonVel } from '../core/astro.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
@@ -95,6 +95,7 @@ export class Controller {
     if (apOut && apOut.engines && apOut.engines !== this.engGroup) this.setEngineGroup(craft, apOut.engines);
     ctl.throttle = apOut && apOut.throttle !== undefined ? apOut.throttle : inp.throttle;
     ctl.brake = inp.brake ? 1 : (assisted && onGround && ctl.throttle < 0.02 && !apOut ? 1 : 0);
+    if (apOut && apOut.brake !== undefined) ctl.brake = apOut.brake;
     if (apOut && apOut.gear !== undefined) ctl.gear = apOut.gear;
     // -------- desired angular rates (body) --------
     const w = ship.w;
@@ -387,7 +388,7 @@ export function nodeExec(node) {
       const axis = firing ? ship.thrustB.clone().normalize() : C.thrustAxis(craft, ship.env);
       const bt = burnTime(ship, left);
       const tStart = node.t - bt / 2;
-      if (!started && ship.t > node.t + Math.max(30, bt * 0.3)) { C.node = null; return { done: true, throttle: 0, msg: 'Missed the burn window — plan it again in the map' }; }
+      if (!started && ship.t > node.t + Math.max(30, bt * 0.3)) { C.node = null; return { done: true, fail: true, throttle: 0, msg: 'Missed the burn window — plan it again in the map' }; }
       const dir = dirNow(ship);
       const fwd = axis.clone().applyQuaternion(ship.q);
       const aligned = fwd.dot(dir);
@@ -423,8 +424,10 @@ export function nodeExec(node) {
       C.node = { ...node, dvLeft: dir.clone().multiplyScalar(Math.max(0, left)), started, tStart };
       if (started && left < 0.03) { C.node = null; return { done: true, throttle: 0, msg: 'Burn complete' }; }
       const spool = Math.max(1, ...craft.engines.filter((P) => P.eng.active).map((P) => P.eng.e.spool || 1));
-      if (started && thr > 0 && craft.engines.every((P) => !P.eng.active || P.eng.flame === 0) && ship.t - startedAt > spool + 4) return { done: true, throttle: 0, msg: craft.engines.some((P) => P.eng.active) ? 'Engines not producing thrust (out of fuel or wrong engine group?)' : 'No active engines' };
-      return { dir, axis, throttle: thr };
+      if (started && thr > 0 && craft.engines.every((P) => !P.eng.active || P.eng.flame === 0) && ship.t - startedAt > spool + 4) return { done: true, fail: true, throttle: 0, msg: craft.engines.some((P) => P.eng.active) ? 'Engines not producing thrust (out of fuel or wrong engine group?)' : 'No active engines' };
+      // orbital burns run on the main engines when the craft has them (jets do nothing up here)
+      const engines = node.engines || (ship.env.rho < 0.01 && craft.engines.some((P) => P.alive !== false && engineClass(P) === 'main') ? 'main' : undefined);
+      return { dir, axis, throttle: thr, engines };
     },
   };
 }
@@ -576,17 +579,168 @@ function estimateBrakeStart(ship, amax, groundRef) {
   return st.t;
 }
 
+// Automatic landing on a runway: fly to the extended centre line, capture a 3° glide slope, hold approach
+// speed with the throttle, gear down, flare, and brake to a stop on the centre line. Works through the
+// fly-by-wire (flight-path angle and bank holds), so it flies like a pilot would.
+// `A` is the airports database (local runway coordinates), `rw` a runway record.
+export function landRunwayAp(A, rw, label = '') {
+  let s = 0, phase = 'enroute', integ = 0, thrPrev = 0.4, Vref = null, hasJets = false;
+  const tan3 = Math.tan(3 * D2R);
+  return {
+    name: 'Auto-land',
+    cancelOnStick: true,
+    update(ship, dt, C) {
+      const craft = ship.craft, E = ship.env;
+      if (E.body !== EARTH) return { done: true, fail: true, msg: 'Runway landing works on Earth' };
+      const up = E.up;
+      const north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y).normalize();
+      const east = new THREE.Vector3().crossVectors(north, up);
+      const v = E.vAir;
+      const ve = v.dot(east), vn = v.dot(north);
+      const L = A.local(rw, E.lat, E.lon);
+      if (!s) {
+        // land toward whichever end we are approaching from
+        s = L.along < 0 ? 1 : -1;
+        const S = craft.wings.reduce((a, P) => a + (P.alive !== false ? P.wing.area : 0), 0);
+        const vs = Math.sqrt((2 * craft.mass * 9.81) / (1.225 * Math.max(5, S) * 1.25));
+        Vref = clamp(vs * 1.3, 55, 110);
+        hasJets = craft.engines.some((P) => P.alive !== false && engineClass(P) === 'jets');
+      }
+      const u = s * L.along, x = s * L.cross;                   // along the landing direction / right of the centre line
+      const vu = s * (ve * rw.dx + vn * rw.dy), vx = s * (ve * rw.dy - vn * rw.dx);
+      const uAim = -rw.len / 2 + Math.min(350, rw.len * 0.15);   // touchdown zone
+      const dist = uAim - u;                                     // ground distance to the touchdown point
+      const elev = A.elevAt(rw, clamp(L.along, -rw.len / 2, rw.len / 2));
+      const hAgl = E.h - elev - Math.max(0, -craft.box.min.y);
+      const rwHdg = s > 0 ? Math.atan2(rw.dx, rw.dy) : Math.atan2(-rw.dx, -rw.dy);
+      const track = Math.atan2(ve, vn);
+      const V = v.length();
+      const onGround = ship.contacts > 0;
+      let wantTrack, hT, Vt = Vref, gear, toFix = 0;
+      // ---- rollout ----
+      if (phase === 'rollout' || (onGround && phase === 'flare')) {
+        phase = 'rollout';
+        // steer back to the centre line with the nose wheel
+        C.gHeading = rwHdg + clamp(-x * 0.02 - vx * 0.05, -0.2, 0.2);
+        if (E.vSurf < 2) return { done: true, throttle: 0, brake: 1, msg: `Landed${label ? ' at ' + label : ''}` };
+        return { throttle: 0, brake: E.vSurf > 25 ? 0.7 : 1, gear: true, status: `Rollout · ${Math.round(E.vSurf)} m/s` };
+      }
+      if (onGround && phase === 'enroute') return { done: true, msg: 'Already on the ground' };
+      // ---- lateral: intercept and track the extended centre line ----
+      const onFinal = dist > 0 && Math.abs(x) < Math.max(400, dist * 0.35) && Math.abs(angDiff(track, rwHdg)) < 1.0;
+      if (phase === 'enroute' && onFinal && dist < 22000) phase = 'final';
+      if (phase === 'final' && (dist < -rw.len * 0.6 || Math.abs(x) > Math.max(800, dist * 0.6))) phase = 'enroute';   // missed: go around
+      if (phase === 'enroute') {
+        // fly to a point on the extended centre line, far enough out to line up comfortably
+        const faf = Math.max(9000, Math.min(16000, V * 90));
+        const pu = uAim - faf;
+        const du = pu - u, dx = -x;
+        const dPt = Math.hypot(du, dx);
+        toFix = dPt;
+        if (dPt < 2500) phase = 'final';
+        wantTrack = rwHdg + Math.atan2(dx, du);              // runway frame -> compass heading
+        hT = elev + clamp(800 + (dPt - 2500) * 0.06, 800, 4500);
+        Vt = Math.max(Vref * 1.45, Math.min(V, 160));
+        gear = false;
+      }
+      if (phase === 'final' || phase === 'flare') {
+        const lead = clamp(dist * 0.25, 600, 3000);
+        wantTrack = rwHdg + clamp(Math.atan2(-x - vx * 4, lead), -0.6, 0.6);
+        hT = elev + Math.max(0, dist) * tan3 + 15;
+        Vt = Vref + clamp(dist / 1000, 0, 25);
+        gear = hAgl < 700 ? true : undefined;
+      }
+      // ---- vertical ----
+      if (phase === 'final' && hAgl < 14 && dist < 800) phase = 'flare';
+      let gamma;
+      if (phase === 'flare') {
+        const vzT = -clamp(hAgl * 0.12, 0.5, 2.5);
+        gamma = Math.asin(clamp(vzT / Math.max(V, 1), -0.3, 0.3));
+        Vt = 0;
+      } else {
+        const k = phase === 'final' ? 1 / 300 : 1 / 2500;
+        gamma = clamp((phase === 'final' ? -tan3 : 0) + (hT - E.h) * k * (phase === 'final' ? 0.18 : 1), -0.2, 0.15);
+      }
+      C.gammaHold = gamma;
+      // ---- lateral -> bank ----
+      const te = angDiff(wantTrack, track);
+      const bankLim = hAgl < 60 ? 0.1 : phase === 'final' ? 0.35 : 0.5;
+      C.bankHold = clamp(te * 1.6, -bankLim, bankLim);
+      if (C.sas !== 'hold' && C.sas !== 'off') C.sas = 'hold';
+      // ---- speed ----
+      const err = Vt - V;
+      if (Vt > 0) integ = clamp(integ + err * dt * 0.02, -0.4, 0.6); else integ = 0;
+      let thr = Vt > 0 ? clamp(0.35 + err * 0.05 + integ, 0, 1) : 0;
+      thr = thrPrev + clamp(thr - thrPrev, -dt * 0.8, dt * 0.8);
+      thrPrev = thr;
+      const st = phase === 'enroute' ? `${label || 'Runway'} · lining up in ${(toFix / 1000).toFixed(1)} km`
+        : phase === 'final' ? `Final · ${(Math.max(0, dist) / 1000).toFixed(1)} km · ${Math.round(hAgl)} m` : 'Flare';
+      return { throttle: thr, gear, brake: 0, engines: hasJets ? 'jets' : undefined, status: st };
+    },
+  };
+}
+function angDiff(a, b) { const d = a - b; return Math.atan2(Math.sin(d), Math.cos(d)); }
+
+// Coast (time-warping) until below `alt`, nose forward and belly down, ready for reentry.
+export function coastToAp(alt = 140000) {
+  const ap = {
+    name: 'Coast', wakeAt: null, cancelOnStick: true,
+    railsDir: (ship) => ({ dir: ship.env.vAir.clone().normalize(), axis: NOSE }),
+    update(ship, dt, C) {
+      const E = ship.env;
+      if (E.h < alt) { ap.wakeAt = null; return { done: true, msg: 'Entry interface' }; }
+      if (ap.wakeAt == null || ship.t > ap.wakeAt) {
+        let st = { r: ship.r.clone(), v: ship.v.clone(), t: ship.t };
+        let tCross = null;
+        for (let k = 0; k < 600; k++) { st = propagate(st.r, st.v, st.t, 30); if (st.r.length() - EARTH.R < alt) { tCross = st.t; break; } }
+        ap.wakeAt = tCross ? Math.max(ship.t + 1, tCross - 120) : ship.t + 600;
+      }
+      return { dir: E.vAir.clone().normalize(), axis: NOSE, up: E.up.clone(), throttle: 0, status: `entry in ${fmtTime(Math.max(0, ap.wakeAt + 120 - ship.t))}` };
+    },
+  };
+  return ap;
+}
+
+// Run autopilots one after another. Each step is a factory (ship, C) => autopilot, built when it starts.
+// A step that ends with { fail: true } stops the whole sequence.
+export function sequenceAp(name, steps) {
+  let i = -1, cur = null;
+  const seq = {
+    name, cancelOnStick: true,
+    get wakeAt() { return cur ? cur.wakeAt ?? null : null; },
+    get railsDir() { return cur && cur.railsDir ? cur.railsDir : undefined; },
+    update(ship, dt, C) {
+      if (!cur) {
+        i++;
+        if (i >= steps.length) return { done: true, msg: `${name} complete` };
+        cur = steps[i](ship, C);
+        if (!cur) return { done: true, fail: true, msg: `${name}: step ${i + 1} not possible` };
+      }
+      const o = cur.update(ship, dt, C);
+      if (o && o.done) {
+        if (o.fail || i === steps.length - 1) return { ...o, done: true };
+        if (o.msg) C.status = o.msg;
+        cur = null;
+        return { throttle: 0 };
+      }
+      if (o) o.status = `${cur.name}${o.status ? ' · ' + o.status : ''}`;
+      return o;
+    },
+  };
+  return seq;
+}
+
 // Reentry from orbit or a lunar return, Shuttle style: belly first at a high angle of attack, steering the lift
 // up or down with the bank angle so the craft neither skips back out nor dives too deep; levels the wings and
 // hands back control once it is down to about Mach 3.
-export function reentryAp() {
-  let bank = 0, liftAcc = 0, side = 1;
+export function reentryAp(target = null) {
+  let bank = 0, liftAcc = 0, side = 1, rangeT = -1e9, ballistic = 0;
   return {
     name: 'Reentry',
     cancelOnStick: true,
     update(ship, dt, C) {
       const craft = ship.craft, E = ship.env;
-      if (E.body !== EARTH) return { done: true, msg: 'Reentry works at Earth' };
+      if (E.body !== EARTH) return { done: true, fail: true, msg: 'Reentry works at Earth' };
       const up = E.up.clone();
       const vS = E.vAir.clone();
       const V = vS.length();
@@ -594,7 +748,7 @@ export function reentryAp() {
         // hand over in a shallow glide, wings level, so the fly-by-wire keeps it there
         C.gammaHold = -0.03; C.bankHold = 0;
         if (C.sas !== 'hold' && C.sas !== 'off') C.sas = 'hold';
-        return { done: true, throttle: 0, msg: 'Reentry complete — you have control' };
+        return { done: true, throttle: 0, msg: 'Reentry complete — you have control (AUTO → Land at… flies you to a runway)' };
       }
       const vh = vS.clone().normalize();
       const r = ship.r.length();
@@ -607,9 +761,32 @@ export function reentryAp() {
       const lift = aero.clone().addScaledVector(vh, -aero.dot(vh));
       liftAcc += (lift.length() - liftAcc) * Math.min(1, dt * 2);
       // angle of attack: 40 deg in the hypersonic heat pulse, easing to 15 deg as it slows
-      const aoa = clamp(8 + (E.mach - 3) / 9 * 32, 8, 40) * D2R;
+      let aoa = clamp(8 + (E.mach - 3) / 9 * 32, 8, 40) * D2R;
       // target altitude band: high while fast (gentle heating), lower as speed drops
-      const hTgt = 22000 + 4000 * (V / 1000);
+      let hTgt = 22000 + 4000 * (V / 1000);
+      let tgtInfo = '';
+      if (target) {
+        // steer toward the target: bank toward it (reversing when it drifts to the other side) and fly a
+        // higher, thinner-air band to stretch the glide if it is far, a lower one to shorten it
+        const north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y).normalize();
+        const east = new THREE.Vector3().crossVectors(north, up);
+        const track = Math.atan2(vS.dot(east), vS.dot(north));
+        const brg = gcBearing(E.lat, E.lon, target.lat, target.lon);
+        const rel = Math.atan2(Math.sin(brg - track), Math.cos(brg - track));
+        if (Math.abs(rel) > 0.1 && Math.sign(rel) !== side) side = Math.sign(rel);
+        const dist = gcDist(E.lat, E.lon, target.lat, target.lon);
+        // nominal range still to go: near-ballistic descent to 55 km (while fast and high), then the glide
+        if (V > 6900 && E.h > 56000) {
+          if (ship.t - rangeT > 3) { rangeT = ship.t; ballistic = coastGround(ship.r, ship.v, ship.t, 55000).arc; }
+        } else ballistic = 0;
+        const rNom = ballistic + glideRange(Math.min(V, 6970));
+        const rErr = dist - rNom;                    // > 0: falling short, < 0: overshooting
+        hTgt += clamp(rErr * 0.006, -9000, 9000);
+        // fly nearer the best lift-to-drag angle (about 22°) to stretch the glide, steeper for more drag to shorten it
+        if (rErr > 0 && aoa > 22 * D2R) aoa += (22 * D2R - aoa) * clamp(rErr / 300e3, 0, 1);
+        if (rErr < 0 && E.mach > 6) aoa += (48 * D2R - aoa) * clamp(-rErr / 300e3, 0, 1);
+        tgtInfo = ` · ${target.name || 'target'} ${Math.round(dist / 1000)} km`;
+      }
       // damped altitude tracking (PD): vertical acceleration wanted from lift
       let aReq = 0.004 * (hTgt - E.h) - 0.13 * vz + g - centrif;
       if (E.mach < 6) aReq = Math.max(aReq, 0.15 * (-40 - (E.mach - 3) * 40 - vz) + g - centrif);   // flatten out before the hand-over
@@ -623,7 +800,7 @@ export function reentryAp() {
       const dir = vh.clone().multiplyScalar(Math.cos(aoa)).addScaledVector(lphi, Math.sin(aoa));
       const upRef = lphi.clone().multiplyScalar(Math.cos(aoa)).addScaledVector(vh, -Math.sin(aoa));
       const deg = Math.round(bank / D2R);
-      return { dir, axis: NOSE, up: upRef, throttle: 0, gear: false, status: E.h > 100000 ? 'Entry interface' : `Bank ${deg}° · AoA ${Math.round(aoa / D2R)}°` };
+      return { dir, axis: NOSE, up: upRef, throttle: 0, gear: false, status: (E.h > 100000 ? 'Entry interface' : `Bank ${deg}° · AoA ${Math.round(aoa / D2R)}°`) + tgtInfo };
     },
   };
 }

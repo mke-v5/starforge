@@ -1,8 +1,8 @@
 // Orbital mechanics helpers: elements, trajectory prediction (Earth + Moon gravity) and burn planners.
 
 import * as THREE from 'three';
-import { EARTH, MOON, clamp } from '../core/geo.js';
-import { moonPos, moonVel, gravity } from '../core/astro.js';
+import { EARTH, MOON, clamp, llh, toLLH, gcDist } from '../core/geo.js';
+import { moonPos, moonVel, gravity, earthAngle } from '../core/astro.js';
 import { rk4 } from './physics.js';
 
 const _m = new THREE.Vector3(), _mv = new THREE.Vector3();
@@ -412,6 +412,95 @@ export function planCapture(ship, targetAlt) {
   const horiz = v.clone().addScaledVector(r.clone().normalize(), -v.dot(r) / rl).normalize();
   const dv = horiz.multiplyScalar(vc).sub(v);
   return { t: st.t, dv, body: MOON, label: 'Lunar orbit capture' };
+}
+
+// ---- returning to a place on Earth ----
+const _Y = new THREE.Vector3(0, 1, 0);
+// Earth-fixed position and surface-relative velocity of an inertial state
+export function groundState(r, v, t) {
+  const a = -earthAngle(t);
+  const vs = v.clone().sub(new THREE.Vector3(0, EARTH.omega, 0).cross(r));
+  return { p: r.clone().applyAxisAngle(_Y, a), v: vs.applyAxisAngle(_Y, a) };
+}
+// Remaining ground range of the belly-first glide once it has slowed below orbital speed (km/s -> km),
+// measured from the reentry autopilot's nominal profile; above ~7 km/s the craft is still on its near-
+// ballistic descent, which is predicted by following the orbit down to 55 km.
+const GLIDE_TABLE = [[0.95, 15], [1.12, 50], [1.26, 86], [1.38, 125], [1.5, 168], [1.64, 215], [1.81, 266], [2.04, 323], [2.35, 384], [2.76, 451], [3.34, 521], [4.13, 597], [4.94, 681], [5.7, 776], [6.4, 887], [6.97, 1016]];
+export const ENTRY_GLIDE = 1016e3;
+export function glideRange(V) {
+  const v = V / 1000, T = GLIDE_TABLE;
+  if (v <= T[0][0]) return T[0][1] * 1000;
+  for (let i = 1; i < T.length; i++) if (v <= T[i][0]) { const f = (v - T[i - 1][0]) / (T[i][0] - T[i - 1][0]); return (T[i - 1][1] + f * (T[i][1] - T[i - 1][1])) * 1000; }
+  return T[T.length - 1][1] * 1000;
+}
+// Ground point (unit vector, Earth-fixed), track direction and ground distance travelled while coasting
+// (no drag) from state (r, v, t) down to `alt`.
+export function coastGround(r, v, t, alt) {
+  let c = { r: r.clone(), v: v.clone(), t };
+  let g0 = groundState(c.r, c.v, c.t).p.normalize(), last = g0.clone(), arc = 0;
+  for (let k = 0; k < 2000 && c.r.length() - EARTH.R > alt; k++) {
+    const step = clamp((c.r.length() - EARTH.R - alt) / Math.max(50, -c.v.dot(c.r) / c.r.length()) * 0.5, 2, 30);
+    c = propagate(c.r, c.v, c.t, step);
+    const p = groundState(c.r, c.v, c.t).p.normalize();
+    arc += Math.acos(clamp(p.dot(last), -1, 1)) * EARTH.R;
+    last = p;
+  }
+  const g = groundState(c.r, c.v, c.t);
+  const p = g.p.normalize();
+  const d = g.v.addScaledVector(p, -g.v.dot(p)).normalize();
+  return { p, d, arc, state: c };
+}
+
+// Retrograde deorbit burn from orbit that brings periapsis to `peAlt`, timed so that after the reentry glide
+// the craft arrives close to (lat, lon). Searches the next `hours` for the best pass.
+export async function planDeorbitTo(ship, lat, lon, name = '', onProgress, peAlt = 40000, hours = 24) {
+  if (ship.env.body !== EARTH) return null;
+  const el = elements(ship.r, ship.v, EARTH.mu);
+  if (el.e >= 1 || el.pe - EARTH.R < 125000) return null;
+  const tgt = llh(lat, lon, 0, 1, new THREE.Vector3());
+  const evalAt = (tOff, from) => {
+    const st = from ? propagate(from.r, from.v, from.t, tOff - (from.t - ship.t)) : propagate(ship.r, ship.v, ship.t, tOff);
+    const pro = st.v.clone().normalize();
+    let lo = 0, hi = 800;
+    for (let i = 0; i < 26; i++) {
+      const m = (lo + hi) / 2;
+      const e2 = elements(st.r, st.v.clone().addScaledVector(pro, -m), EARTH.mu);
+      if (e2.pe - EARTH.R > peAlt) lo = m; else hi = m;
+    }
+    const dv = (lo + hi) / 2;
+    // coast to 120 km quickly, then follow the near-ballistic descent to 55 km; the glide covers the rest
+    let c = { r: st.r, v: st.v.clone().addScaledVector(pro, -dv), t: st.t };
+    for (let k = 0; k < 400 && c.r.length() - EARTH.R > 125000; k++) {
+      const next = propagate(c.r, c.v, c.t, 30);
+      if (next.r.length() - EARTH.R < 125000) break;
+      c = next;
+    }
+    const cg = coastGround(c.r, c.v, c.t, 55000);
+    const th = ENTRY_GLIDE / EARTH.R;
+    const end = cg.p.clone().multiplyScalar(Math.cos(th)).addScaledVector(cg.d, Math.sin(th));
+    const miss = Math.acos(clamp(end.dot(tgt), -1, 1)) * EARTH.R;
+    return { tOff, dv, pro, st, miss, end, entryP: cg.p.clone(), entryT: cg.state.t };
+  };
+  const span = hours * 3600;
+  let best = null;
+  const N = Math.ceil(span / 60);
+  let cur = { r: ship.r.clone(), v: ship.v.clone(), t: ship.t };
+  for (let i = 0; i < N; i++) {
+    const tOff = 120 + i * 60;
+    const prev = cur;
+    const r = evalAt(tOff, cur);          // steps the running orbit state forward instead of starting over
+    cur = r.st;
+    if (!best || r.miss < best.miss) { best = r; best.prev = prev; }
+    if (i % 25 === 0) { if (onProgress) onProgress(i / N * 0.9); await yieldFrame(); }
+  }
+  for (let step = 20; step >= 2; step /= 2) {
+    for (const dt of [-step, step]) { const r = evalAt(Math.max(60, best.tOff + dt), best.prev); if (r.miss < best.miss) { r.prev = best.prev; best = r; } }
+  }
+  if (onProgress) onProgress(1);
+  const endLL = toLLH(best.end, 1);
+  if (globalThis.__dbgDeorbit) { const g = toLLH(best.entryP, 1); console.log('  planner entry120', g.lat.toFixed(2), g.lon.toFixed(2), 't', best.entryT.toFixed(0)); }
+  return { t: best.st.t, dv: best.pro.clone().multiplyScalar(-best.dv), body: EARTH, label: `Deorbit to ${name || 'target'}`,
+    target: { lat, lon, name }, miss: best.miss, endLat: endLL.lat, endLon: endLL.lon };
 }
 
 export function burnTime(ship, dv) {

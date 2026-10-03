@@ -7,7 +7,7 @@ import { Progress, MILESTONES } from './core/progress.js';
 import { World } from './world/world.js';
 import { Craft } from './ship/craft.js';
 import { Ship } from './ship/physics.js';
-import { Controller, landAp, ascentAp, nodeExec, reentryAp } from './ship/control.js';
+import { Controller, landAp, ascentAp, nodeExec, reentryAp, landRunwayAp } from './ship/control.js';
 import { PRESETS } from './ship/designs.js';
 import { PART } from './ship/parts.js';
 import { deltaV, elements, relState, predict, engineClass } from './ship/orbit.js';
@@ -446,9 +446,26 @@ class Game {
     { const E = ship.env; if (E.body === EARTH && E.h < 400000 && E.vSurf > 2500 && (E.vVert < 0 || E.h < EARTH.atmoTop)) opts.push(['Reentry: belly-first, then hand back control', () => this.engage(reentryAp())]); }
     opts.push([ship.env.body === MOON || (ship.env.h > EARTH.atmoTop && ship.env.body === EARTH) ? 'Land here (deorbit, brake, touch down)' : 'Powered landing (hover down)', () => this.engage(landAp())]);
     if (ship.env.body === EARTH && ship.env.rho > 0.05) opts.push(['Cruise: hold altitude & heading', () => this.engage(cruiseAp(ship))]);
+    { const E = ship.env, rw = E.body === EARTH && E.h < 25000 && ship.contacts === 0 && this.craft.wings.length ? this.landingRunway() : null;
+      if (rw) opts.push([`Land at ${rw.name} (${this.hud.units.dist(rw.d)})`, () => this.engage(landRunwayAp(this.world.airports, rw.rw, rw.name))]); }
     if (C.node) opts.push(['Fly the planned burn', () => this.engage(nodeExec(C.node))]);
     opts.push(['Plan burns in the map…', () => this.toggleMap()]);
     this.dialog('Autopilot', '', opts);
+  }
+  // best runway to land on: the longest runway of the nearest few airports, favouring big ones
+  landingRunway() {
+    const A = this.world.airports, E = this.ship.env;
+    if (!A.ready) return null;
+    let best = null;
+    for (const { d, a } of A.nearest(E.lat, E.lon, 8, 2)) {
+      if (d > 600000) continue;
+      for (const rw of a.runways) {
+        if (rw.len < 1500) continue;
+        const score = d - Math.min(rw.len, 3500) * 20 + (a.type === 0 ? -20000 : 0);
+        if (!best || score < best.score) best = { rw, d, score, name: a.iata || a.ident };
+      }
+    }
+    return best;
   }
   dialog(title, body, opts) {
     $('d-title').textContent = title; $('d-body').innerHTML = body;

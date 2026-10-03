@@ -83,9 +83,17 @@ export class Input {
   poll() {
     const k = this.keys;
     const kb = (a, b) => (k.has(a) ? 1 : 0) - (k.has(b) ? 1 : 0);
-    let pitch = kb('s', 'w') + kb('ArrowDown', 'ArrowUp');
-    let roll = kb('d', 'a') + kb('ArrowRight', 'ArrowLeft');
-    let yaw = kb('e', 'q');
+    // keys are on/off, so ease them in like a real stick: a tap gives a gentle input, holding builds to
+    // full deflection in about a second; letting go centres quickly
+    const now = performance.now(), dt = Math.min(0.1, Math.max(0, (now - (this._kt || now)) / 1000));
+    this._kt = now;
+    const S = this._ks || (this._ks = { p: 0, r: 0, y: 0 });
+    const ease = (cur, tgt) => (tgt === 0 || Math.sign(tgt) !== Math.sign(cur) && cur !== 0 ? cur + (tgt - cur) * Math.min(1, dt * 14) : cur + (tgt - cur) * Math.min(1, dt * 2.2));
+    S.p = ease(S.p, Math.max(-1, Math.min(1, kb('s', 'w') + kb('ArrowDown', 'ArrowUp'))));
+    S.r = ease(S.r, Math.max(-1, Math.min(1, kb('d', 'a') + kb('ArrowRight', 'ArrowLeft'))));
+    S.y = ease(S.y, kb('e', 'q'));
+    const snap = (v) => (Math.abs(v) < 0.02 ? 0 : v);
+    let pitch = snap(S.p), roll = snap(S.r), yaw = snap(S.y);
     let thr = (k.has('Shift') ? 1 : 0) - (k.has('Control') ? 1 : 0);
     let trX = kb('l', 'j'), trY = kb('i', 'k'), trZ = kb('h', 'n');
     // touch stick: pull down = nose up, like a real control stick

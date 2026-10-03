@@ -45,7 +45,7 @@ export function predict(r0, v0, t0, opts = {}) {
   const s = [r0.x, r0.y, r0.z, v0.x, v0.y, v0.z];
   let t = t0;
   const earthPts = [], moonPts = [];
-  let closeMoon = { d: Infinity, t: 0, r: null, v: null }, impact = null, soiIn = null, soiOut = null, earthPe = { d: Infinity, t: 0 };
+  let closeMoon = { d: Infinity, t: 0, r: null, v: null }, impact = null, soiIn = null, soiOut = null, earthPe = { d: Infinity, t: 0, hx: 0, hy: 0, hz: 0 };
   let inSoi = null, soiInIdx = -1, soiOutIdx = -1, startInSoi = false, earthPeIdx = 0;
   const startR = Math.hypot(s[0], s[1], s[2]);
   let angle = 0, lastDir = new THREE.Vector3(s[0], s[1], s[2]).normalize();
@@ -61,7 +61,11 @@ export function predict(r0, v0, t0, opts = {}) {
     if (!nowSoi && inSoi && (soiIn || startInSoi) && !soiOut) { soiOut = t; soiOutIdx = earthPts.length / 3; }
     inSoi = nowSoi;
     if (dm < closeMoon.d) { closeMoon = { d: dm, t, r: new THREE.Vector3(dx, dy, dz), v: null, vI: new THREE.Vector3(s[3], s[4], s[5]) }; }
-    if (de < earthPe.d) { earthPe = { d: de, t }; earthPeIdx = earthPts.length / 3; }
+    if (de < earthPe.d) {
+      // closest point to Earth, with the orbit's angular momentum there (its plane and direction)
+      earthPe.d = de; earthPe.t = t; earthPeIdx = earthPts.length / 3;
+      earthPe.hx = s[1] * s[5] - s[2] * s[4]; earthPe.hy = s[2] * s[3] - s[0] * s[5]; earthPe.hz = s[0] * s[4] - s[1] * s[3];
+    }
     earthPts.push(s[0], s[1], s[2]);
     if (nowSoi) moonPts.push(dx, dy, dz, t);
     if (de < EARTH.R + (opts.earthStop ?? 0)) { impact = { body: EARTH, t, r: new THREE.Vector3(s[0], s[1], s[2]) }; break; }
@@ -113,13 +117,41 @@ export function propagate(r, v, t, dt) {
 
 // ---------- planners: each returns a node {t, dv: Vector3 (I frame), label} or null ----------
 
+// Time until the apsis (periapsis or apoapsis about `body`) nearest the two-body estimate dt0, found on the
+// real Earth–Moon trajectory: far from a circular orbit the other body's pull can move it by many minutes.
+export function refineApsis(ship, body, dt0, peri = true) {
+  const rv = (st) => {
+    if (body !== MOON) return st.r.dot(st.v);
+    moonPos(st.t, _m); moonVel(st.t, _mv);
+    return st.r.clone().sub(_m).dot(st.v.clone().sub(_mv));
+  };
+  const W = clamp(dt0 * 0.25, 600, 6 * 3600), N = 48;
+  const t0 = Math.max(1, dt0 - W), step = (dt0 + W - t0) / N;
+  let st = propagate(ship.r, ship.v, ship.t, t0), f = rv(st), best = null;
+  for (let i = 0; i < N; i++) {
+    const nx = propagate(st.r, st.v, st.t, step), fn = rv(nx);
+    if (peri ? f < 0 && fn >= 0 : f > 0 && fn <= 0) {
+      let a = st, b = nx;
+      for (let k = 0; k < 30 && b.t - a.t > 0.05; k++) {
+        const m = propagate(a.r, a.v, a.t, (b.t - a.t) / 2);
+        if ((rv(m) < 0) === peri) a = m; else b = m;
+      }
+      const tt = (a.t + b.t) / 2 - ship.t;
+      if (best === null || Math.abs(tt - dt0) < Math.abs(best - dt0)) best = tt;
+    }
+    st = nx; f = fn;
+  }
+  return best ?? dt0;
+}
+
 export function planCircularize(ship, atApo = true) {
   const body = ship.env.body;
   const rs = relState(ship, body);
   const el = elements(rs.r, rs.v, rs.mu);
   if (el.e >= 1) return null;
-  const dtTo = atApo ? el.tAp : el.tPe;
+  let dtTo = atApo ? el.tAp : el.tPe;
   if (!isFinite(dtTo)) return null;
+  if (el.e > 0.02 && dtTo > 300) dtTo = refineApsis(ship, body, dtTo, !atApo);
   const st = propagate(ship.r, ship.v, ship.t, dtTo);
   const rel = body === EARTH ? { r: st.r, v: st.v } : (() => { moonPos(st.t, _m); moonVel(st.t, _mv); return { r: st.r.clone().sub(_m), v: st.v.clone().sub(_mv) }; })();
   const rl = rel.r.length();
@@ -136,7 +168,8 @@ export function planPeriapsis(ship, targetAlt, now = false) {
   const body = ship.env.body;
   const rs = relState(ship, body);
   const el = elements(rs.r, rs.v, rs.mu);
-  const dtTo = now || el.e >= 1 || !isFinite(el.tAp) ? 30 : el.tAp;
+  let dtTo = now || el.e >= 1 || !isFinite(el.tAp) ? 30 : el.tAp;
+  if (dtTo > 300 && el.e > 0.02 && el.e < 1) dtTo = refineApsis(ship, body, dtTo, false);
   const st = propagate(ship.r, ship.v, ship.t, dtTo);
   let r, v;
   if (body === EARTH) { r = st.r; v = st.v; } else { moonPos(st.t, _m); moonVel(st.t, _mv); r = st.r.clone().sub(_m); v = st.v.clone().sub(_mv); }
@@ -254,63 +287,210 @@ export async function planMoonTransfer(ship, targetAlt = 120000, onProgress) {
 }
 
 // From lunar orbit (or flyby) back to Earth: target an Earth periapsis of ~45 km for aerobraking reentry.
-export async function planReturn(ship, targetAlt = 45000, onProgress) {
-  const body = ship.env.body;
-  if (body !== MOON) return null;
+// ---- coming home from the Moon ----
+// Velocity at position r on the two-body hyperbola (about mu) whose outgoing asymptote is vInf.
+function hyperbolaVel(r, vInf, mu) {
+  const rl = r.length(), vi = vInf.length();
+  const rh = r.clone().divideScalar(rl), u = vInf.clone().divideScalar(vi);
+  const cphi = clamp(rh.dot(u), -1, 1);
+  const w = u.clone().addScaledVector(rh, -cphi);
+  if (w.lengthSq() < 1e-8) return null;
+  w.normalize();
+  const sphi = Math.sqrt(1 - cphi * cphi);
+  const k = rl * vi * vi / mu;
+  const s = (k * sphi + Math.sqrt(k * k * sphi * sphi + 4 * k * (1 - cphi))) / 2;   // sqrt(e² − 1)
+  const e = Math.sqrt(1 + s * s), h = Math.sqrt(mu * mu * s * s / (vi * vi));
+  const thR = Math.acos(-1 / e) - Math.acos(cphi);
+  return rh.multiplyScalar((mu / h) * e * Math.sin(thR)).addScaledVector(w, h / rl);
+}
+// Rotate an orbit-plane normal about the axis `rh` by the smallest angle that gives an inclination of at least iMin.
+function tiltPlane(n0, rh, iMin) {
+  const n = n0.clone().addScaledVector(rh, -n0.dot(rh)).normalize();
+  const a = new THREE.Vector3().crossVectors(rh, n);
+  const inc = (p) => Math.acos(clamp(Math.cos(p) * n.y + Math.sin(p) * a.y, -1, 1));
+  const ok = (i) => i >= iMin && i <= Math.PI - iMin;
+  if (!iMin || ok(inc(0))) return { n, psi: 0, inc: inc(0) };
+  for (let d = 0.25; d <= 90; d += 0.25) for (const sg of [1, -1]) {
+    const p = sg * d * Math.PI / 180;
+    if (ok(inc(p))) return { n: n.clone().multiplyScalar(Math.cos(p)).addScaledVector(a, Math.sin(p)), psi: p, inc: inc(p) };
+  }
+  const p = inc(Math.PI / 2) > inc(-Math.PI / 2) ? Math.PI / 2 : -Math.PI / 2;
+  return { n: n.clone().multiplyScalar(Math.cos(p)).addScaledVector(a, Math.sin(p)), psi: p, inc: inc(p) };
+}
+// Earth-relative departure from the Moon's distance that falls back to a periapsis at `goal`: falling inward at
+// vr, in the plane through the Earth–Moon line tilted by psi from the Moon's own orbital plane. Returned as the
+// excess velocity relative to the Moon, with the arrival orbit's plane normal and inclination.
+function returnAim(t, goal, psi, vr) {
+  moonPos(t, _m); moonVel(t, _mv);
+  const R = _m.length(), rh = _m.clone().normalize();
+  const t0 = _mv.clone().addScaledVector(rh, -_mv.dot(rh)).normalize();
+  const side = new THREE.Vector3().crossVectors(rh, t0);
+  let Vt = 190;
+  for (let k = 0; k < 5; k++) { const eps = (vr * vr + Vt * Vt) / 2 - EARTH.mu / R; Vt = goal * Math.sqrt(2 * (eps + EARTH.mu / goal)) / R; }
+  const n = side.multiplyScalar(Math.cos(psi)).addScaledVector(t0, -Math.sin(psi));
+  const tv = new THREE.Vector3().crossVectors(n, rh);
+  const V = rh.clone().multiplyScalar(vr).addScaledVector(tv, Vt);
+  return { vInf: V.sub(_mv), n, inc: Math.acos(clamp(n.y, -1, 1)) };
+}
+
+// Simulate a finite burn whose direction is held fixed in the orbital frame (prograde/normal/radial
+// components `comp`) relative to `body`, centred on tNode — the way the burn executor flies it.
+function simBurnComp(base, perf, tNode, comp, dv, body) {
+  const ve = perf.T / perf.mdot;
+  const bt = (perf.m0 - perf.m0 / Math.exp(Math.abs(dv) / ve)) / perf.mdot;
+  const st0 = propagate(base.r, base.v, base.t, Math.max(0, tNode - bt / 2 - base.t));
+  const s = [st0.r.x, st0.r.y, st0.r.z, st0.v.x, st0.v.y, st0.v.z];
+  let t = st0.t, m = perf.m0;
+  const n = Math.max(4, Math.ceil(bt / 2)), h = bt / n;
+  const r = new THREE.Vector3(), v = new THREE.Vector3(), nor = new THREE.Vector3(), rad = new THREE.Vector3(), d = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    rk4(s, t, h);
+    t += h;
+    r.set(s[0], s[1], s[2]); v.set(s[3], s[4], s[5]);
+    if (body === MOON) { r.sub(moonPos(t, _m)); v.sub(moonVel(t, _mv)); }
+    nor.crossVectors(r, v).normalize(); v.normalize(); rad.crossVectors(nor, v);
+    d.copy(v).multiplyScalar(comp.x).addScaledVector(nor, comp.y).addScaledVector(rad, comp.z).normalize().multiplyScalar(perf.T / m * h);
+    s[3] += d.x; s[4] += d.y; s[5] += d.z;
+    m -= perf.mdot * h;
+  }
+  const R = new THREE.Vector3(s[0], s[1], s[2]), V = new THREE.Vector3(s[3], s[4], s[5]);
+  const rr = body === MOON ? R.clone().sub(moonPos(t, _m)) : R, vv = body === MOON ? V.clone().sub(moonVel(t, _mv)) : V;
+  return { r: R, v: V, t, energy: vv.lengthSq() / 2 - body.mu / rr.length(), bt };
+}
+
+// Aim a burn at state `st` (burn frame relative to `frameBody`) so the craft arrives at Earth with its
+// periapsis at radius `goal` and, if iT is given, an orbital inclination of iT. Levenberg–Marquardt on the
+// arrival orbit's angular momentum (its size sets the periapsis, its tilt the inclination), which unlike the
+// periapsis height stays smooth even through a head-on approach. With `perf` the burn is simulated as the
+// finite burn the executor will fly.
+async function aimEarth(st, frameBody, goal, iT, dv0, onProgress, perf = null, base = null) {
+  const m = moonPos(st.t, new THREE.Vector3()), mv = moonVel(st.t, new THREE.Vector3());
+  const rel = frameBody === MOON;
+  const b = basis(rel ? st.r.clone().sub(m) : st.r, rel ? st.v.clone().sub(mv) : st.v);
+  const vec = (c) => b.pro.clone().multiplyScalar(c.x).addScaledVector(b.nor, c.y).addScaledVector(b.rad, c.z);
+  const cosT = iT == null ? 0 : Math.cos(iT);
+  const evalC = (c) => {
+    let r0 = st.r, v0, t0 = st.t, energy = null;
+    if (perf && c.length() > 5 && Math.abs(c.x) > 0.8 * c.length()) {
+      const bs = simBurnComp(base, perf, st.t, c.clone().normalize(), c.length(), frameBody);
+      r0 = bs.r; v0 = bs.v; t0 = bs.t; energy = bs.energy;
+    } else v0 = st.v.clone().add(vec(c));
+    const pr = predict(r0, v0, t0, { maxT: 7 * 86400, maxSteps: 3000, oneRev: false, maxStep: 1800, earthStop: -EARTH.R * 0.9, moonStop: false });
+    const pe = pr.earthPe, d = Math.max(1, pe.d);
+    const h = new THREE.Vector3(pe.hx, pe.hy, pe.hz), hl = Math.max(1, h.length());
+    const vp = hl / d;
+    const hG = goal * Math.sqrt(Math.max(0, vp * vp + 2 * EARTH.mu / goal - 2 * EARTH.mu / d));
+    const ok = pe.t < pr.tEnd - 600 && !(pr.impact && pr.impact.body === MOON);
+    const res = new THREE.Vector3(hl - hG, iT == null ? 0 : h.y - hl * cosT, 0);
+    return { res, d, h, ok, energy, inc: Math.acos(clamp(h.y / hl, -1, 1)) };
+  };
+  const incOk = (r) => iT == null || Math.abs(r.inc - iT) < 0.0035;
+  const done = (r) => r.ok && Math.abs(r.d - goal) < Math.max(2000, (goal - EARTH.R) * 0.01) && incOk(r);
+  let x = new THREE.Vector3(dv0.dot(b.pro), dv0.dot(b.nor), dv0.dot(b.rad));
+  let cur = evalC(x);
+  const E3 = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+  const dlt = 0.3;
+  let lam = 1e-3;
+  for (let it = 0; it < 20 && !done(cur); it++) {
+    const cols = E3.map((e) => evalC(x.clone().addScaledVector(e, dlt)).res.sub(evalC(x.clone().addScaledVector(e, -dlt)).res).divideScalar(2 * dlt));
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], g = [0, 0, 0];
+    for (let i = 0; i < 3; i++) { g[i] = -cols[i].dot(cur.res); for (let j = 0; j < 3; j++) A[i][j] = cols[i].dot(cols[j]); }
+    const tr = A[0][0] + A[1][1] + A[2][2];
+    let ok = false;
+    for (let k = 0; k < 10; k++) {
+      const M = A.map((row, i) => row.map((v, j) => v + (i === j ? lam * tr + 1e-9 * tr : 0)));
+      const step = solve3(M, g);
+      if (!step) { lam *= 10; continue; }
+      if (step.length() > 300) step.setLength(300);
+      const tryX = x.clone().add(step), r = evalC(tryX);
+      if (r.res.length() < cur.res.length()) { x = tryX; cur = r; lam = Math.max(1e-9, lam / 5); ok = true; break; }
+      lam *= 8;
+    }
+    if (onProgress) onProgress(Math.min(1, (it + 1) / 8));
+    await yieldFrame();
+    if (!ok) break;
+  }
+  if (globalThis.__dbgRet) console.log('  aimEarth', { dv: x.length().toFixed(1), peKm: ((cur.d - EARTH.R) / 1e3).toFixed(1), incDeg: (cur.inc * 180 / Math.PI).toFixed(2), iT: iT == null ? '-' : (iT * 180 / Math.PI).toFixed(2), ok: cur.ok });
+  if (!cur.ok || Math.abs(cur.d - goal) > 40000 || (iT != null && Math.abs(cur.inc - iT) > 0.02)) return null;
+  return { dv: vec(x), d: cur.d, inc: cur.inc, energy: cur.energy };
+}
+
+// Trans-Earth injection from lunar orbit: a burn that brings the craft back to a periapsis at targetAlt, in
+// an orbit tilted at least opts.iMin (radians) so it passes over the home airport's latitude.
+export async function planReturn(ship, targetAlt = 45000, onProgress, opts = {}) {
+  if (ship.env.body !== MOON) return null;
   const rs = relState(ship, MOON);
   const el = elements(rs.r, rs.v, MOON.mu);
-  const period = el.e < 1 ? el.period : 4 * 3600;
+  if (!(el.e < 1)) return null;
+  const goal = EARTH.R + targetAlt, iMin = opts.iMin || 0;
   const perf = vacPerf(ship);
-  const tryNode = (tOff, dv) => {
-    const st = propagate(ship.r, ship.v, ship.t, tOff);
-    moonVel(st.t, _mv); moonPos(st.t, _m);
-    const rel = st.v.clone().sub(_mv);
-    const pro = rel.clone().normalize();
-    let pr, eTarget = null;
-    if (perf) {
-      const b = simBurn(ship, perf, st.t, dv, MOON, 1);
-      pr = predict(b.r, b.v, b.t, { maxT: 6 * 86400, maxSteps: 2500, oneRev: false, maxStep: 1800, earthStop: -EARTH.R * 0.9 });
-      eTarget = b.energy;
-    } else pr = predict(st.r, st.v.clone().addScaledVector(pro, dv), st.t, { maxT: 6 * 86400, maxSteps: 2500, oneRev: false, maxStep: 1800, earthStop: -EARTH.R * 0.9 });
-    let d = pr.earthPe.d;
-    if (pr.impact && pr.impact.body === MOON) d = 1e12;
-    return { st, pro, pr, d, eTarget };
-  };
+  const lead = Math.max(120, (perf ? burnTime(ship, 900) / 2 : 0) + 90);
+  // 1) patched conics: over the next day, the cheapest point in the orbit to leave from and the way to leave
+  // (how fast to fall back, how to tilt the arrival orbit), keeping the tilt that reaches the home latitude
+  const okInc = (i) => i >= iMin && i <= Math.PI - iMin;
+  const PSI = [], VR = [-750, -550, -400, -250];
+  for (let d = -90; d <= 90; d += 6) PSI.push(d * Math.PI / 180);
+  const K = 72, span = Math.min(24 * 3600, Math.max(el.period, 12 * el.period));
+  const nPts = Math.ceil(span / (el.period / K));
   let best = null;
-  const N = 36;
-  for (let i = 0; i < N; i++) {
-    const tOff = 30 + (period * i) / N;
-    for (const dv of [800, 900, 1000, 1150]) {
-      const r = tryNode(tOff, dv);
-      const score = Math.abs(r.d - (EARTH.R + targetAlt));
-      if (!best || score < best.score) best = { ...r, score, tOff, dv };
+  const opts2 = [];
+  let st = propagate(ship.r, ship.v, ship.t, lead);
+  const r = new THREE.Vector3(), v = new THREE.Vector3();
+  for (let k = 0; k < nPts; k++) {
+    if (k) st = propagate(st.r, st.v, st.t, el.period / K);
+    moonPos(st.t, _m); moonVel(st.t, _mv);
+    r.copy(st.r).sub(_m); v.copy(st.v).sub(_mv);
+    let bk = null;
+    for (const psi of PSI) for (const vr of VR) {
+      const aim = returnAim(st.t + 8 * 3600, goal, psi, vr);
+      if (!okInc(aim.inc)) continue;
+      const vb = hyperbolaVel(r, aim.vInf, MOON.mu);
+      if (!vb) continue;
+      // a slight preference for the Moon's own plane, and a strong one for coming home the same way Earth
+      // turns (a retrograde orbit meets the atmosphere almost 1 km/s faster)
+      const dv = vb.sub(v), cost = dv.length() + Math.abs(psi) * 20 + (aim.inc > Math.PI / 2 ? 250 : 0);
+      if (!bk || cost < bk.cost) bk = { cost, st, dv, aim, tOff: st.t - ship.t, psi, vr };
     }
-    if (onProgress) onProgress(i / N * 0.6);
-    if (i % 2 === 0) await yieldFrame();
+    if (bk) opts2.push(bk);
+    if (k % 8 === 0) { await yieldFrame(); if (onProgress) onProgress((k / nPts) * 0.3); }
   }
-  let { tOff, dv } = best;
-  let stepT = period / N / 2, stepV = 40;
-  for (let it = 0; it < 26; it++) {
-    let improved = false;
-    for (const [dt, ddv] of [[stepT, 0], [-stepT, 0], [0, stepV], [0, -stepV]]) {
-      const t2 = Math.max(20, tOff + dt), v2 = Math.max(100, dv + ddv);
-      const r = tryNode(t2, v2);
-      const score = Math.abs(r.d - (EARTH.R + targetAlt));
-      if (score < best.score) { best = { ...r, score, tOff: t2, dv: v2 }; tOff = t2; dv = v2; improved = true; }
-    }
-    if (!improved) { stepT /= 2; stepV /= 2; }
-    if (onProgress) onProgress(0.6 + (it / 26) * 0.4);
-    await yieldFrame();
-  }
-  if (best.score > 400000) return null;
-  return { t: best.st.t, dv: best.pro.clone().multiplyScalar(best.dv), body: MOON, eTarget: best.eTarget, label: 'Return to Earth', earthPe: best.d - EARTH.R };
+  for (const o of opts2) if (!best || o.cost < best.cost) best = o;
+  // an earlier departure that costs little more beats waiting
+  if (best) best = opts2.find((o) => o.cost < best.cost + Math.max(40, best.cost * 0.04)) || best;
+  if (!best) return null;
+  if (globalThis.__dbgRet) console.log('  patched', { cost: best.cost.toFixed(0), dv: best.dv.length().toFixed(0), waitH: (best.tOff / 3600).toFixed(1), psi: (best.psi * 180 / Math.PI).toFixed(0), vr: best.vr, inc: (best.aim.inc * 180 / Math.PI).toFixed(1), minCost: Math.min(...opts2.map((o) => o.cost)).toFixed(0), n: opts2.length });
+  // 2) refine on the real Earth–Moon dynamics
+  const base = propagate(ship.r, ship.v, ship.t, Math.max(0, best.tOff - (perf ? burnTime(ship, best.cost) : 0) / 2 - 30));
+  const iT = iMin ? clamp(best.aim.inc, iMin + 0.005, Math.PI - iMin - 0.005) : null;
+  const ref = await aimEarth(best.st, MOON, goal, iT, best.dv, (f) => onProgress && onProgress(0.3 + 0.7 * f), perf, base);
+  if (!ref) return null;
+  const node = { t: best.st.t, dv: ref.dv, body: MOON, label: 'Return to Earth', earthPe: ref.d - EARTH.R, inc: ref.inc };
+  if (ref.energy != null) node.eTarget = ref.energy;
+  return node;
 }
 
 // Mid-course correction: the cheapest small burn that puts the closest approach to `target` at `targetAlt`.
 // Tries a few burn times (now, and later in a long coast, where sideways corrections are cheaper).
-export async function planCorrection(ship, target, targetAlt, onProgress) {
+export async function planCorrection(ship, target, targetAlt, onProgress, opts = {}) {
   const goal = (target === MOON ? MOON.R : EARTH.R) + targetAlt;
   const now = predict(ship.r, ship.v, ship.t, { maxT: 7 * 86400, maxSteps: 3000, oneRev: false, maxStep: 1800, earthStop: -EARTH.R * 0.9, moonStop: false });
+  if (target === EARTH && opts.iMin) {
+    // also tilt the arrival orbit to pass over the home latitude (keeping whatever tilt already does)
+    const h = new THREE.Vector3(now.earthPe.hx, now.earthPe.hy, now.earthPe.hz);
+    const inc = Math.acos(clamp(h.y / Math.max(1, h.length()), -1, 1));
+    const iT = clamp(inc, opts.iMin + 0.005, Math.PI - opts.iMin - 0.005);
+    const tArr = now.earthPe.t - ship.t;
+    const leads = [120, 3 * 3600, 8 * 3600, 16 * 3600, 30 * 3600].filter((l) => l === 120 || l < tArr * 0.6);
+    let best = null;
+    for (let i = 0; i < leads.length; i++) {
+      const st = propagate(ship.r, ship.v, ship.t, leads[i]);
+      moonPos(st.t, _m);
+      const frame = st.r.distanceTo(_m) < MOON.soi ? MOON : EARTH;
+      const r = await aimEarth(st, frame, goal, iT, new THREE.Vector3(), (f) => onProgress && onProgress((i + f) / leads.length));
+      if (r && r.dv.length() > 0.05 && (!best || r.dv.length() < best.dv.length() * 0.6)) best = { t: st.t, dv: r.dv, body: frame, label: 'Course correction (Earth)', earthPe: r.d - EARTH.R, inc: r.inc };
+    }
+    return best;
+  }
   const tArr = (target === MOON ? now.closeMoon.t : now.earthPe.t) - ship.t;
   const leads = [120, 3 * 3600, 8 * 3600, 16 * 3600, 30 * 3600].filter((l) => l === 120 || l < tArr * 0.6);
   let best = null;
@@ -403,7 +583,19 @@ function solve3(M, g) {
 export function planCapture(ship, targetAlt) {
   const rs = relState(ship, MOON);
   const el = elements(rs.r, rs.v, MOON.mu);
-  const dtTo = isFinite(el.tPe) && el.tPe > 0 ? el.tPe : 60;
+  let dtTo = isFinite(el.tPe) && el.tPe > 0 ? el.tPe : 60;
+  // far out, Earth's pull makes the two-body periapsis time drift by minutes: find the real closest approach
+  if (dtTo > 600) {
+    const pr = predict(ship.r, ship.v, ship.t, { maxT: dtTo * 1.5 + 3600, maxSteps: 3000, oneRev: false, maxStep: 600, earthStop: -EARTH.R * 0.9, moonStop: false });
+    if (pr.closeMoon.r) dtTo = pr.closeMoon.t - ship.t;
+    const radial = (st) => { moonPos(st.t, _m); moonVel(st.t, _mv); return st.r.clone().sub(_m).dot(st.v.clone().sub(_mv)); };
+    const a = Math.max(1, dtTo - 1200), base = propagate(ship.r, ship.v, ship.t, a);
+    if (radial(base) < 0 && radial(propagate(base.r, base.v, base.t, 2400)) > 0) {
+      let lo = 0, hi = 2400;
+      for (let k = 0; k < 24; k++) { const mid = (lo + hi) / 2; if (radial(propagate(base.r, base.v, base.t, mid)) < 0) lo = mid; else hi = mid; }
+      dtTo = a + (lo + hi) / 2;
+    }
+  }
   const st = propagate(ship.r, ship.v, ship.t, dtTo);
   moonPos(st.t, _m); moonVel(st.t, _mv);
   const r = st.r.clone().sub(_m), v = st.v.clone().sub(_mv);

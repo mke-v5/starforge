@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { EARTH, MOON, G0, clamp, smoothstep, D2R, fmtTime, gcDist, gcBearing } from '../core/geo.js';
-import { elements, relState, burnTime, planCircularize, propagate, engineClass, ENTRY_GLIDE, glideRange, coastGround } from './orbit.js';
+import { elements, relState, burnTime, planCircularize, propagate, engineClass, ENTRY_GLIDE, glideRange, coastGround, predict, planReturn, planCorrection, planDeorbitTo } from './orbit.js';
 import { moonPos, moonVel } from '../core/astro.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
@@ -372,8 +372,11 @@ export function nodeExec(node) {
     const B = basisNow(ship);
     return B.pro.multiplyScalar(comp.x).addScaledVector(B.nor, comp.y).addScaledVector(B.rad, comp.z).normalize();
   };
+  let wake = node.t - 120;
   return {
     name: 'Burn', node,
+    // time warp runs up to just before the burn starts
+    get wakeAt() { return started ? null : wake; },
     railsDir: (ship, C) => ({ dir: dirNow(ship), axis: C.thrustAxis(ship.craft, ship.env) }),
     update(ship, dt, C) {
       const craft = ship.craft;
@@ -399,6 +402,7 @@ export function nodeExec(node) {
       const axis = firing ? ship.thrustB.clone().normalize() : C.thrustAxis(craft, ship.env);
       const bt = burnTime(ship, left);
       const tStart = node.t - bt / 2;
+      wake = tStart - 45;
       if (!started && ship.t > node.t + Math.max(30, bt * 0.3)) { C.node = null; return { done: true, fail: true, throttle: 0, msg: 'Missed the burn window — plan it again in the map' }; }
       const dir = dirNow(ship);
       const fwd = axis.clone().applyQuaternion(ship.q);
@@ -748,6 +752,80 @@ export function coastToAp(alt = 140000) {
   return ap;
 }
 
+// Plan a burn when this step starts (planFn may be async) and fly it. An optional step that finds nothing to
+// do (already on course) just moves on.
+export function planBurnAp(name, planFn, optional = false) {
+  let state = 'idle', node = null, exec = null;
+  const ap = {
+    name, cancelOnStick: true,
+    // while planning, keep time warp off (the autopilot only runs off rails)
+    get wakeAt() { return exec ? exec.wakeAt : state === 'planning' ? -1 : null; },
+    get railsDir() { return exec ? exec.railsDir : undefined; },
+    update(ship, dt, C) {
+      if (!exec) {
+        if (state === 'idle') {
+          state = 'planning';
+          Promise.resolve().then(() => planFn(ship)).then((n) => { node = n; state = 'ready'; }, (e) => { console.warn(e); node = null; state = 'ready'; });
+        }
+        if (state === 'planning') return { throttle: 0, status: 'planning…' };
+        if (!node) return optional ? { done: true } : { done: true, fail: true, msg: `${name}: no solution found from here` };
+        C.node = node;
+        exec = nodeExec(node);
+      }
+      return exec.update(ship, dt, C);
+    },
+  };
+  return ap;
+}
+
+// Coast (time warp allowed) until `untilFn(ship)` is true; wakeFn(ship) estimates when that will be.
+export function waitAp(name, untilFn, wakeFn) {
+  let wake = null;
+  return {
+    name, cancelOnStick: true,
+    get wakeAt() { return wake; },
+    railsDir: (ship) => ({ dir: ship.env.vAir.clone().normalize(), axis: NOSE }),
+    update(ship, dt, C) {
+      if (untilFn(ship)) return { done: true };
+      if (wake == null || ship.t > wake) wake = Math.max(ship.t + 1, wakeFn(ship) ?? ship.t + 600);
+      return { dir: ship.env.vAir.clone().normalize(), axis: NOSE, up: ship.env.up.clone(), throttle: 0, status: `${fmtTime(Math.max(0, wake - ship.t))}` };
+    },
+  };
+}
+
+// The whole way home from the Moon (or from a return trajectory) to a runway: take off if landed, leave lunar
+// orbit lined up for the airport (orbit tilted at least iMin), correct course on the way, brake into low Earth
+// orbit, deorbit at the right moment, fly the reentry and land. o = { A, rw, airport, name, iMin, terrain }.
+export function flyHomeAp(ship, o) {
+  const { A, rw, name, iMin } = o;
+  let deorbit = null, tFinal = null;
+  const P7 = { maxT: 7 * 86400, maxSteps: 3000, oneRev: false, maxStep: 1800, earthStop: -EARTH.R * 0.9, moonStop: false };
+  const steps = [];
+  if (ship.env.body === MOON) {
+    const rs = relState(ship, MOON), el = elements(rs.r, rs.v, MOON.mu);
+    if (ship.env.agl < 50 || !(el.pe - MOON.R > 10000)) steps.push(() => ascentAp());
+    steps.push(() => planBurnAp('Leave the Moon', (s) => planReturn(s, 250000, null, { iMin })));
+    steps.push(() => waitAp('Leaving the Moon', (s) => s.env.body === EARTH, (s) => { const p = predict(s.r, s.v, s.t, P7); return p.soiOut ? p.soiOut + 60 : s.t + 3600; }));
+  }
+  const eEl = ship.env.body === EARTH ? elements(ship.r, ship.v, EARTH.mu) : null;
+  const transit = !eEl || eEl.e >= 1 || eEl.ap - EARTH.R > 5e6;
+  if (transit) {
+  steps.push(() => planBurnAp('Course correction', (s) => planCorrection(s, EARTH, 250000, null, { iMin }), true));
+  steps.push(() => waitAp('Coast to Earth', (s) => tFinal !== null && s.t >= tFinal - 1, (s) => { if (tFinal === null) tFinal = predict(s.r, s.v, s.t, P7).earthPe.t - 8 * 3600; return tFinal; }));
+  steps.push(() => planBurnAp('Final correction', (s) => planCorrection(s, EARTH, 250000, null, { iMin }), true));
+  steps.push(() => planBurnAp('Brake into orbit', (s) => planCircularize(s, false)));
+  }
+  steps.push(() => planBurnAp(`Deorbit to ${name}`, async (s) => {
+    deorbit = await planDeorbitTo(s, rw.latC, rw.lonC, name);
+    if (deorbit) { deorbit.runway = rw; deorbit.airport = o.airport; }
+    return deorbit;
+  }));
+  steps.push(() => coastToAp());
+  steps.push(() => reentryAp(deorbit && deorbit.target, { then: `lining up for ${name}` }));
+  steps.push(() => landRunwayAp(A, rw, name, o.terrain));
+  return sequenceAp(`Home to ${name}`, steps);
+}
+
 // Run autopilots one after another. Each step is a factory (ship, C) => autopilot, built when it starts.
 // A step that ends with { fail: true } stops the whole sequence.
 export function sequenceAp(name, steps) {
@@ -780,7 +858,7 @@ export function sequenceAp(name, steps) {
 // Reentry from orbit or a lunar return, Shuttle style: belly first at a high angle of attack, steering the lift
 // up or down with the bank angle so the craft neither skips back out nor dives too deep; levels the wings and
 // hands back control once it is down to about Mach 3.
-export function reentryAp(target = null) {
+export function reentryAp(target = null, opts = {}) {
   let bank = 0, liftAcc = 0, side = 1, rangeT = -1e9, ballistic = 0;
   return {
     name: 'Reentry',
@@ -795,7 +873,7 @@ export function reentryAp(target = null) {
         // hand over in a shallow glide, wings level, so the fly-by-wire keeps it there
         C.gammaHold = -0.03; C.bankHold = 0;
         if (C.sas !== 'hold' && C.sas !== 'off') C.sas = 'hold';
-        return { done: true, throttle: 0, msg: 'Reentry complete — you have control (AUTO → Land at… flies you to a runway)' };
+        return { done: true, throttle: 0, msg: opts.then ? `Reentry complete — ${opts.then}` : 'Reentry complete — you have control (AUTO → Land at… flies you to a runway)' };
       }
       const vh = vS.clone().normalize();
       const r = ship.r.length();
@@ -856,10 +934,29 @@ export function reentryAp(target = null) {
 // (lift thrusters for the first few hundred metres, then the main engine).
 export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
   let phase = 'init', plane = false, circ = null, hasMain = false, hasLift = false, hasJets = false, mainOn = false, hybrid = false, wasPlane = false;
+  let sub = null;    // the circularization burn, flown as part of the ascent
+  const orbitMsg = (ship) => {
+    const b = ship.env.body, rs = relState(ship, b), el = elements(rs.r, rs.v, b.mu);
+    return `Orbit reached: ${Math.round((el.ap - b.R) / 1000)} × ${Math.round((el.pe - b.R) / 1000)} km`;
+  };
+  const circularize = (ship, C) => {
+    circ = planCircularize(ship, true);
+    if (!circ) return false;
+    C.node = circ; sub = nodeExec(circ);
+    return true;
+  };
   return {
     name: 'Ascent',
     cancelOnStick: true,
+    get wakeAt() { return sub ? sub.wakeAt : null; },
+    get railsDir() { return sub ? sub.railsDir : undefined; },
     update(ship, dt, C) {
+      if (sub) {
+        const o = sub.update(ship, dt, C);
+        if (o && o.done) return o.fail ? o : { done: true, throttle: 0, msg: orbitMsg(ship) };
+        if (o) o.status = sub.node && !o.throttle ? 'coasting to apoapsis' : 'circularizing';
+        return o;
+      }
       const craft = ship.craft, E = ship.env, body = E.body;
       const moon = body === MOON;
       const tAlt = targetAlt ?? (moon ? 40000 : 160000);
@@ -885,8 +982,7 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
       const axis = C.thrustAxis(craft, E);
       if (phase === 'coast') {
         if (E.h > EARTH.atmoTop + 1000) {
-          circ = planCircularize(ship, true);
-          if (circ) { C.node = circ; C.engage(nodeExec(circ)); return { throttle: 0, dir: ship.v.clone().normalize() }; }
+          if (circularize(ship, C)) return { throttle: 0, dir: ship.v.clone().normalize() };
           return { done: true, msg: 'Coasting — plan circularization in the map' };
         }
         return { dir: C.refVel(ship).normalize(), throttle: apAlt < tAlt - 1000 ? 0.3 : 0 };
@@ -896,6 +992,12 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
       let thr = 1;
       if (!plane) {
         if (peAlt > safePe) return { done: true, throttle: 0, msg: `Orbit reached: ${Math.round(apAlt / 1000)} × ${Math.round(peAlt / 1000)} km` };
+        // once the high point reaches the target (and the air is too thin to matter), coast up to it and
+        // circularize there instead of burning on: powerful engines would otherwise fling the apoapsis far out
+        const coastOk = moon ? mainOn !== false && E.agl > 3000 : E.h > 100000;
+        if (coastOk && apAlt > tAlt - 500) {
+          if (circularize(ship, C)) return { throttle: 0, dir: rs.v.clone().normalize(), axis, status: 'coasting to apoapsis' };
+        }
         // engines: on the Moon, hop up on lift thrusters, then switch to the main engine for the climb to orbit
         let engines;
         if (moon && hasLift && hasMain) {
@@ -920,6 +1022,7 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         else if (h < 12000) pitch = Math.max(pitch, 90 - (h - 1500) / 10500 * 35);
         const dir = up.clone().multiplyScalar(Math.sin(pitch * D2R)).addScaledVector(hdg, Math.cos(pitch * D2R)).normalize();
         if (E.q > 35000) thr = 0.7;
+        if (moon) thr = Math.min(thr, (2.5 * G0) / aT);              // a gentler ride on very powerful landers
         const vCirc = Math.sqrt(body.mu / r);
         if (vh > vCirc * 0.95) thr = Math.min(thr, clamp((safePe + 3000 - peAlt) / (moon ? 15000 : 60000), 0.06, 1));
         // roll reference: -heading projected off the thrust axis keeps the cockpit facing up once pitched over

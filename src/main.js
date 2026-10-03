@@ -1,230 +1,825 @@
+// Starforge — game orchestration: screens, flight loop, camera, events.
 import * as THREE from 'three';
-import { R, llh, toLatLon, frameAt } from './geo.js';
-import { TileLoader } from './tiles.js';
-import { Globe } from './globe.js';
+import { EARTH, MOON, D2R, R2D, clamp, smoothstep, llh, enu, toLLH, gcDist } from './core/geo.js';
+import { Ephemeris, nowSimTime, gravity, moonPos, moonVel } from './core/astro.js';
+import { loadSettings, load, save } from './core/store.js';
+import { Progress, MILESTONES } from './core/progress.js';
+import { World } from './world/world.js';
+import { Craft } from './ship/craft.js';
+import { Ship } from './ship/physics.js';
+import { Controller, landAp, ascentAp, nodeExec } from './ship/control.js';
+import { PRESETS } from './ship/designs.js';
+import { PART } from './ship/parts.js';
+import { deltaV, elements, relState, predict, engineClass } from './ship/orbit.js';
+import { Effects } from './fx/effects.js';
+import { Audio } from './fx/audio.js';
+import { Input } from './ui/input.js';
+import { Hud, fmtWarp } from './ui/hud.js';
+import { LaunchScreen } from './ui/launch.js';
+import { MapView } from './ui/mapview.js';
+import { HELP_HTML } from './ui/help.js';
 
 const $ = (id) => document.getElementById(id);
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const WARPS = [1, 2, 4, 10, 50, 100, 1000, 10000, 100000];
+const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
 
-/* ---------- renderer ---------- */
-const canvas = $('gl');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(65, 1, 0.001, 2e6);
-const frustum = new THREE.Frustum();
-const _m = new THREE.Matrix4();
-const _pm = new THREE.Matrix4();
-
-function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.fov = w / h < 0.8 ? 80 : 65;
-  camera.updateProjectionMatrix();
-}
-window.addEventListener('resize', resize);
-resize();
-
-/* ---------- stars and atmosphere ---------- */
-const starMat = new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0, depthWrite: false, depthTest: false });
-{
-  const N = 3500, p = new Float32Array(N * 3), c = new Float32Array(N * 3);
-  for (let i = 0; i < N; i++) {
-    const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
-    p[i * 3] = Math.sin(ph) * Math.cos(th) * 1e6; p[i * 3 + 1] = Math.cos(ph) * 1e6; p[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * 1e6;
-    const b = 0.35 + Math.random() * 0.65;
-    c[i * 3] = b; c[i * 3 + 1] = b * 0.92; c[i * 3 + 2] = b * (Math.random() < 0.3 ? 0.8 : 1);
+class Game {
+  constructor() {
+    this.settings = loadSettings();
+    this.canvas = $('gl');
+    const mobile = matchMedia('(pointer:coarse)').matches;
+    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: !mobile, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.settings.quality === 'high' ? 2 : mobile ? 1.5 : 1.75));
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.NoToneMapping;
+    this.renderer.autoClear = true;
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(65, 1, 0.3, 1e10);
+    this.eph = new Ephemeris().update(nowSimTime());
+    this.world = new World(this.scene, this.renderer, this.settings);
+    this.world.buildings.enabled = this.settings.buildings !== '0';
+    this.effects = new Effects(this.scene);
+    this.audio = new Audio();
+    this.audio.setOn(this.settings.sound !== '0');
+    this.input = new Input(this.canvas);
+    this.input.invertPitch = this.settings.invert === '1';
+    this.progress = new Progress((m) => { this.hud && this.hud.toast(`★ ${m.name}`, 'big'); this.audio.chime(); });
+    this.designs = load('designs', []);
+    const lastName = load('lastDesign', 'Kestrel');
+    this.design = this.shipList().find((d) => d.name === lastName) || PRESETS[0].make();
+    this.lastSite = load('lastSite', null);
+    this.state = 'boot';
+    this.ship = null;
+    this.paused = false;
+    this.camMode = 'chase';
+    this.cam = { yaw: 0, pitch: 0.18, dist: 30, smooth: new THREE.Vector3(), init: false };
+    this.camI = new THREE.Vector3(EARTH.R * 3, EARTH.R * 0.6, EARTH.R * 2.5);
+    this.engGroup = 'all';
+    this.lights = false;
+    this.flightTime = 0;
+    this.titleOrbit = 0;
+    window.addEventListener('resize', () => this.resize());
+    this.resize();
+    this.hud = new Hud(this);
+    this.launchScreen = new LaunchScreen(this);
+    this.mapView = new MapView(this);
+    this.bindUi();
+    this.last = performance.now();
+    requestAnimationFrame((t) => this.frame(t));
+    this.bootSequence();
+    // first user gesture unlocks audio
+    const unlock = () => { this.audio.init(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+    window.addEventListener('pointerdown', unlock); window.addEventListener('keydown', unlock);
+    if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => {});
+    window.__sf = this;
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
-  const stars = new THREE.Points(g, starMat);
-  stars.frustumCulled = false; stars.renderOrder = -10;
-  scene.add(stars);
-}
-const atmoMat = new THREE.ShaderMaterial({
-  uniforms: { uF: { value: 0 } },
-  vertexShader: `#include <common>
-#include <logdepthbuf_pars_vertex>
-varying vec3 vN;
-void main(){ vN = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-#include <logdepthbuf_vertex>
-}`,
-  fragmentShader: `#include <common>
-#include <logdepthbuf_pars_fragment>
-varying vec3 vN; uniform float uF;
-void main(){
-#include <logdepthbuf_fragment>
-float i = pow(clamp(-vN.z * 5.0, 0.0, 1.0), 1.4);
-gl_FragColor = vec4(vec3(0.30, 0.55, 1.0) * i * uF, i * uF);
-}`,
-  side: THREE.BackSide, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
-});
-const atmo = new THREE.Mesh(new THREE.SphereGeometry(R + 95, 96, 48), atmoMat);
-atmo.frustumCulled = false; atmo.renderOrder = 5;
-scene.add(atmo);
 
-/* ---------- world ---------- */
-const loader = new TileLoader();
-const globe = new Globe(scene, loader);
-
-/* ---------- flight state ---------- */
-const pos = new THREE.Vector3();
-let heading = 0, pitch = -0.5, thr = 0.03, speed = 0;
-const up = new THREE.Vector3(), east = new THREE.Vector3(), north = new THREE.Vector3();
-const fwd = new THREE.Vector3();
-const zero = new THREE.Vector3();
-
-function forwardVec(out) {
-  frameAt(pos, up, east, north);
-  const cp = Math.cos(pitch);
-  return out.set(0, 0, 0).addScaledVector(north, Math.cos(heading) * cp).addScaledVector(east, Math.sin(heading) * cp).addScaledVector(up, Math.sin(pitch));
-}
-
-function teleport(lat, lon, altKm, hd = 0, pt = -0.5) {
-  const tgt = llh(lat, lon, 0, new THREE.Vector3());
-  frameAt(tgt, up, east, north);
-  const back = altKm / Math.tan(-pt || 0.5);
-  pos.copy(tgt).addScaledVector(north, -Math.cos(hd) * back).addScaledVector(east, -Math.sin(hd) * back).addScaledVector(up, altKm);
-  pos.setLength(R + altKm);
-  heading = hd; pitch = pt; speed = 0;
-  globe.frame = Math.floor(globe.frame / 10) * 10 + 9;   // force an immediate chain request next frame
-}
-teleport(38.2494, -122.04, 6000, 0, -1.2);                  // start in orbit above Northern California
-
-/* ---------- input ---------- */
-const stick = { x: 0, y: 0 };
-const keys = {};
-const stickEl = $('stick'), knob = $('knob');
-let sid = null;
-function sMove(e) {
-  const r = stickEl.getBoundingClientRect();
-  let dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2), dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
-  const m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; }
-  stick.x = dx; stick.y = dy; knob.style.transform = `translate(${dx * 40}px,${dy * 40}px)`;
-}
-stickEl.addEventListener('pointerdown', (e) => { sid = e.pointerId; stickEl.setPointerCapture(sid); sMove(e); });
-stickEl.addEventListener('pointermove', (e) => { if (e.pointerId === sid) sMove(e); });
-const sEnd = (e) => { if (e.pointerId === sid) { sid = null; stick.x = 0; stick.y = 0; knob.style.transform = 'translate(0,0)'; } };
-stickEl.addEventListener('pointerup', sEnd); stickEl.addEventListener('pointercancel', sEnd);
-
-const thrEl = $('thr'); let tid = null;
-function tSet(e) { const r = thrEl.getBoundingClientRect(); thr = clamp(1 - (e.clientY - r.top) / r.height, 0, 1); if (thr < 0.04) thr = 0; }
-thrEl.addEventListener('pointerdown', (e) => { tid = e.pointerId; thrEl.setPointerCapture(tid); tSet(e); });
-thrEl.addEventListener('pointermove', (e) => { if (e.pointerId === tid) tSet(e); });
-thrEl.addEventListener('pointerup', (e) => { if (e.pointerId === tid) tid = null; });
-$('stop').addEventListener('click', () => { thr = 0; });
-$('level').addEventListener('click', () => { pitch = -0.05; });
-$('orbit').addEventListener('click', () => { const ll = toLatLon(pos); teleport(ll.lat, ll.lon, 9000, heading, -1.45); });
-$('down').addEventListener('click', () => { const ll = toLatLon(pos); teleport(ll.lat, ll.lon, 3, heading, -0.1); });
-
-window.addEventListener('keydown', (e) => {
-  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
-  const k = e.key.toLowerCase(); keys[k] = true;
-  if (k === ' ') { thr = 0; e.preventDefault(); }
-  if (k.startsWith('arrow')) e.preventDefault();
-});
-window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-
-/* ---------- city search ---------- */
-let cities = [];
-fetch('./data/cities.json').then((r) => r.json()).then((rows) => { cities = rows.map((r) => ({ n: r[0], c: r[1], lat: r[2], lon: r[3], p: r[4], l: r[0].toLowerCase() })); });
-const qEl = $('q'), resEl = $('results');
-function fmtPop(p) { return p >= 1e6 ? (p / 1e6).toFixed(1) + 'M' : Math.round(p / 1000) + 'k'; }
-function search(q) {
-  q = q.trim().toLowerCase(); if (!q) return [];
-  const a = [], b = [];
-  for (const c of cities) {
-    if (c.l.startsWith(q)) a.push(c); else if (c.l.includes(q)) b.push(c);
-    if (a.length >= 8) break;
+  resize() {
+    const w = innerWidth, h = innerHeight;
+    this.renderer.setSize(w, h, false);
+    this.camera.aspect = w / h;
+    this.camera.fov = w / h < 0.8 ? 78 : 62;
+    this.camera.updateProjectionMatrix();
   }
-  return a.concat(b).slice(0, 8);
-}
-qEl.addEventListener('input', () => {
-  const list = search(qEl.value);
-  resEl.innerHTML = '';
-  list.forEach((c) => {
-    const b = document.createElement('button');
-    b.innerHTML = `<span>${c.n}, ${c.c}</span><span class="d">${fmtPop(c.p)}</span>`;
-    b.addEventListener('click', () => { teleport(c.lat, c.lon, 6, 0, -0.5); resEl.innerHTML = ''; qEl.value = c.n; qEl.blur(); });
-    resEl.appendChild(b);
-  });
-  resEl.hidden = list.length === 0;
-});
-document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#searchbox')) resEl.hidden = true; });
 
-/* ---------- HUD ---------- */
-function fmtAlt(h) { return h < 1 ? Math.round(h * 1000) + ' m' : h < 100 ? h.toFixed(1) + ' km' : Math.round(h).toLocaleString('en-US') + ' km'; }
-function fmtSpd(v) { return v < 1 ? Math.round(v * 1000) + ' m/s' : v < 100 ? v.toFixed(1) + ' km/s' : Math.round(v).toLocaleString('en-US') + ' km/s'; }
-let hudT = 0, fps = 60;
+  // ---------------- screens ----------------
+  show(id) {
+    for (const s of ['boot', 'title', 'launch', 'hangar', 'hud', 'mapui']) $(s).classList.toggle('show', s === id);
+    this.state = id;
+  }
+  modal(id, on = true) { $(id).classList.toggle('show', on); }
 
-/* ---------- loop ---------- */
-let last = performance.now();
-const skyDay = new THREE.Color(0x6aa0e8), black = new THREE.Color(0x000000);
-function frame(now) {
-  requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000); last = now;
-  fps += (1 / Math.max(dt, 1e-3) - fps) * 0.1;
+  async bootSequence() {
+    this.show('boot');
+    const fill = $('bootfill'), msg = $('bootmsg');
+    const t0 = performance.now();
+    while (performance.now() - t0 < 6000) {
+      const p = this.world.earth.stats.drawn;
+      fill.style.width = Math.min(95, 10 + p * 12) + '%';
+      msg.textContent = this.world.airports.ready ? 'Streaming the planet…' : 'Loading airports…';
+      if (p >= 6 && this.world.airports.ready) break;
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    fill.style.width = '100%';
+    this.toTitle();
+  }
 
-  const kx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
-  const ky = (keys.w || keys.arrowup ? 1 : 0) - (keys.s || keys.arrowdown ? 1 : 0);
-  if (keys.r) thr = clamp(thr + dt * 0.5, 0, 1);
-  if (keys.f) thr = clamp(thr - dt * 0.5, 0, 1);
-  const sx = Math.abs(stick.x) < 0.08 ? 0 : stick.x, sy = Math.abs(stick.y) < 0.08 ? 0 : stick.y;
-  const yawIn = clamp(sx * Math.abs(sx) + kx, -1, 1);
-  const pitchIn = clamp(-sy * Math.abs(sy) + ky, -1, 1);
-  heading += yawIn * 0.9 * dt;
-  pitch = clamp(pitch + pitchIn * 0.9 * dt, -1.52, 1.52);
+  toTitle() {
+    this.endFlight();
+    this.show('title');
+    $('t-continue').hidden = !this.lastSite;
+    if (this.lastSite) $('t-continue').textContent = `Fly again · ${this.lastSite.label || 'last site'}`;
+  }
 
-  const ll0 = toLatLon(pos);
-  const ground0 = globe.groundHeight(ll0.lat, ll0.lon);
-  const alt = Math.max(0.001, ll0.h - ground0);
-  speed = (0.004 + alt) * thr * thr * 1.6;          // km/s, scales with height so you can cross the planet or hover over a street
+  bindUi() {
+    $('t-fly').onclick = () => { this.audio.click(); this.openLaunch(); };
+    $('t-continue').onclick = () => { this.audio.click(); if (this.lastSite) this.relaunch(this.lastSite); };
+    $('t-hangar').onclick = () => { this.audio.click(); this.openHangar(); };
+    $('t-settings').onclick = () => this.openSettings();
+    $('t-log').onclick = () => this.openLog();
+    $('t-help').onclick = () => this.openHelp();
+    for (const b of document.querySelectorAll('[data-back]')) b.onclick = () => { this.audio.click(); if (this.state === 'hangar' && this.builder && this.builder.onBack) this.builder.onBack(); this.toTitle(); };
+    for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => { b.closest('.modal').classList.remove('show'); };
+    $('h-menu').onclick = () => this.pause(true);
+    $('h-cam').onclick = () => this.cycleCam();
+    $('h-map').onclick = () => this.toggleMap();
+    $('h-wd').onclick = () => this.warpStep(-1);
+    $('h-wu').onclick = () => this.warpStep(1);
+    $('p-resume').onclick = () => this.pause(false);
+    $('p-restart').onclick = () => { this.pause(false); this.relaunch(this.site); };
+    $('p-hangar').onclick = () => { this.pause(false); this.openHangar(); };
+    $('p-site').onclick = () => { this.pause(false); this.endFlight(); this.openLaunch(); };
+    $('p-settings').onclick = () => this.openSettings();
+    $('p-help').onclick = () => this.openHelp();
+    $('p-title').onclick = () => { this.pause(false); this.toTitle(); };
+    $('c-restart').onclick = () => { this.modal('crash', false); this.relaunch(this.site); };
+    $('c-hangar').onclick = () => { this.modal('crash', false); this.openHangar(); };
+    $('c-title2').onclick = () => { this.modal('crash', false); this.toTitle(); };
+    // settings segments
+    for (const seg of document.querySelectorAll('.seg')) {
+      const key = seg.dataset.set;
+      for (const b of seg.children) b.onclick = () => {
+        this.settings[key] = b.dataset.v; save('settings', this.settings);
+        this.applySettings(); this.syncSettings();
+      };
+    }
+    this.input.bindTouch($('stick'), $('knob'), $('rudder'), $('rknob'), $('thr'), (v) => { this.controller && (this.controller.input.throttle = v); });
+  }
+  applySettings() {
+    this.settings.heatScale = +this.settings.heat;
+    this.audio.setOn(this.settings.sound !== '0');
+    this.input.invertPitch = this.settings.invert === '1';
+    this.world.buildings.enabled = this.settings.buildings !== '0';
+  }
+  syncSettings() { for (const seg of document.querySelectorAll('.seg')) for (const b of seg.children) b.classList.toggle('on', String(this.settings[seg.dataset.set]) === b.dataset.v); }
+  openSettings() { this.syncSettings(); this.modal('settings'); }
+  openHelp() { $('help-body').innerHTML = HELP_HTML; this.modal('help'); }
+  openLog() {
+    const el = $('lb-list'); el.innerHTML = '';
+    for (const m of MILESTONES) {
+      const d = document.createElement('div'); d.className = 'ach' + (this.progress.has(m.id) ? ' done' : '');
+      d.innerHTML = `<div class="ic">${this.progress.has(m.id) ? '★' : '·'}</div><div><div class="nm">${m.name}</div><div class="sub">${m.desc}</div></div>`;
+      el.appendChild(d);
+    }
+    this.modal('logbook');
+  }
 
-  forwardVec(fwd);
-  pos.addScaledVector(fwd, speed * dt);
-  // re-derive heading and pitch so the path follows a great circle
-  frameAt(pos, up, east, north);
-  pitch = Math.asin(clamp(fwd.dot(up), -1, 1));
-  heading = Math.atan2(fwd.dot(east), fwd.dot(north));
+  shipList() { return [...PRESETS.map((p) => p.make()), ...this.designs]; }
+  setDesign(d) { this.design = JSON.parse(JSON.stringify(d)); save('lastDesign', d.name); }
 
-  const ll = toLatLon(pos);
-  const ground = globe.groundHeight(ll.lat, ll.lon);
-  if (ll.h < ground + 0.008) pos.setLength(R + ground + 0.008);
+  openLaunch() { this.endFlight(); this.show('launch'); this.launchScreen.open(); }
+  async openHangar() {
+    this.endFlight();
+    if (!this.builder) {
+      const { Builder } = await import('./builder/builder.js');
+      this.builder = new Builder(this);
+    }
+    this.show('hangar');
+    this.builder.open(this.design);
+  }
 
-  forwardVec(fwd);
-  _m.lookAt(zero, fwd, up);
-  camera.quaternion.setFromRotationMatrix(_m);
-  camera.position.set(0, 0, 0);
-  camera.updateMatrixWorld(true);
-  _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  frustum.setFromProjectionMatrix(_pm);
+  // ---------------- flight lifecycle ----------------
+  launch(site) {
+    const label = site.airport ? `${site.airport.iata || site.airport.ident} ${site.type}` : site.name;
+    this.lastSite = { ...site, label, rwIdx: site.rw ? site.rw.idx : undefined, rw: undefined, airport: undefined };
+    save('lastSite', this.lastSite);
+    this.startFlight(site);
+  }
+  relaunch(site) {
+    if (!site) return this.openLaunch();
+    if (site.rwIdx !== undefined && !site.rw) {
+      const rw = this.world.airports.runways[site.rwIdx];
+      if (!rw) return this.openLaunch();
+      site = { ...site, rw, airport: rw.ap };
+    }
+    this.startFlight(site);
+  }
 
-  globe.update(pos, camera, frustum);
+  endFlight() {
+    if (this.ship) {
+      this.scene.remove(this.craft.group);
+      this.craft.dispose();
+      this.ship = null; this.craft = null;
+    }
+    this.effects.clearWorld();
+    this.world.setHangar(null);
+    if (this.spot) { this.scene.remove(this.spot); this.spot = null; }
+    this.mapOpen = false;
+    this.mapView.close();
+    this.paused = false;
+  }
 
-  const h = Math.max(0, ll.h - ground);
-  atmo.position.copy(pos).negate();
-  atmoMat.uniforms.uF.value = clamp((h - 25) / 250, 0, 1);
-  starMat.opacity = clamp((h - 30) / 120, 0, 1);
-  renderer.setClearColor(skyDay.clone().lerp(black, clamp(h / 110, 0, 1)));
-  renderer.render(scene, camera);
+  async startFlight(site) {
+    this.endFlight();
+    this.site = site;
+    this.applySettings();
+    const craft = new Craft(this.design);
+    this.craft = craft;
+    this.scene.add(craft.group);
+    this.eph.update(this.simStart(site));
+    const ship = new Ship(craft, this.world, this.eph, this.settings);
+    this.ship = ship;
+    const C = this.controller = new Controller(this.settings);
+    this.effects.attach(craft);
+    this.setupLights(craft);
+    this.engGroup = 'all';
+    this.applyEngGroup();
+    this.flightTime = 0;
+    this.prevContacts = 0;
+    this.cam.init = false;
+    this.camMode = 'chase';
+    this.cam.dist = Math.max(12, craft.size * 1.5 + 8);
+    this.cam.yaw = 0; this.cam.pitch = craft.vertical ? 0.05 : 0.16;
+    this.progress.startFlight({ airport: site.airport, custom: !PRESETS.some((p) => p.make().name === this.design.name) });
+    const A = this.world.airports;
+    let body = EARTH, lat, lon, hdg = 0, needGround = true, h;
+    const vert = craft.vertical;
+    const hComFor = (ground) => vert ? ground + (craft.box.max.z - craft.com.z) + 0.15 : ground + (craft.com.y - craft.box.min.y) + 0.15;
+    if (site.type === 'runway' || site.type === 'hangar' || site.type === 'pad') {
+      const rw = site.rw;
+      const fromLe = site.fromLe;
+      const hang = A.hangarFor(rw, fromLe);
+      this.world.setHangar(hang);
+      if (site.type === 'runway') {
+        const along = fromLe ? -rw.len / 2 + Math.max(40, craft.size) : rw.len / 2 - Math.max(40, craft.size);
+        const p = this.rwPoint(rw, along, 0);
+        lat = p.lat; lon = p.lon; hdg = fromLe ? rw.brg : rw.brg + Math.PI;
+        h = A.elevAt(rw, along);
+      } else if (site.type === 'hangar') {
+        // inside the hangar, nose toward the runway
+        const toRunway = hang.heading - Math.PI / 2;
+        const p = this.offsetLL(hang.lat, hang.lon, toRunway, -60 + 30 - craft.size * 0.35);
+        lat = p.lat; lon = p.lon; hdg = toRunway;
+        h = hang.elev;
+      } else {
+        const toRunway = hang.heading - Math.PI / 2;
+        const p = this.offsetLL(hang.lat, hang.lon, toRunway, 40);
+        lat = p.lat; lon = p.lon; hdg = hang.heading;
+        h = hang.elev;
+      }
+    } else if (site.type === 'moon') {
+      body = MOON; lat = site.lat; lon = site.lon; hdg = 0;
+    } else if (site.type === 'air') {
+      lat = site.lat; lon = site.lon; hdg = site.hdg * D2R; needGround = false;
+    } else needGround = false;
+    // stream terrain at the spawn point before physics starts
+    this.show('boot');
+    $('bootmsg').textContent = body === MOON ? 'Landing on the Moon…' : 'Preparing the ground…';
+    if (site.type === 'orbit' || site.type === 'lunarOrbit') $('bootmsg').textContent = 'Reaching orbit…';
+    const camAt = body === MOON ? null : llh(lat || 0, lon || 0, 400, EARTH.R, new THREE.Vector3());
+    this.spawning = true;
+    if (needGround) {
+      const t0 = performance.now();
+      while (performance.now() - t0 < 20000) {
+        // aim the world streaming at the spawn point
+        const pF = llh(lat, lon, (h || 0) + 60, body.R, new THREE.Vector3());
+        const pI = this.eph.toI(body, pF, new THREE.Vector3());
+        this.camI.copy(pI);
+        this.camera.position.set(0, 0, 0);
+        this.camera.lookAt(pI.clone().normalize().negate().add(new THREE.Vector3(0.01, 0, 0)));
+        this.world.update(this.camI, this.camera, this.eph, 0.016);
+        const minZ = body === EARTH ? 13 : 6;
+        const ready = this.world.terrainReady(body, lat, lon, minZ);
+        $('bootfill').style.width = Math.min(95, 10 + (performance.now() - t0) / 120) + '%';
+        if (ready) break;
+        await new Promise((r) => setTimeout(r, 60));
+        if (this.ship !== ship) { this.spawning = false; return; }   // flight was cancelled
+      }
+    }
+    this.spawning = false;
+    if (this.ship !== ship) return;
+    const ground = needGround ? this.world.groundAt(body, lat, lon) : 0;
+    if (site.type === 'runway' || site.type === 'hangar' || site.type === 'pad' || site.type === 'moon') {
+      const gh = Math.max(ground, h !== undefined ? h - 0.25 : ground);
+      ship.placeAt(body, lat, lon, hComFor(gh), hdg, vert ? Math.PI / 2 : 0);
+      ship.ctl.gear = true;
+    } else if (site.type === 'air') {
+      ship.placeAt(EARTH, lat, lon, site.alt, hdg, 0);
+      ship.parked = null;
+      const up = ship.env.up || ship.r.clone().normalize();
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(ship.q);
+      ship.v.addScaledVector(fwd, site.speed);
+      ship.ctl.gear = false;
+      C.input.throttle = 0.7;
+    } else if (site.type === 'orbit') {
+      const r = EARTH.R + site.alt;
+      ship.r.set(r, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.eph.earthAngle + (-122 * D2R));
+      const vdir = new THREE.Vector3(0, 1, 0).cross(ship.r).normalize();
+      ship.v.copy(vdir).multiplyScalar(Math.sqrt(EARTH.mu / r));
+      this.orientTo(ship, vdir, ship.r.clone().normalize());
+      ship.parked = null; ship.ctl.gear = false;
+      C.setSas('prograde');
+    } else if (site.type === 'lunarOrbit') {
+      const r = MOON.R + site.alt;
+      const m = this.eph.moon, mv = this.eph.moonV;
+      const radial = m.clone().normalize().negate();
+      ship.r.copy(m).addScaledVector(radial, r);
+      const vdir = new THREE.Vector3().crossVectors(this.eph.mY, radial).normalize();
+      ship.v.copy(mv).addScaledVector(vdir, Math.sqrt(MOON.mu / r));
+      this.orientTo(ship, vdir, radial);
+      ship.parked = null; ship.ctl.gear = false;
+      C.setSas('prograde');
+    }
+    ship.updateEnv(ship.t);
+    this.cam.smooth.copy(ship.r);
+    this.show('hud');
+    $('h-info').hidden = false;
+    this.hud.toast(site.airport ? `${site.airport.name}` : site.name || '', '');
+    if (site.type === 'hangar') this.hud.toast('Throttle up gently to roll out of the hangar', '');
+    this.input.take();
+  }
 
-  hudT += dt;
-  if (hudT > 0.2) {
-    hudT = 0;
-    $('alt').textContent = fmtAlt(h);
-    $('spd').textContent = fmtSpd(speed);
-    $('pos').textContent = `${Math.abs(ll.lat).toFixed(3)}°${ll.lat >= 0 ? 'N' : 'S'}  ${Math.abs(ll.lon).toFixed(3)}°${ll.lon >= 0 ? 'E' : 'W'}`;
-    $('net').textContent = `tiles ${globe.stats.drawn} shown · ${loader.queued} loading · ${Math.round(fps)} fps`;
-    $('thrfill').style.height = (thr * 100).toFixed(0) + '%';
+  // choose a start time so the launch site has the requested lighting
+  simStart(site) {
+    const now = nowSimTime();
+    const tod = this.settings.tod || 'day';
+    if (tod === 'real') return now;
+    const moon = site.type === 'moon' || site.type === 'lunarOrbit';
+    let lat = site.lat, lon = site.lon;
+    if (site.rw) { lat = site.rw.latC; lon = site.rw.lonC; }
+    if (lat === undefined) { lat = 0; lon = moon ? 0 : -122; }
+    const body = moon ? MOON : EARTH;
+    const period = moon ? 29.53 * 86400 : 86400;
+    const eph = new Ephemeris();
+    const upF = llh(lat, lon, 0, 1, new THREE.Vector3()).normalize();
+    const elev = (t) => { eph.update(t); const up = eph.toI(body, upF.clone().multiplyScalar(body.R), new THREE.Vector3()).sub(eph.bodyCenter(body, new THREE.Vector3())).normalize(); return Math.asin(up.dot(eph.sun)) * R2D; };
+    const N = 192;
+    let best = now, bestScore = -1e9;
+    const samples = [];
+    for (let i = -N / 2; i <= N / 2; i++) { const t = now + (i / N) * period; samples.push([t, elev(t)]); }
+    const peak = Math.max(...samples.map((x) => x[1]));
+    for (let i = 1; i < samples.length; i++) {
+      const [t, e] = samples[i], [, ep] = samples[i - 1];
+      let score;
+      if (tod === 'day') score = -Math.abs(e - Math.min(peak - 8, 48)) - (e < ep ? 6 : 0);           // mid-morning
+      else if (tod === 'sunset') score = -Math.abs(e - 4) * 3 - (e > ep ? 20 : 0);                       // sun setting
+      else score = -e;                                                                                   // darkest
+      score -= Math.abs(t - now) / period * 2;
+      if (score > bestScore) { bestScore = score; best = t; }
+    }
+    return best;
+  }
+
+  orientTo(ship, fwd, up) {
+    const z = fwd.clone().negate();
+    const x = new THREE.Vector3().crossVectors(up, z).normalize();
+    const y = new THREE.Vector3().crossVectors(z, x);
+    ship.q.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+    ship.w.set(0, 0, 0);
+  }
+  rwPoint(rw, along, cross) {
+    const dE = along * rw.dx + cross * rw.dy, dN = along * rw.dy - cross * rw.dx;
+    return { lat: rw.latC + (dN / EARTH.R) * R2D, lon: rw.lonC + (dE / (EARTH.R * rw.cosC)) * R2D };
+  }
+  offsetLL(lat, lon, brg, d) {
+    const dN = Math.cos(brg) * d, dE = Math.sin(brg) * d;
+    return { lat: lat + (dN / EARTH.R) * R2D, lon: lon + (dE / (EARTH.R * Math.cos(lat * D2R))) * R2D };
+  }
+
+  setupLights(craft) {
+    const lamp = craft.parts.find((P) => P.def.light);
+    if (!lamp) return;
+    const s = new THREE.SpotLight(0xfff2dc, 0, 600, 0.45, 0.5, 1.2);
+    s.position.copy(lamp.com);
+    const t = new THREE.Object3D();
+    t.position.copy(lamp.com).add(new THREE.Vector3(0, -0.5, -10));
+    craft.group.add(s, t);
+    s.target = t;
+    this.spot = s;
+  }
+
+  // ---------------- actions ----------------
+  action(id) {
+    const ship = this.ship, C = this.controller;
+    if (!ship) return;
+    this.audio.click();
+    switch (id) {
+      case 'gear':
+        if (ship.ctl.gear && (ship.contacts > 0 || ship.parked) && this.craft.gears.some((P) => P.gear.contact)) { this.hud.toast('Gear locked — weight on wheels', 'bad'); break; }
+        ship.ctl.gear = !ship.ctl.gear; this.hud.toast(ship.ctl.gear ? 'Gear down' : 'Gear up'); break;
+      case 'brake': C.input.brake = !C.input.brake; break;
+      case 'rcs': ship.ctl.rcs = !ship.ctl.rcs; this.hud.toast(ship.ctl.rcs ? 'RCS on' : 'RCS off'); break;
+      case 'lights': this.lights = !this.lights; if (!this.spot) this.hud.toast(this.lights ? 'Nav lights on' : 'Lights off'); break;
+      case 'engines': {
+        const groups = this.availableGroups();
+        const i = groups.indexOf(this.engGroup);
+        this.engGroup = groups[(i + 1) % groups.length];
+        this.applyEngGroup();
+        this.hud.toast(`Engines: ${this.engGroup}`);
+        break;
+      }
+      case 'mode': { const m = ship.ctl.engineMode; ship.ctl.engineMode = m === 'auto' ? 'air' : m === 'air' ? 'rocket' : 'auto'; break; }
+      case 'auto': this.autopilotMenu(); break;
+      case 'info': $('h-info').hidden = !$('h-info').hidden; break;
+    }
+  }
+  engineClass(P) { return engineClass(P); }
+  availableGroups() {
+    const g = new Set(this.craft.engines.map((P) => this.engineClass(P)));
+    const out = ['all'];
+    for (const k of ['main', 'jets', 'lift']) if (g.has(k)) out.push(k);
+    if (out.length === 2) return ['all'];
+    return out;
+  }
+  applyEngGroup() {
+    for (const P of this.craft.parts) if (P.eng) P.eng.active = this.engGroup === 'all' || this.engineClass(P) === this.engGroup;
+  }
+  setSas(m) {
+    if (!this.controller) return;
+    this.audio.click();
+    this.controller.setSas(m);
+    if (this.controller.ap && this.controller.ap.name !== 'Burn') this.controller.cancelAp();
+  }
+  engage(ap) {
+    const C = this.controller;
+    C.engage(ap);
+    if (ap.name === 'Auto-land' || ap.name === 'Ascent') C.input.throttle = 0;
+    this.hud.toast(`Autopilot: ${ap.name}`);
+  }
+  autopilotMenu() {
+    const ship = this.ship, C = this.controller;
+    const opts = [];
+    if (C.ap) opts.push(['Stop autopilot', () => C.cancelAp()]);
+    if (ship.env.body === EARTH && ship.env.h < 120000) opts.push(['Ascend to orbit', () => this.engage(ascentAp())]);
+    opts.push(['Powered landing (hover down)', () => { const lift = this.availableGroups().includes('lift'); if (lift) { this.engGroup = 'lift'; this.applyEngGroup(); } this.engage(landAp()); }]);
+    if (ship.env.body === EARTH && ship.env.rho > 0.05) opts.push(['Cruise: hold altitude & heading', () => this.engage(cruiseAp(ship))]);
+    if (C.node) opts.push(['Fly the planned burn', () => this.engage(nodeExec(C.node))]);
+    opts.push(['Plan burns in the map…', () => this.toggleMap()]);
+    this.dialog('Autopilot', '', opts);
+  }
+  dialog(title, body, opts) {
+    $('d-title').textContent = title; $('d-body').innerHTML = body;
+    const el = $('d-btns'); el.innerHTML = ''; el.style.flexDirection = 'column';
+    for (const [label, fn] of opts) {
+      const b = document.createElement('button'); b.className = 'btn wide'; b.textContent = label;
+      b.onclick = () => { this.modal('dialog', false); fn(); };
+      el.appendChild(b);
+    }
+    const c = document.createElement('button'); c.className = 'btn ghost wide'; c.textContent = 'Cancel'; c.onclick = () => this.modal('dialog', false); el.appendChild(c);
+    this.modal('dialog');
+  }
+  pause(on) {
+    if (!this.ship) return;
+    this.paused = on;
+    this.modal('pause', on);
+  }
+  cycleCam() {
+    const modes = ['chase', 'cockpit', 'free'];
+    this.camMode = modes[(modes.indexOf(this.camMode) + 1) % modes.length];
+    this.hud.toast({ chase: 'Chase camera', cockpit: 'Cockpit view', free: 'Free camera (follows attitude)' }[this.camMode]);
+  }
+  toggleMap() {
+    if (!this.ship) return;
+    this.mapOpen = !this.mapOpen;
+    if (this.mapOpen) { this.show('mapui'); this.mapView.open(); }
+    else { this.mapView.close(); this.show('hud'); this.camera.near = 0.3; this.camera.updateProjectionMatrix(); }
+  }
+  canWarp(level) {
+    const ship = this.ship, E = ship.env;
+    if (level <= 4) return ship.parked || true;
+    if (ship.parked) return true;
+    if (ship.thrustNow > 0 || ship.ctl.throttle > 0) return 'Cut the throttle to warp';
+    if (E.body === EARTH && E.h < EARTH.atmoTop + 2000) return 'Can’t warp in the atmosphere';
+    if (E.agl < 10000) return 'Too close to the surface';
+    return true;
+  }
+  warpStep(d) {
+    if (!this.ship) return;
+    const i = WARPS.indexOf(this.ship.warp);
+    const n = clamp(i + d, 0, WARPS.length - 1);
+    const ok = this.canWarp(WARPS[n]);
+    if (ok !== true) { this.hud.toast(ok, 'bad'); return; }
+    this.ship.warp = WARPS[n];
+    this.warpTarget = null;
+  }
+  warpTo(t) {
+    const ok = this.canWarp(1000);
+    if (ok !== true) { this.hud.toast(ok, 'bad'); return; }
+    this.warpTarget = t;
+  }
+
+  // ---------------- per-frame ----------------
+  frame(now) {
+    requestAnimationFrame((t) => this.frame(t));
+    let dt = (now - this.last) / 1000; this.last = now;
+    if (!(dt > 0)) dt = 0.016;
+    dt = Math.min(dt, this.maxDt || 0.05);
+    const inp = this.input.poll();
+    const keys = this.input.take();
+    const camIn = this.input.takeCam();
+    if (this.spawning) { this.render(dt); return; }
+    if (this.ship && this.state !== 'boot') this.flightFrame(dt, inp, keys, camIn);
+    else if (this.state === 'hangar' && this.builder) { this.builder.frame(dt, camIn, keys); return; }
+    else this.idleFrame(dt);
+    this.render(dt);
+  }
+
+  idleFrame(dt) {
+    // slow orbit around the Earth behind menus
+    this.titleOrbit += dt * 0.012;
+    this.eph.update(nowSimTime());
+    const a = this.titleOrbit;
+    const sun = this.eph.sun;
+    // keep the day side in view
+    const base = sun.clone().multiplyScalar(EARTH.R * 2.6).applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.9 + Math.sin(a) * 0.25);
+    base.y += EARTH.R * 0.9;
+    this.camI.copy(base);
+    this.camera.position.set(0, 0, 0); this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(new THREE.Vector3().sub(this.camI).add(new THREE.Vector3(0, 0, 0)).normalize().add(sun.clone().multiplyScalar(-0.25)));
+    this.camera.near = 1000; this.camera.updateProjectionMatrix();
+    this.world.update(this.camI, this.camera, this.eph, dt);
+  }
+
+  flightFrame(dt, inp, keys, camIn) {
+    const ship = this.ship, C = this.controller, craft = this.craft;
+    // keys
+    for (const k of keys) this.key(k);
+    if (this.paused || this.state === 'boot') { this.eph.update(ship.t); this.placeCamera(dt, camIn); this.world.update(this.camI, this.camera, this.eph, dt); this.placeShip(); return; }
+    // continuous inputs
+    C.input.pitch = inp.pitch; C.input.roll = inp.roll; C.input.yaw = inp.yaw;
+    if (inp.thr) C.input.throttle = clamp(C.input.throttle + inp.thr * dt * 0.6, 0, 1);
+    ship.ctl.tx = inp.trX; ship.ctl.ty = inp.trY; ship.ctl.tz = -inp.trZ;
+    const holdBrake = inp.brake;
+    const wasBrake = C.input.brake;
+    if (holdBrake) C.input.brake = true;
+    // warp to target
+    if (this.warpTarget) {
+      const left = this.warpTarget - ship.t;
+      if (left <= 0) { ship.warp = 1; this.warpTarget = null; }
+      else {
+        let w = 1;
+        for (const lv of WARPS) if (lv * dt * 3 < left && this.canWarp(lv) === true) w = lv;
+        ship.warp = w;
+      }
+    }
+    if (ship.warp > 4 && this.canWarp(ship.warp) !== true && !ship.parked) ship.warp = 1;
+    // simulate
+    this.eph.update(ship.t);
+    ship.step(dt, C);
+    if (holdBrake) C.input.brake = wasBrake;
+    this.eph.update(ship.t);
+    this.flightTime += dt;
+    this.handleEvents();
+    // milestones and landing detection
+    this.progress.tick(ship, dt * ship.warp, this.world.airports);
+    // camera and world
+    if (this.mapOpen) this.camI.copy(this.mapView.update(dt, camIn, this.camera));
+    else this.placeCamera(dt, camIn);
+    this.world.update(this.camI, this.camera, this.eph, dt);
+    this.placeShip();
+    // effects
+    const vb = ship.dirToBody(ship.env.vAir, _v);
+    const flux = 1.83e-4 * Math.sqrt(Math.max(0, ship.env.rho)) * Math.pow(ship.env.vSurf, 3) * this.settings.heatScale;
+    this.effects.update(dt, craft, ship.env, vb, flux);
+    craft.updateVisuals(dt, this.flightTime, ship.ctl);
+    this.effects.updateWorld(dt, this.camI, (p) => gravity(p, this.eph.moon, new THREE.Vector3()), (p) => {
+      const body = p.distanceTo(this.eph.moon) < MOON.soi ? MOON : EARTH;
+      const f = this.eph.toFixed(body, p, new THREE.Vector3());
+      const ll = toLLH(f, body.R);
+      return ll.h < this.world.groundAt(body, ll.lat, ll.lon) - 2;
+    });
+    if (this.spot) this.spot.intensity = this.lights ? 9000 : 0;
+    // HUD + audio
+    this.hudExtras(dt);
+    if (!this.mapOpen) this.hud.update(dt, ship, C, this.extra);
+    else { $('m-wv').textContent = fmtWarp(ship.warp); }
+    this.updateAudio(flux);
+  }
+
+  key(k) {
+    const ship = this.ship, C = this.controller;
+    switch (k) {
+      case 'Escape': if (this.mapOpen) this.toggleMap(); else this.pause(!this.paused); break;
+      case 'g': this.action('gear'); break;
+      case 'r': this.action('rcs'); break;
+      case 'l': this.action('lights'); break;
+      case 'm': this.toggleMap(); break;
+      case 'c': this.cycleCam(); break;
+      case 't': this.setSas(C.sas === 'off' ? 'hold' : 'off'); break;
+      case 'z': C.input.throttle = 1; break;
+      case 'x': C.input.throttle = 0; break;
+      case '.': case '>': this.warpStep(1); break;
+      case ',': case '<': this.warpStep(-1); break;
+      case 'e': break;
+      case 'p': this.action('auto'); break;
+      case 'i': this.action('info'); break;
+      case 'v': this.action('engines'); break;
+      case 'f': this.action('mode'); break;
+      case '1': this.setSas('hold'); break;
+      case '2': this.setSas('prograde'); break;
+      case '3': this.setSas('retrograde'); break;
+      case '4': this.setSas('normal'); break;
+      case '5': this.setSas('antinormal'); break;
+      case '6': this.setSas('radialOut'); break;
+      case '7': this.setSas('radialIn'); break;
+      case '8': this.setSas('target'); break;
+      case '0': this.setSas('off'); break;
+      case 'F1': case '?': this.openHelp(); break;
+    }
+  }
+
+  handleEvents() {
+    const ship = this.ship;
+    for (const e of ship.events.splice(0)) {
+      if (e.type === 'break') {
+        const P = e.part;
+        const pw = ship.bodyToWorld(P.com, new THREE.Vector3());
+        this.effects.explode(pw, ship.v, clamp(Math.sqrt(P.def.mass / 800), 0.6, 3));
+        for (const Q of e.removed) if (Q.mesh && Q !== this.craft.root) {
+          const q = ship.q.clone();
+          const pos = ship.bodyToWorld(new THREE.Vector3().setFromMatrixPosition(Q.mesh.matrix), new THREE.Vector3());
+          const mesh = Q.mesh.clone(); mesh.matrixAutoUpdate = true; mesh.visible = true;
+          mesh.position.set(0, 0, 0); mesh.quaternion.identity(); mesh.scale.set(Q.d.mirror ? -1 : 1, 1, 1);
+          const qm = new THREE.Quaternion(...Q.d.q);
+          this.effects.addDebris(mesh, pos, ship.v, q.multiply(qm));
+        }
+        this.audio.boom(clamp(P.def.mass / 2000, 0.5, 2));
+        if (!ship.dead) this.hud.toast(`${e.why === 'overheat' ? 'Burned up' : 'Lost'}: ${P.def.name}`, 'bad');
+      } else if (e.type === 'destroyed') {
+        const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.' }[e.why] || 'Destroyed.';
+        $('c-why').textContent = why + ` (${Math.round(ship.env.vSurf)} m/s)`;
+        setTimeout(() => { if (this.ship === ship) { this.modal('crash'); } }, 2600);
+        this.audio.boom(3);
+      } else if (e.type === 'landed') {
+        this.onLanded();
+      } else if (e.type === 'warpStop') {
+        this.hud.toast(e.why === 'atmosphere' ? 'Warp stopped: entering the atmosphere' : 'Warp stopped: near the surface', '');
+        this.warpTarget = null;
+      }
+    }
+  }
+
+  onLanded() {
+    const ship = this.ship, E = ship.env;
+    let ap = null;
+    if (E.body === EARTH) {
+      const n = this.world.airports.nearestRunway(E.lat, E.lon, 5000);
+      if (n) { const { along, cross } = this.world.airports.local(n.rw, E.lat, E.lon); if (Math.abs(cross) < n.rw.w / 2 + 60 && Math.abs(along) < n.rw.len / 2 + 300) ap = n.rw.ap; }
+    }
+    if (this.flightTime > 5) {
+      this.hud.toast(E.body === MOON ? 'Touchdown on the Moon' : ap ? `Landed at ${ap.name}` : 'Landed', 'good');
+      this.audio.thump(0.6);
+    }
+    this.progress.landed(ship, ap);
+  }
+
+  hudExtras(dt) {
+    const ship = this.ship, E = ship.env, craft = this.craft, C = this.controller;
+    this._xt = (this._xt || 0) - dt;
+    if (this._xt > 0 && this.extra) return;
+    this._xt = 0.25;
+    const x = this.extra = this.extra || {};
+    x.lights = this.lights;
+    x.engGroup = this.engGroup;
+    x.multiGroup = this.availableGroups().length > 1;
+    x.dv = deltaV(craft, E.rho > 0.1, this.engGroup === 'all' ? null : (P) => P.eng.active);
+    x.endurance = this.endurance();
+    let T = 0; for (const P of craft.engines) if (P.eng.active) T += craft.engineOutput(P, E)[0];
+    const g = E.body.mu / Math.pow(E.body.R + E.h, 2);
+    x.twr = T / (craft.mass * g);
+    const airborne = ship.contacts === 0;
+    x.stall = airborne && E.q > 50 && E.vSurf > 20 && craft.wings.some((P) => P.wing.stalled && P.wing.area > 4);
+    x.pullUp = airborne && E.vVert < -25 && E.agl < -E.vVert * 7 && E.agl < 1500;
+    x.gearUp = airborne && !ship.ctl.gear && E.agl < 250 && E.vVert < -1 && craft.gears.length > 0;
+    let fuelFrac = 1; for (const k of ['LF', 'OX', 'FU']) { const cap = craft.capacity(k); if (cap > 0) fuelFrac = Math.min(fuelFrac, craft.amount(k) / cap); }
+    x.lowFuel = fuelFrac < 0.1;
+    x.flameout = ship.ctl.throttle > 0.1 && craft.engines.some((P) => P.eng.active && P.eng.thr > 0.2) && craft.engines.every((P) => !P.eng.active || P.eng.flame < 0.01);
+    x.apMsg = C.status || '';
+    if (C.status) { this.hud.toast(C.status); C.status = ''; x.apMsg = ''; }
+    if (C.ap && C.node && C.ap.name === 'Burn') {
+      const left = (C.node.dvLeft || C.node.dv).length();
+      x.apMsg = C.node.started ? `${Math.round(left)} m/s to go` : `burn in ${Math.round(C.node.tStart - ship.t)} s`;
+    }
+    if (E.body === EARTH && E.agl < 20000) {
+      const n = this.world.airports.nearestRunway(E.lat, E.lon, 80000);
+      x.nearest = n ? { name: n.rw.ap.iata || n.rw.ap.ident, d: n.d } : null;
+    } else x.nearest = null;
+    // encounter preview (cheap, every few seconds)
+    this._enc = (this._enc || 0) - 0.25;
+    if (this._enc <= 0) {
+      this._enc = 3;
+      if (E.body === EARTH && E.h > 140000) {
+        const p = predict(ship.r, ship.v, ship.t, { maxT: 6 * 86400, maxSteps: 1500 });
+        x.encounter = p.soiIn ? `Moon encounter in ${fmtT(p.soiIn - ship.t)} · Pe ${this.hud.units.dist(p.closeMoon.d - MOON.R)}` : '';
+      } else x.encounter = '';
+      const rs = relState(ship, E.body); const el = elements(rs.r, rs.v, rs.mu);
+      this.progress.orbitCheck(E.body, el.pe);
+    }
+  }
+
+  // seconds of fuel left at the current throttle for air-breathing flight
+  endurance() {
+    const craft = this.craft, E = this.ship.env;
+    let lf = 0;
+    for (const P of craft.engines) {
+      if (!P.eng.active || P.eng.flame <= 0) continue;
+      const [T, isp] = craft.engineOutput(P, E);
+      const mix = craft.fuelMix(P);
+      lf += (mix.LF || 0) * T * P.eng.thr / (isp * 9.80665);
+    }
+    return lf > 0 ? craft.amount('LF') / lf : Infinity;
+  }
+
+  updateAudio(flux) {
+    const ship = this.ship, craft = this.craft;
+    let jet = 0, rocket = 0, fusion = 0, spool = 0;
+    for (const P of craft.engines) {
+      const f = P.eng.flame;
+      if (P.eng.e.fusion) fusion = Math.max(fusion, f);
+      else if (P.eng.mode === 'jet' || P.eng.mode === 'air' || P.eng.mode === 'scram') { jet = Math.max(jet, f); spool = Math.max(spool, P.eng.thr); }
+      else rocket = Math.max(rocket, f);
+    }
+    const vac = 1 - Math.min(1, ship.env.p / 30000);
+    this.audio.update({ jet, rocket, fusion, jetSpool: spool, q: ship.env.q, heat: clamp((flux - 2e5) / 1.5e6, 0, 1), vac, paused: this.paused || this.mapOpen && false });
+  }
+
+  // ---------------- camera ----------------
+  placeCamera(dt, camIn) {
+    const ship = this.ship, craft = this.craft;
+    const cam = this.cam;
+    cam.yaw -= camIn.dx * 0.006;
+    cam.pitch = clamp(cam.pitch + camIn.dy * 0.006, -1.4, 1.5);
+    cam.dist = clamp(cam.dist * Math.exp(camIn.zoom * 0.12), craft.size * 0.5 + 3, 20000);
+    const up = ship.env.up ? ship.env.up.clone() : ship.r.clone().normalize();
+    const shipPos = ship.r;
+    this.camera.near = this.camMode === 'cockpit' ? 0.1 : clamp(cam.dist * 0.01, 0.2, 5);
+    this.camera.far = 1e10;
+    if (this.camMode === 'cockpit') {
+      const root = craft.root;
+      const eye = new THREE.Vector3(0, root.dia * 0.45, -root.len * 0.15).add(root.com);
+      this.camI.copy(ship.bodyToWorld(eye, _v));
+      this.camera.position.set(0, 0, 0);
+      this.camera.quaternion.copy(ship.q);
+    } else {
+      // reference heading: nose projected onto the horizon (or velocity when airborne and fast)
+      let fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(ship.q);
+      if (craft.vertical && ship.contacts > 0) fwd = new THREE.Vector3(0, 1, 0).applyQuaternion(ship.q);
+      let ref = fwd.clone().addScaledVector(up, -fwd.dot(up));
+      if (ref.lengthSq() < 1e-4) ref = new THREE.Vector3(0, 1, 0).applyQuaternion(ship.q).addScaledVector(up, -new THREE.Vector3(0, 1, 0).applyQuaternion(ship.q).dot(up));
+      ref.normalize();
+      let camUp = up;
+      let off;
+      if (this.camMode === 'free') {
+        // orbit in the ship's own frame
+        off = new THREE.Vector3(Math.sin(cam.yaw) * Math.cos(cam.pitch), Math.sin(cam.pitch), Math.cos(cam.yaw) * Math.cos(cam.pitch)).applyQuaternion(ship.q);
+        camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(ship.q);
+      } else {
+        const back = ref.clone().negate();
+        const side = new THREE.Vector3().crossVectors(up, back).normalize();
+        off = back.clone().multiplyScalar(Math.cos(cam.yaw)).addScaledVector(side, Math.sin(cam.yaw));
+        off.multiplyScalar(Math.cos(cam.pitch)).addScaledVector(up, Math.sin(cam.pitch));
+      }
+      const target = shipPos.clone().addScaledVector(up, craft.size * 0.08);
+      this.camI.copy(target).addScaledVector(off, cam.dist);
+      // keep the camera above the ground
+      const body = ship.env.body;
+      const f = this.eph.toFixed(body, this.camI, _w);
+      const ll = toLLH(f, body.R);
+      const g = this.world.groundAt(body, ll.lat, ll.lon) + 1.5;
+      if (ll.h < g) this.camI.addScaledVector(up, g - ll.h);
+      this.camera.position.set(0, 0, 0);
+      this.camera.up.copy(camUp);
+      this.camera.lookAt(target.clone().sub(this.camI));
+    }
+    this.camera.updateProjectionMatrix();
+  }
+
+  placeShip() {
+    const ship = this.ship, craft = this.craft;
+    const origin = _v.copy(craft.com).applyQuaternion(ship.q);
+    craft.group.position.copy(ship.r).sub(origin).sub(this.camI);
+    craft.group.quaternion.copy(ship.q);
+    craft.group.visible = !(this.camMode === 'cockpit' && !this.mapOpen) || true;
+  }
+
+  render(dt) {
+    this.renderer.render(this.scene, this.camera);
+    if (this.ship && this.state === 'hud' && !this.mapOpen) this.hud.renderNavball(this.renderer, this.ship, this.controller);
   }
 }
-requestAnimationFrame(frame);
 
-window.__sf = {
-  teleport, loader, globe, pos,
-  state: () => ({ ll: toLatLon(pos), heading, pitch, thr, speed, stats: globe.stats, net: loader.stats, queued: loader.queued }),
-  setThr: (v) => { thr = v; },
-};
+function fmtT(s) { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; }
+
+// cruise autopilot: hold altitude and heading via the fly-by-wire flight law
+function cruiseAp(ship) {
+  let hT = ship.env.h, hdgT = null;
+  return {
+    name: 'Cruise',
+    update(s, dt, C) {
+      const E = s.env;
+      const up = E.up;
+      const north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y).normalize();
+      const east = new THREE.Vector3().crossVectors(north, up);
+      const v = E.vAir;
+      const hdg = Math.atan2(v.dot(east), v.dot(north));
+      if (hdgT === null) hdgT = hdg;
+      let e = hdgT - hdg; e = Math.atan2(Math.sin(e), Math.cos(e));
+      C.bankHold = clamp(e * 1.5, -0.5, 0.5);
+      C.gammaHold = clamp((hT - E.h) / 2500, -0.15, 0.15);
+      if (E.rho < 0.02) return { done: true, msg: 'Cruise needs thicker air' };
+      return {};
+    },
+  };
+}
+
+new Game();

@@ -1,0 +1,16 @@
+{
+  "name": "Starforge",
+  "short_name": "Starforge",
+  "description": "Build a spaceplane and fly it from any airport on a 1:1 Earth to the Moon and back.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#05070c",
+  "theme_color": "#05070c",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

@@ -4,70 +4,205 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="theme-color" content="#05070c">
+<meta name="description" content="Starforge — build a spaceplane from snap-together parts and fly it from any airport on a 1:1 Earth to the Moon and back, with real physics.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon-192.png">
 <title>Starforge</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<style>
-:root{--ink:#05070c;--panel:rgba(9,14,23,.84);--line:#243149;--text:#e3ebf7;--muted:#8393aa;--amber:#ffb347;--ice:#7fd4ff;--display:"Saira Condensed","Arial Narrow",Arial,sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
-*{box-sizing:border-box}
-html,body{height:100%;margin:0;background:var(--ink);color:var(--text);font:13px var(--mono);overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
-#gl{position:fixed;inset:0;width:100%;height:100%;display:block}
-[hidden]{display:none!important}
-button,input{font:inherit;color:inherit}
-.hud{position:fixed;z-index:2}
-#searchbox{top:calc(10px + env(safe-area-inset-top,0px));left:16px;right:16px;max-width:380px}
-#q{width:100%;min-height:42px;padding:0 12px;border:1px solid var(--line);background:var(--panel);border-radius:3px;font-size:16px;-webkit-user-select:text;user-select:text}
-#q::placeholder{color:var(--muted)}
-#results{margin-top:4px;background:var(--panel);border:1px solid var(--line);border-radius:3px;max-height:44vh;overflow-y:auto;touch-action:pan-y}
-#results button{display:flex;justify-content:space-between;gap:10px;width:100%;min-height:42px;align-items:center;padding:0 12px;border:0;border-bottom:1px solid var(--line);background:transparent;text-align:left;cursor:pointer}
-#results button:last-child{border-bottom:0}
-.d{color:var(--muted)}
-#readout{top:calc(62px + env(safe-area-inset-top,0px));left:16px;display:grid;gap:2px;text-shadow:0 0 8px #000;pointer-events:none}
-#readout b{font:700 30px/1 var(--display);letter-spacing:.04em;color:var(--amber)}
-#readout .s{font-size:11px;color:#c9d6ea}
-#attr{left:16px;right:16px;bottom:calc(4px + env(safe-area-inset-bottom,0px));font-size:9px;color:rgba(227,235,247,.55);text-align:center;pointer-events:none}
-#stickwrap{left:16px;bottom:calc(28px + env(safe-area-inset-bottom,0px))}
-#stick{width:128px;height:128px;border-radius:50%;border:1px solid var(--line);background:radial-gradient(circle,rgba(255,179,71,.08),rgba(9,14,23,.7));position:relative;touch-action:none}
-#stick::before,#stick::after{content:"";position:absolute;background:var(--line)}
-#stick::before{left:50%;top:10px;bottom:10px;width:1px}
-#stick::after{top:50%;left:10px;right:10px;height:1px}
-#knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:var(--amber);opacity:.85}
-#mid{left:50%;transform:translateX(-50%);bottom:calc(28px + env(safe-area-inset-bottom,0px));display:grid;gap:8px}
-.pill{min-height:40px;min-width:84px;padding:0 12px;border:1px solid var(--line);background:var(--panel);border-radius:3px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;font-size:11px}
-#thrwrap{right:16px;bottom:calc(28px + env(safe-area-inset-bottom,0px));display:grid;justify-items:center;gap:6px}
-#thrlbl{font-size:10px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
-#thr{width:52px;height:150px;border:1px solid var(--line);background:var(--panel);border-radius:3px;position:relative;touch-action:none;overflow:hidden}
-#thrfill{position:absolute;left:0;right:0;bottom:0;height:0;background:linear-gradient(0deg,#6b4513,var(--amber))}
-#stop{min-height:34px;width:52px;border:1px solid var(--line);background:var(--panel);border-radius:3px;cursor:pointer;font-size:11px;letter-spacing:.1em}
-</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="./style.css">
 </head>
 <body>
 <canvas id="gl"></canvas>
 
-<div class="hud" id="searchbox">
-  <input id="q" type="search" placeholder="Search a city" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search a city">
-  <div id="results" hidden></div>
+<!-- boot -->
+<div id="boot" class="screen show">
+  <div class="logo">STARFORGE</div>
+  <div class="boot-bar"><div id="bootfill"></div></div>
+  <div id="bootmsg" class="dim">Loading…</div>
 </div>
 
-<div class="hud" id="readout">
-  <b id="alt">&nbsp;</b>
-  <div class="s" id="pos"></div>
-  <div class="s" id="spd"></div>
-  <div class="s d" id="net"></div>
+<!-- title -->
+<div id="title" class="screen">
+  <div class="title-wrap">
+    <div class="logo big">STARFORGE</div>
+    <div class="tag">Build it. Fly it. Earth to the Moon — at 1:1.</div>
+    <div class="menu">
+      <button class="btn primary" id="t-continue" hidden>Continue flight</button>
+      <button class="btn primary" id="t-fly">Fly</button>
+      <button class="btn" id="t-hangar">Hangar — build a ship</button>
+      <button class="btn" id="t-log">Logbook</button>
+      <button class="btn" id="t-settings">Settings</button>
+      <button class="btn ghost" id="t-help">How to play</button>
+    </div>
+    <div class="credits">Imagery © EOX Sentinel‑2 cloudless (CC BY‑NC‑SA) · NASA GIBS, LRO/LOLA, Moon Trek · Terrain: Mapzen/AWS · Buildings © OpenStreetMap contributors via OpenFreeMap · Airports: OurAirports · Cities: GeoNames</div>
+  </div>
 </div>
 
-<div class="hud" id="stickwrap"><div id="stick"><div id="knob"></div></div></div>
-<div class="hud" id="mid">
-  <button class="pill" id="level">Level</button>
-  <button class="pill" id="orbit">Orbit</button>
-  <button class="pill" id="down">Ground</button>
+<!-- launch site -->
+<div id="launch" class="screen">
+  <div class="panel launch-panel">
+    <div class="ph"><button class="icon-btn" data-back>‹</button><h2>Choose a launch site</h2></div>
+    <div class="ship-pick" id="l-ships"></div>
+    <input id="l-q" class="field" type="search" placeholder="Search a city or airport (e.g. Tokyo, LAX, Paris)" autocomplete="off" spellcheck="false">
+    <div class="tabs" id="l-tabs">
+      <button class="tab on" data-mode="runway">Runway</button>
+      <button class="tab" data-mode="hangar">Hangar</button>
+      <button class="tab" data-mode="pad">Launch pad</button>
+      <button class="tab" data-mode="special">Space & Moon</button>
+    </div>
+    <div id="l-list" class="list"></div>
+    <div id="l-sel" class="sel dim">Pick an airport above.</div>
+    <button class="btn primary wide" id="l-go" disabled>Launch</button>
+  </div>
 </div>
-<div class="hud" id="thrwrap">
-  <div id="thrlbl">Speed</div>
-  <div id="thr"><div id="thrfill"></div></div>
-  <button id="stop">STOP</button>
+
+<!-- hangar / builder -->
+<div id="hangar" class="screen">
+  <div class="hb-top">
+    <button class="icon-btn" data-back>‹</button>
+    <input id="hb-name" class="field slim" maxlength="24" spellcheck="false">
+    <div class="hb-actions">
+      <button class="btn sm" id="hb-new">New</button>
+      <button class="btn sm" id="hb-load">Ships</button>
+      <button class="btn sm" id="hb-save">Save</button>
+      <button class="btn sm primary" id="hb-launch">Launch ▸</button>
+    </div>
+  </div>
+  <div class="hb-cats" id="hb-cats"></div>
+  <div class="hb-parts" id="hb-parts"></div>
+  <div class="hb-tools" id="hb-tools">
+    <button class="tool" id="hb-sym" title="Mirror symmetry">⟷ Sym</button>
+    <button class="tool" id="hb-rotL" title="Rotate">⟲</button>
+    <button class="tool" id="hb-rotR" title="Rotate">⟳</button>
+    <button class="tool" id="hb-tiltU" title="Tilt up">⤒</button>
+    <button class="tool" id="hb-tiltD" title="Tilt down">⤓</button>
+    <button class="tool" id="hb-del" title="Delete">✕</button>
+    <button class="tool" id="hb-undo" title="Undo">↶</button>
+    <button class="tool" id="hb-paint" title="Paint">◐</button>
+    <button class="tool" id="hb-markers" title="Show centre of mass and lift">◎</button>
+  </div>
+  <div class="hb-stats" id="hb-stats"></div>
+  <div class="hb-hint" id="hb-hint"></div>
+  <div class="hb-paint panel" id="hb-paintp" hidden></div>
 </div>
-<div class="hud" id="attr">Imagery &copy; EOX Sentinel-2 cloudless (CC BY-NC-SA) &middot; NASA GIBS &middot; Terrain: Mapzen/AWS Open Data &middot; Cities: GeoNames</div>
+
+<!-- flight HUD -->
+<div id="hud" class="screen">
+  <div class="topbar">
+    <button class="icon-btn" id="h-menu" title="Menu (Esc)">☰</button>
+    <button class="icon-btn" id="h-cam" title="Camera (C)">◉</button>
+    <button class="icon-btn" id="h-map" title="Map (M)">◍</button>
+    <div class="readouts">
+      <div class="ro"><span class="k" id="h-spdk">SPD</span><b id="h-spd">0</b><i id="h-spdu">m/s</i></div>
+      <div class="ro"><span class="k" id="h-altk">ALT</span><b id="h-alt">0</b><i id="h-altu">m</i></div>
+      <div class="ro sm"><span class="k">V/S</span><b id="h-vs">0</b></div>
+      <div class="ro sm"><span class="k">HDG</span><b id="h-hdg">000</b></div>
+      <div class="ro sm"><span class="k" id="h-mk">MACH</span><b id="h-mach">0.00</b></div>
+    </div>
+    <div class="warp" id="h-warp"><button id="h-wd">‹</button><span id="h-wv">1×</span><button id="h-wu">›</button></div>
+  </div>
+  <div id="h-orbit" class="orbitbar" hidden></div>
+  <div id="h-warn" class="warnings"></div>
+  <div id="h-ap" class="apbar" hidden></div>
+  <div class="infopanel" id="h-info"></div>
+  <div class="ctl-left">
+    <div id="stick"><div id="knob"></div></div>
+    <div id="rudder"><div id="rknob"></div></div>
+  </div>
+  <div class="ctl-center">
+    <div class="sas" id="h-sas"></div>
+    <div id="navball-slot"></div>
+  </div>
+  <div class="ctl-right">
+    <div class="toggles" id="h-toggles"></div>
+    <div class="thr-wrap">
+      <div id="thr"><div id="thrfill"></div><div id="thrtxt">0%</div></div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<!-- map overlay -->
+<div id="mapui" class="screen">
+  <div class="map-top">
+    <button class="icon-btn" id="m-back" title="Back to flight (M)">✈</button>
+    <div class="map-focus" id="m-focus"></div>
+    <div class="warp" id="m-warp"><button id="m-wd">‹</button><span id="m-wv">1×</span><button id="m-wu">›</button></div>
+  </div>
+  <div class="map-info panel" id="m-info"></div>
+  <div class="map-plan panel" id="m-plan"></div>
+</div>
+
+<!-- pause -->
+<div id="pause" class="screen modal">
+  <div class="panel narrow">
+    <h2>Paused</h2>
+    <button class="btn primary wide" id="p-resume">Resume</button>
+    <button class="btn wide" id="p-restart">Restart flight</button>
+    <button class="btn wide" id="p-hangar">Hangar</button>
+    <button class="btn wide" id="p-site">Change launch site</button>
+    <button class="btn wide" id="p-settings">Settings</button>
+    <button class="btn wide" id="p-help">How to play</button>
+    <button class="btn wide ghost" id="p-title">Title screen</button>
+  </div>
+</div>
+
+<!-- crash -->
+<div id="crash" class="screen modal">
+  <div class="panel narrow">
+    <h2 id="c-title">Ship destroyed</h2>
+    <p id="c-why" class="dim"></p>
+    <button class="btn primary wide" id="c-restart">Try again</button>
+    <button class="btn wide" id="c-hangar">Hangar</button>
+    <button class="btn wide ghost" id="c-title2">Title screen</button>
+  </div>
+</div>
+
+<!-- settings -->
+<div id="settings" class="screen modal">
+  <div class="panel narrow">
+    <div class="ph"><button class="icon-btn" data-close>‹</button><h2>Settings</h2></div>
+    <div class="set-row"><label>Flight assist</label><div class="seg" data-set="assist"><button data-v="assisted">Assisted</button><button data-v="realistic">Realistic</button></div></div>
+    <div class="set-row"><label>Time of day</label><div class="seg" data-set="tod"><button data-v="day">Day</button><button data-v="sunset">Sunset</button><button data-v="night">Night</button><button data-v="real">Real</button></div></div>
+    <div class="set-row"><label>Graphics</label><div class="seg" data-set="quality"><button data-v="low">Low</button><button data-v="medium">Medium</button><button data-v="high">High</button></div></div>
+    <div class="set-row"><label>Units</label><div class="seg" data-set="units"><button data-v="metric">Metric</button><button data-v="imperial">Imperial</button></div></div>
+    <div class="set-row"><label>Reentry heat</label><div class="seg" data-set="heat"><button data-v="0.6">Gentle</button><button data-v="1">Real</button></div></div>
+    <div class="set-row"><label>Invert pitch</label><div class="seg" data-set="invert"><button data-v="0">Off</button><button data-v="1">On</button></div></div>
+    <div class="set-row"><label>Sound</label><div class="seg" data-set="sound"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
+    <div class="set-row"><label>Buildings</label><div class="seg" data-set="buildings"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
+    <p class="dim small">Graphics changes apply on the next flight.</p>
+  </div>
+</div>
+
+<!-- logbook -->
+<div id="logbook" class="screen modal">
+  <div class="panel narrow tall">
+    <div class="ph"><button class="icon-btn" data-close>‹</button><h2>Logbook</h2></div>
+    <div id="lb-list" class="list"></div>
+  </div>
+</div>
+
+<!-- help -->
+<div id="help" class="screen modal">
+  <div class="panel narrow tall">
+    <div class="ph"><button class="icon-btn" data-close>‹</button><h2>How to play</h2></div>
+    <div class="help-body" id="help-body"></div>
+  </div>
+</div>
+
+<!-- generic dialog -->
+<div id="dialog" class="screen modal">
+  <div class="panel narrow">
+    <h2 id="d-title"></h2>
+    <div id="d-body"></div>
+    <div id="d-btns" class="dbtns"></div>
+  </div>
+</div>
 
 <script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
 <script type="module" src="./src/main.js"></script>

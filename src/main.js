@@ -107,7 +107,11 @@ class Game {
   toTitle() {
     this.endFlight();
     this.show('title');
+    const f = load('flight', null);
+    $('t-resume').hidden = !f;
+    if (f) $('t-resume').textContent = `Continue flight · ${f.design && f.design.name ? f.design.name : 'ship'} ${f.where || ''}`;
     $('t-continue').hidden = !this.lastSite;
+    $('t-continue').classList.toggle('primary', !f);
     if (this.lastSite) $('t-continue').textContent = `Fly again · ${this.lastSite.label || 'last site'}`;
   }
 
@@ -132,7 +136,10 @@ class Game {
     $('p-settings').onclick = () => this.openSettings();
     $('p-help').onclick = () => this.openHelp();
     $('p-title').onclick = () => { this.pause(false); this.toTitle(); };
-    $('c-restart').onclick = () => { this.modal('crash', false); this.relaunch(this.site); };
+    $('c-restart').onclick = () => { this.modal('crash', false); if (this.site && this.site.resumed && this.resumeSnap) this.resumeFlight(this.resumeSnap); else this.relaunch(this.site); };
+    $('t-resume').onclick = () => { this.audio.click(); const f = load('flight', null); if (f) this.resumeFlight(f); };
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.saveFlight(); });
+    addEventListener('pagehide', () => this.saveFlight());
     $('c-hangar').onclick = () => { this.modal('crash', false); this.openHangar(); };
     $('c-title2').onclick = () => { this.modal('crash', false); this.toTitle(); };
     // settings segments
@@ -327,6 +334,107 @@ class Game {
     $('h-info').hidden = false;
     this.hud.toast(site.airport ? `${site.airport.name}` : site.name || '', '');
     if (site.type === 'hangar') this.hud.toast('Throttle up gently to roll out of the hangar', '');
+    this.input.take();
+  }
+
+  // ---------------- saving and resuming a flight ----------------
+  whereText() {
+    const ship = this.ship, E = ship.env;
+    const rs = relState(ship, E.body), el = elements(rs.r, rs.v, rs.mu);
+    if (E.body === MOON) return ship.parked || ship.contacts > 0 ? 'on the Moon' : el.e < 1 && el.pe > MOON.R + 5000 ? 'in lunar orbit' : 'near the Moon';
+    if (ship.parked || ship.contacts > 0) { const n = this.world.airports.nearestRunway(E.lat, E.lon, 8000); return n ? `at ${n.rw.ap.iata || n.rw.ap.ident}` : 'on the ground'; }
+    if (el.e < 1 && el.pe > EARTH.R + EARTH.atmoTop && el.ap < EARTH.R + 2e6) return 'in Earth orbit';
+    if (E.h > 2e6) return 'between Earth and the Moon';
+    if (E.h > EARTH.atmoTop) return 'in space';
+    return 'in flight';
+  }
+  snapshot() {
+    const ship = this.ship, craft = this.craft, C = this.controller;
+    if (!ship || ship.dead || this.spawning || !this.site) return null;
+    const n = C.node, site = this.site, F = this.progress.flight;
+    const v3 = (v) => [v.x, v.y, v.z];
+    return {
+      v: 1, savedAt: Date.now(), design: this.design,
+      site: { type: site.type, name: site.name || '', label: site.label || '', airport: site.airport ? site.airport.ident : null },
+      t: ship.t, r: v3(ship.r), vel: v3(ship.v), q: [ship.q.x, ship.q.y, ship.q.z, ship.q.w], w: v3(ship.w),
+      parked: ship.parked ? { body: ship.parked.body === MOON ? 'moon' : 'earth', pF: v3(ship.parked.pF), qF: [ship.parked.qF.x, ship.parked.qF.y, ship.parked.qF.z, ship.parked.qF.w] } : null,
+      parts: craft.parts.map((P) => ({ a: P.alive ? 1 : 0, r: Object.fromEntries(Object.entries(P.res).map(([k, x]) => [k, x.amt])), T: Math.round(P.temp) })),
+      ec: craft.ec, gear: ship.ctl.gear, rcs: ship.ctl.rcs, eg: this.engGroup, sas: C.sas, thr: C.input.throttle,
+      node: n ? { t: n.t, dv: v3(n.dv), label: n.label, body: n.body === MOON ? 'moon' : 'earth', moonPe: n.moonPe, earthPe: n.earthPe, eTarget: n.eTarget, target: n.target || null, miss: n.miss, rw: n.runway ? n.runway.idx : null } : null,
+      flight: F ? { ...F, from: F.from ? F.from.ident : null } : null,
+      flightTime: this.flightTime, where: this.whereText(),
+    };
+  }
+  saveFlight() { try { const s = this.snapshot(); if (s) save('flight', s); } catch (e) { /* storage full or unavailable */ } }
+  clearSavedFlight() { save('flight', null); }
+  async resumeFlight(s) {
+    this.endFlight();
+    this.resumeSnap = s;
+    const A = this.world.airports;
+    const findAp = (id) => (id ? A.airports.find((a) => a.ident === id) || null : null);
+    this.site = { type: s.site.type, name: s.site.name, label: s.site.label, airport: findAp(s.site.airport), resumed: true };
+    this.applySettings();
+    this.design = s.design;
+    const craft = new Craft(this.design);
+    this.craft = craft;
+    craft.parts.forEach((P, i) => {
+      const d = s.parts[i]; if (!d) return;
+      if (!d.a) { P.alive = false; if (P.mesh) P.mesh.visible = false; }
+      for (const k in d.r) if (P.res[k]) P.res[k].amt = d.r[k];
+      if (d.T) P.temp = d.T;
+    });
+    craft._intake = undefined;
+    if (s.ec !== undefined) craft.ec = s.ec;
+    craft.recompute();
+    this.scene.add(craft.group);
+    this.eph.update(s.t);
+    const ship = new Ship(craft, this.world, this.eph, this.settings);
+    this.ship = ship;
+    const C = this.controller = new Controller(this.settings);
+    C.onEngineGroup = (g) => { this.engGroup = this.availableGroups().includes(g) ? g : 'all'; };
+    this.effects.attach(craft);
+    this.setupLights(craft);
+    this.engGroup = s.eg && this.availableGroups().includes(s.eg) ? s.eg : 'all';
+    this.applyEngGroup();
+    this.flightTime = s.flightTime || 0;
+    this.prevContacts = 0;
+    this.cam.init = false; this.camMode = 'chase';
+    this.cam.dist = Math.max(12, craft.size * 1.5 + 8); this.cam.yaw = 0; this.cam.pitch = craft.vertical ? 0.05 : 0.16;
+    this.progress.startFlight({ airport: null, custom: false });
+    if (s.flight) this.progress.flight = { ...s.flight, from: findAp(s.flight.from) };
+    ship.t = s.t;
+    ship.r.fromArray(s.r); ship.v.fromArray(s.vel); ship.q.fromArray(s.q).normalize(); ship.w.fromArray(s.w);
+    if (s.parked) ship.parked = { body: s.parked.body === 'moon' ? MOON : EARTH, pF: new THREE.Vector3().fromArray(s.parked.pF), qF: new THREE.Quaternion().fromArray(s.parked.qF) };
+    ship.ctl.gear = s.gear; ship.ctl.rcs = s.rcs !== false;
+    C.sas = s.sas || 'hold'; C.input.throttle = s.thr || 0;
+    if (s.node) {
+      const nd = s.node;
+      C.node = { t: nd.t, dv: new THREE.Vector3().fromArray(nd.dv), label: nd.label, body: nd.body === 'moon' ? MOON : EARTH, moonPe: nd.moonPe, earthPe: nd.earthPe, eTarget: nd.eTarget, target: nd.target, miss: nd.miss };
+      if (nd.rw != null && A.runways[nd.rw]) { C.node.runway = A.runways[nd.rw]; C.node.airport = C.node.runway.ap; }
+    }
+    ship.updateEnv(ship.t);
+    // close to the ground: stream terrain under the ship before the physics runs
+    if (ship.env.agl < 30000 || ship.parked) {
+      this.show('boot');
+      $('bootmsg').textContent = 'Resuming your flight…';
+      this.spawning = true;
+      const E = ship.env, body = E.body, t0 = performance.now();
+      while (performance.now() - t0 < 15000) {
+        this.camI.copy(ship.r);
+        this.camera.position.set(0, 0, 0);
+        this.camera.lookAt(ship.r.clone().sub(this.eph.bodyCenter(body, new THREE.Vector3())).normalize().negate().add(new THREE.Vector3(0.01, 0, 0)));
+        this.world.update(this.camI, this.camera, this.eph, 0.016);
+        $('bootfill').style.width = Math.min(95, 10 + (performance.now() - t0) / 100) + '%';
+        if (this.world.terrainReady(body, E.lat, E.lon, body === EARTH ? 12 : 6)) break;
+        await new Promise((r) => setTimeout(r, 60));
+        if (this.ship !== ship) { this.spawning = false; return; }
+      }
+      this.spawning = false;
+    }
+    this.cam.smooth.copy(ship.r);
+    this.show('hud');
+    $('h-info').hidden = false;
+    this.hud.toast(`Welcome back — ${this.whereText()}`, '');
     this.input.take();
   }
 
@@ -590,6 +698,8 @@ class Game {
     if (holdBrake) C.input.brake = wasBrake;
     this.eph.update(ship.t);
     this.flightTime += dt;
+    this._saveT = (this._saveT || 0) + dt;
+    if (this._saveT > 5) { this._saveT = 0; this.saveFlight(); }
     this.handleEvents();
     // milestones and landing detection
     this.progress.tick(ship, dt * ship.warp, this.world.airports);
@@ -669,6 +779,7 @@ class Game {
       } else if (e.type === 'destroyed') {
         const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.' }[e.why] || 'Destroyed.';
         $('c-why').textContent = why + ` (${Math.round(ship.env.vSurf)} m/s)`;
+        this.clearSavedFlight();
         setTimeout(() => { if (this.ship === ship) { this.modal('crash'); } }, 2600);
         this.audio.boom(3);
       } else if (e.type === 'landed') {

@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { EARTH, MOON, clamp, llh, toLLH, gcDist } from '../core/geo.js';
 import { moonPos, moonVel, gravity, earthAngle } from '../core/astro.js';
 import { rk4 } from './physics.js';
+import { atmosphere } from '../core/atmo.js';
 
 const _m = new THREE.Vector3(), _mv = new THREE.Vector3();
 
@@ -650,9 +651,113 @@ export function coastGround(r, v, t, alt) {
   return { p, d, arc, state: c };
 }
 
+// 2-D braking simulation over flat ground: thrusting against the velocity at acceleration `a` from height `h`,
+// returns the height above ground where the craft comes to rest (negative = it would hit the ground still moving).
+// With `drag` ({ k: cda(Mach) / mass, ground, tScale(p) }) the air helps: drag is added to the braking, and
+// rocket thrust (a is its vacuum value) drops in thick air. `out` (optional) receives the horizontal distance
+// covered and the time taken.
+export function brakeSim(h, vz, vh, a, g, Rb, drag = null, out = null) {
+  let z = h, w = vz, u = Math.max(0, vh), x = 0, t = 0;
+  for (let i = 0; i < 3000; i++) {
+    const sp = Math.hypot(u, w);
+    if (sp < 1.5 || (w > 0 && u < 2)) { if (out) { out.x = x; out.t = t; } return z; }
+    let ad = a;
+    if (drag) {
+      const atm = atmosphere(drag.ground + z);
+      if (drag.tScale) ad *= drag.tScale(atm.p);      // rocket thrust drops in thick air
+      ad += 0.5 * atm.rho * sp * sp * drag.k(sp / atm.a);
+    }
+    const dtS = clamp(sp / (ad * 40), 0.02, 2);
+    const ax = -ad * u / sp;
+    const az = -ad * w / sp - g + (u * u) / (Rb + z);
+    x += u * dtS; t += dtS;
+    u = Math.max(0, u + ax * dtS); w += az * dtS;
+    z += w * dtS;
+    if (z <= 0) { if (out) { out.x = x; out.t = t; } return -Math.hypot(u, w); }
+  }
+  if (out) { out.x = x; out.t = t; }
+  return z;
+}
+
+// Rocket thrust of a craft's active engines at air pressure p as a fraction of their vacuum thrust.
+export function thrustScale(craft) {
+  const at = (p) => {
+    let T = 0;
+    for (const P of craft.engines) {
+      if (!P.eng.active || P.alive === false) continue;
+      const e = P.eng.e, r = e.type === 'hybrid' ? e.rocket : e;
+      if (!r || !r.ispVac || P.eng.mode === 'jet' || P.eng.mode === 'air' || P.eng.mode === 'scram') continue;
+      T += r.thrust * (1 - (1 - r.ispSL / r.ispVac) * Math.min(1.2, p / 101325)) * (P.eng.bal ?? 1);
+    }
+    return T;
+  };
+  const T0 = Math.max(1, at(0));
+  return (p) => Math.max(0.05, at(p) / T0);
+}
+
+// Drag area (Cd·A, m²) against Mach number of a craft falling with its thrust axis (body frame) pointing into
+// the airflow — how vertical landers come down, engines first.
+export function fallDrag(craft, axisBody) {
+  const F = new THREE.Vector3(), Tq = new THREE.Vector3(), w = new THREE.Vector3();
+  const flow = axisBody.clone().normalize().negate();
+  const MS = [0.2, 0.6, 0.9, 1.1, 1.4, 2, 3, 5, 10, 30];
+  // landing gear stays up on the way down
+  const gears = craft.parts.filter((P) => P.gear), dep = gears.map((P) => P.gear.deployed);
+  for (const P of gears) P.gear.deployed = 0;
+  const tab = MS.map((m) => { craft.aero(flow, w, { rho: 2, mach: m, a: 300, p: 1e5, h: 0, q: 1, T: 250 }, F, Tq); return F.length(); });
+  gears.forEach((P, i) => { P.gear.deployed = dep[i]; });
+  return (M) => {
+    if (M <= MS[0]) return tab[0];
+    for (let i = 1; i < MS.length; i++) if (M <= MS[i]) return tab[i - 1] + ((M - MS[i - 1]) / (MS[i] - MS[i - 1])) * (tab[i] - tab[i - 1]);
+    return tab[tab.length - 1];
+  };
+}
+
+// Where a falling craft (no lift, drag area cda(Mach), mass m) meets the ground at height `ground`:
+// point-mass flight through the rotating atmosphere from an inertial state. Returns the inertial state there.
+export function ballisticEnd(r0, v0, t0, mass, cda, ground = 0) {
+  const r = r0.clone(), v = v0.clone();
+  let t = t0;
+  const W = new THREE.Vector3(0, EARTH.omega, 0);
+  const va = new THREE.Vector3(), a = new THREE.Vector3(), rm = new THREE.Vector3(), vm = new THREE.Vector3();
+  const accel = (rr, vv, out) => {
+    const rl = rr.length(), h = rl - EARTH.R;
+    out.copy(rr).multiplyScalar(-EARTH.mu / (rl * rl * rl));
+    if (h < EARTH.atmoTop) {
+      const atm = atmosphere(h);
+      va.crossVectors(W, rr).negate().add(vv);
+      const V = va.length();
+      if (V > 0.1 && atm.rho > 0) out.addScaledVector(va, (-0.5 * atm.rho * V * cda(V / atm.a)) / mass);
+    }
+    return out;
+  };
+  const rp = new THREE.Vector3();
+  for (let k = 0; k < 20000; k++) {
+    const h = r.length() - EARTH.R - ground;
+    if (h <= 0) break;
+    const dt = h > 40000 ? 2 : h > 5000 ? 1 : 0.5;
+    // midpoint (RK2)
+    accel(r, v, a);
+    rm.copy(r).addScaledVector(v, dt / 2); vm.copy(v).addScaledVector(a, dt / 2);
+    accel(rm, vm, a);
+    rp.copy(r);
+    r.addScaledVector(vm, dt); v.addScaledVector(a, dt); t += dt;
+    const h2 = r.length() - EARTH.R - ground;
+    if (h2 <= 0) {
+      // back up to the exact moment it reaches the ground
+      const f = h / Math.max(1e-6, h - h2);
+      r.lerpVectors(rp, r, f); t -= dt * (1 - f);
+      break;
+    }
+  }
+  return { r, v, t };
+}
+
 // Retrograde deorbit burn from orbit that brings periapsis to `peAlt`, timed so that after the reentry glide
 // the craft arrives close to (lat, lon). Searches the next `hours` for the best pass.
-export async function planDeorbitTo(ship, lat, lon, name = '', onProgress, peAlt = 40000, hours = 24) {
+// With `fall` ({ mass, cda, ground }) the craft falls ballistically instead (vertical landers): the landing
+// point comes from a drag simulation, and the powered landing steers out what is left.
+export async function planDeorbitTo(ship, lat, lon, name = '', onProgress, peAlt = 40000, hours = 24, fall = null) {
   if (ship.env.body !== EARTH) return null;
   const el = elements(ship.r, ship.v, EARTH.mu);
   if (el.e >= 1 || el.pe - EARTH.R < 125000) return null;
@@ -674,9 +779,15 @@ export async function planDeorbitTo(ship, lat, lon, name = '', onProgress, peAlt
       if (next.r.length() - EARTH.R < 125000) break;
       c = next;
     }
-    const cg = coastGround(c.r, c.v, c.t, 55000);
-    const th = ENTRY_GLIDE / EARTH.R;
-    const end = cg.p.clone().multiplyScalar(Math.cos(th)).addScaledVector(cg.d, Math.sin(th));
+    const cg = coastGround(c.r, c.v, c.t, fall ? 85000 : 55000);
+    let end;
+    if (fall) {
+      const b = ballisticEnd(cg.state.r, cg.state.v, cg.state.t, fall.mass, fall.cda, fall.ground || 0);
+      end = groundState(b.r, b.v, b.t).p.normalize();
+    } else {
+      const th = ENTRY_GLIDE / EARTH.R;
+      end = cg.p.clone().multiplyScalar(Math.cos(th)).addScaledVector(cg.d, Math.sin(th));
+    }
     const miss = Math.acos(clamp(end.dot(tgt), -1, 1)) * EARTH.R;
     return { tOff, dv, pro, st, miss, end, entryP: cg.p.clone(), entryT: cg.state.t };
   };
@@ -700,6 +811,153 @@ export async function planDeorbitTo(ship, lat, lon, name = '', onProgress, peAlt
   if (globalThis.__dbgDeorbit) { const g = toLLH(best.entryP, 1); console.log('  planner entry120', g.lat.toFixed(2), g.lon.toFixed(2), 't', best.entryT.toFixed(0)); }
   return { t: best.st.t, dv: best.pro.clone().multiplyScalar(-best.dv), body: EARTH, label: `Deorbit to ${name || 'target'}`,
     target: { lat, lon, name }, miss: best.miss, endLat: endLL.lat, endLon: endLL.lon };
+}
+
+// Where a craft falling engines-first comes down after its braking burn. model = { mass, cda(Mach), ground,
+// aVac (braking acceleration in vacuum, with margin), tScale(p) (thrust fraction vs pressure), hTarget }.
+// Flies the drag fall and, once braking would have to start, adds the distance the braking covers.
+// Returns the Earth-fixed landing point p (unit vector), track direction d and time.
+export function fallLanding(r0, v0, t0, model) {
+  let r = r0.clone(), v = v0.clone(), t = t0;
+  // vacuum down to 125 km (the air above is too thin to matter), then fly through the atmosphere
+  if (r.length() - EARTH.R > 126000) { const cg = coastGround(r, v, t, 125000); r = cg.state.r.clone(); v = cg.state.v.clone(); t = cg.state.t; }
+  const W = new THREE.Vector3(0, EARTH.omega, 0);
+  const va = new THREE.Vector3(), a = new THREE.Vector3(), rm = new THREE.Vector3(), vm = new THREE.Vector3(), up = new THREE.Vector3();
+  const k = (M) => model.cda(M) / model.mass;
+  const accel = (rr, vv, out) => {
+    const rl = rr.length(), h = rl - EARTH.R;
+    out.copy(rr).multiplyScalar(-EARTH.mu / (rl * rl * rl));
+    if (h < EARTH.atmoTop) {
+      const atm = atmosphere(h);
+      va.crossVectors(W, rr).negate().add(vv);
+      const V = va.length();
+      if (V > 0.1 && atm.rho > 0) out.addScaledVector(va, -0.5 * atm.rho * V * k(V / atm.a));
+    }
+    return out;
+  };
+  const drag = { k, ground: model.ground, tScale: model.tScale };
+  const res = { x: 0, t: 0 };
+  let nextCheck = 0, brakeX = 0;
+  for (let i = 0; i < 20000; i++) {
+    const rl = r.length(), h = rl - EARTH.R, agl = h - model.ground;
+    if (agl <= 0) break;
+    if (model.aVac && agl < 30000 && t >= nextCheck) {
+      nextCheck = t + 0.5;
+      up.copy(r).divideScalar(rl);
+      va.crossVectors(W, r).negate().add(v);
+      const vz = va.dot(up), vh = Math.sqrt(Math.max(0, va.lengthSq() - vz * vz));
+      if (brakeSim(agl, vz, vh, model.aVac, EARTH.mu / (rl * rl), EARTH.R, drag, res) <= model.hTarget) { brakeX = res.x; break; }
+    }
+    const dt = h > 30000 ? 1 : 0.5;
+    accel(r, v, a);
+    rm.copy(r).addScaledVector(v, dt / 2); vm.copy(v).addScaledVector(a, dt / 2);
+    accel(rm, vm, a);
+    r.addScaledVector(vm, dt); v.addScaledVector(a, dt); t += dt;
+  }
+  const gs = groundState(r, v, t);
+  const p = gs.p.normalize();
+  const d = gs.v.addScaledVector(p, -gs.v.dot(p)).normalize();
+  // (the braking distance is measured over the ground, so it adds on in the Earth-fixed frame)
+  if (brakeX) p.addScaledVector(d, brakeX / EARTH.R).normalize();
+  return { p, d, t: t + (brakeX ? res.t : 0) };
+}
+
+// Everything the landing predictions need to know about a craft (falling with its thrust axis into the flow)
+export function landingModel(craft, axisBody, ground = 0) {
+  const cda = fallDrag(craft, axisBody), tScale = thrustScale(craft);
+  let T = 0;
+  for (const P of craft.engines) if (P.eng.active && P.alive !== false) T += craft.engineOutput(P, { rho: 0, p: 0, mach: 0, h: 1e6, a: 300 })[0] * (P.eng.bal ?? 1);
+  return { mass: craft.mass, cda, ground, aVac: (T / craft.mass) * 0.85, tScale, hTarget: 120 };
+}
+
+// Deorbit for a vertical lander that falls ballistically (engines first) and lands propulsively at (lat, lon):
+// the burn lowers the periapsis to 20 km and, if needed, swings the orbit sideways so the fall comes down on
+// the target. fall = { mass, cda(Mach), ground }. Searches the next `hours` of passes for the cheapest.
+export async function planLandingTo(ship, lat, lon, name, onProgress, fall, hours = 48) {
+  if (ship.env.body !== EARTH) return null;
+  const el = elements(ship.r, ship.v, EARTH.mu);
+  if (el.e >= 1 || el.pe - EARTH.R < 125000) return null;
+  const tgt = llh(lat, lon, 0, 1, new THREE.Vector3());
+  const peAlt = 20000;
+  // quick mode: the fall below 125 km covers about the same ground every time (measured once), so the scan
+  // only needs the coast down to 125 km; the refinement flies the whole fall
+  let fallArc = null;
+  const evalAt = (st, dvN, quick = false) => {
+    const b = basis(st.r, st.v);
+    const vN = st.v.clone().addScaledVector(b.nor, dvN);
+    let lo = 0, hi = 900;
+    for (let i = 0; i < 24; i++) {
+      const m = (lo + hi) / 2;
+      const e2 = elements(st.r, vN.clone().addScaledVector(b.pro, -m), EARTH.mu);
+      if (e2.pe - EARTH.R > peAlt) lo = m; else hi = m;
+    }
+    const dv = (lo + hi) / 2;
+    let c = { r: st.r, v: vN.clone().addScaledVector(b.pro, -dv), t: st.t };
+    for (let k = 0; k < 400 && c.r.length() - EARTH.R > 140000; k++) {
+      const next = propagate(c.r, c.v, c.t, 30);
+      if (next.r.length() - EARTH.R < 140000) break;
+      c = next;
+    }
+    let end, d, tL;
+    if (quick && fallArc !== null) {
+      const cg = coastGround(c.r, c.v, c.t, 125000);
+      end = cg.p.clone().multiplyScalar(Math.cos(fallArc)).addScaledVector(cg.d, Math.sin(fallArc));
+      d = cg.d; tL = cg.state.t;
+    } else {
+      const L = fallLanding(c.r, c.v, c.t, fall);
+      end = L.p; d = L.d; tL = L.t;
+      if (quick) { const cg = coastGround(c.r, c.v, c.t, 125000); fallArc = Math.acos(clamp(cg.p.dot(end), -1, 1)); }
+    }
+    const off = tgt.clone().sub(end);
+    return { st, dv, dvN, vec: b.pro.clone().multiplyScalar(-dv).addScaledVector(b.nor, dvN), end, along: off.dot(d) * EARTH.R, cross: off.dot(new THREE.Vector3().crossVectors(end, d)) * EARTH.R, miss: Math.acos(clamp(end.dot(tgt), -1, 1)) * EARTH.R, tLand: tL };
+  };
+  // 1) every minute for the next day: where would a plain deorbit burn land?
+  const scan = [];
+  const N = Math.ceil((hours * 3600) / 60);
+  let st = propagate(ship.r, ship.v, ship.t, 120);
+  for (let i = 0; i < N; i++) {
+    if (i) st = propagate(st.r, st.v, st.t, 60);
+    const r = evalAt(st, 0, true);
+    scan.push(r);
+    if (i % 20 === 0) { if (onProgress) onProgress((i / N) * 0.6); await yieldFrame(); }
+  }
+  // passes that come closest
+  const cands = [];
+  for (let i = 1; i < scan.length - 1; i++) if (scan[i].miss <= scan[i - 1].miss && scan[i].miss <= scan[i + 1].miss) cands.push({ ...scan[i], base: scan[Math.max(0, i - 3)].st });
+  cands.sort((a, b) => a.miss - b.miss);
+  for (const c of cands.slice(0, 5)) Object.assign(c, evalAt(c.st, 0));
+  // 2) home in on the best few: burn timing for the along-track miss, a sideways component for the cross-track
+  const sols = [];
+  for (const c0 of cands.slice(0, 6)) {
+    // timing is measured from a state a few minutes earlier (propagation only runs forward)
+    const base = c0.base;
+    let tOff = c0.st.t - base.t, n = 0, cur = c0;
+    const at = (dt, dn) => evalAt(propagate(base.r, base.v, base.t, Math.max(0, dt)), dn);
+    for (let it = 0; it < 12 && cur.miss > 300; it++) {
+      const a = at(tOff + 1, n), b = at(tOff, n + 10);
+      const J = [[a.along - cur.along, (b.along - cur.along) / 10], [a.cross - cur.cross, (b.cross - cur.cross) / 10]];
+      const det = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+      if (!isFinite(det) || Math.abs(det) < 1e-9) break;
+      let dt = (-cur.along * J[1][1] + cur.cross * J[0][1]) / det;
+      let dn = (-cur.cross * J[0][0] + cur.along * J[1][0]) / det;
+      dt = clamp(dt, -90, 90); dn = clamp(dn, -400, 400);
+      let next = at(tOff + dt, n + dn);
+      for (let k = 0; k < 4 && next.miss > cur.miss; k++) { dt /= 2; dn /= 2; next = at(tOff + dt, n + dn); }
+      if (globalThis.__dbgDeorbit) console.log('    it', it, { along: (cur.along / 1e3).toFixed(1), cross: (cur.cross / 1e3).toFixed(1), J: J.map((r) => r.map((x) => x.toFixed(0))), dt: dt.toFixed(1), dn: dn.toFixed(1), next: (next.miss / 1e3).toFixed(1) });
+      if (next.miss > cur.miss) break;
+      tOff += dt; n += dn; cur = next;
+      await yieldFrame();
+    }
+    if (cur.miss < 3000 && Math.abs(n) < 1500) sols.push(cur);
+    if (onProgress) onProgress(Math.min(0.98, 0.6 + 0.065 * cands.indexOf(c0) + 0.065));
+  }
+  if (onProgress) onProgress(1);
+  // the cheapest landing; waiting a few hours is fine if it saves real fuel
+  const cost = (r) => r.vec.length() + (r.st.t - ship.t) / 3600 * 8;
+  const best = sols.sort((a, b) => cost(a) - cost(b))[0] || cands[0];
+  if (!best) return null;
+  if (globalThis.__dbgDeorbit) console.log('  planLandingTo', { sols: sols.map((r) => `${((r.st.t - ship.t) / 3600).toFixed(1)}h dv ${r.vec.length().toFixed(0)} n ${r.dvN.toFixed(0)} miss ${(r.miss / 1000).toFixed(1)}`), cand0: (cands[0].miss / 1000).toFixed(0) });
+  return { t: best.st.t, dv: best.vec, body: EARTH, label: `Deorbit to ${name || 'target'}`, target: { lat, lon, name }, miss: best.miss, vertical: true };
 }
 
 export function burnTime(ship, dv) {

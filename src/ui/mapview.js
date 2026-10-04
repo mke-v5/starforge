@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { EARTH, MOON, clamp, fmtTime, D2R } from '../core/geo.js';
 import { moonPos, moonVel } from '../core/astro.js';
-import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, planCorrection, planDeorbitTo, burnTime, deltaV } from '../ship/orbit.js';
+import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, planCorrection, planDeorbitTo, planLandingTo, landingModel, burnTime, deltaV } from '../ship/orbit.js';
 import { nodeExec, landAp, ascentAp, reentryAp, coastToAp, landRunwayAp, sequenceAp, flyHomeAp } from '../ship/control.js';
 
 const $ = (id) => document.getElementById(id);
@@ -238,13 +238,14 @@ export class MapView {
       if (toMoon && !inAtmo) btns.push(['Fine-tune Moon approach (100 km)', () => this.planAsync((cb) => planCorrection(ship, MOON, 100000, cb), 'Already on course')]);
       if (farOut && !toMoon && !inAtmo && el.e < 1 && peAlt > 140000) btns.push(['Brake into low orbit at periapsis', () => this.plan(() => planCircularize(ship, false))]);
       const hm = this.homeAirport();
-      if (farOut && !toMoon && !inAtmo && el.e < 1.2 && this.canGlideHome()) btns.push(['Autopilot: fly me home…', () => this.pickHome((a) => this.flyHomeAll(a))]);
+      if (farOut && !toMoon && !inAtmo && el.e < 1.2 && this.canComeHome()) btns.push(['Autopilot: fly me home…', () => this.pickHome((a) => this.flyHomeAll(a))]);
       if (farOut && !toMoon && !inAtmo && peAlt > 140000) btns.push([`Fine-tune arrival (Pe 250 km${hm ? ', lined up for ' + this.code(hm) : ''})`, () => this.planAsync((cb) => planCorrection(ship, EARTH, 250000, cb, { iMin: this.iMinFor(hm) }), 'Already on course')]);
       if (farOut && !toMoon && !inAtmo) btns.push(['Fine-tune reentry (Pe 45 km, hot!)', () => this.planAsync((cb) => planCorrection(ship, EARTH, 45000, cb), 'Already on course')]);
       if (peAlt < 100000 && E.h > 60000 && E.h < 400000 && E.vSurf > 2500) btns.push(['Autopilot: reentry', () => { this.game.engage(reentryAp()); this.game.toggleMap(); }]);
       if (el.e < 1 && el.ap - EARTH.R > 140000 && !toMoon) btns.push(['Circularize at apoapsis',() => this.plan(() => planCircularize(ship, true))]);
       if (el.pe - EARTH.R > 140000 && !farOut) {
         if (this.canGlideHome()) btns.push(['Fly home to an airport…', () => this.pickHome()]);
+        else if (this.canLandVertically()) btns.push(['Land at an airport…', () => this.pickHome((a) => this.planLandHome(a))]);
         btns.push(['Go to the Moon', () => this.planAsync((cb) => planMoonTransfer(ship, 120000, cb))]);
         btns.push(['Deorbit for reentry (Pe 40 km)', () => this.plan(() => planPeriapsis(ship, 40000))]);
       }
@@ -254,7 +255,7 @@ export class MapView {
       if (el.e >= 1 || el.ap - MOON.R > 3000000) btns.push(['Capture into lunar orbit', () => this.plan(() => planCapture(ship))]);
       const hm = this.homeAirport();
       const landed = E.agl < 50 && E.vSurf < 5;
-      if ((el.e < 1 || landed) && this.canGlideHome()) btns.push([landed ? 'Autopilot: take off and fly me home…' : 'Autopilot: fly me home…', () => this.pickHome((a) => this.flyHomeAll(a))]);
+      if ((el.e < 1 || landed) && this.canComeHome()) btns.push([landed ? 'Autopilot: take off and fly me home…' : 'Autopilot: fly me home…', () => this.pickHome((a) => this.flyHomeAll(a))]);
       if (el.e < 1 && !landed) {
         // spaceplanes come home into Earth orbit and reenter from there; heat-shielded craft can dive straight in
         const shield = ship.craft.parts.some((P) => P.alive && P.def.shield);
@@ -290,6 +291,21 @@ export class MapView {
     const S = c.wings.reduce((a, P) => a + (P.alive !== false ? P.wing.area : 0), 0);
     return S > c.mass / 1500;
   }
+  // tail-sitting rockets that can stand on their engines: they come home by falling engines-first and landing on legs
+  canLandVertically() {
+    const c = this.game.craft;
+    return !!c.vertical && c.engines.some((P) => P.alive !== false && P.eng.mode === 'rocket');
+  }
+  canComeHome() { return this.canGlideHome() || this.canLandVertically(); }
+  // plan a deorbit that brings a vertical lander down on an airport (middle of its longest runway)
+  async planLandHome(a) {
+    const g = this.game, ship = g.ship, C = g.controller;
+    const rw = a.runways.reduce((b, r) => (!b || r.len > b.len ? r : b), null);
+    const name = this.code(a), elev = ((rw.e1 || 0) + (rw.e2 || 0)) / 2;
+    await this.planAsync((cb) => planLandingTo(ship, rw.latC, rw.lonC, name, cb, landingModel(ship.craft, C.thrustAxis(ship.craft, ship.env), elev)), 'No landing found today');
+    const n = C.node;
+    if (n && n.target) { n.target.elev = elev; n.vertical = true; this.renderNode(); }
+  }
   // the airport this flight started from (where "home" is), if it has a long enough runway
   homeAirport() {
     const a = this.game.site && this.game.site.airport;
@@ -310,7 +326,7 @@ export class MapView {
     const rw = a.runways.reduce((b, r) => (!b || r.len > b.len ? r : b), null);
     const name = this.code(a), iMin = this.iMinFor(a);
     C.node = null;
-    C.engage(flyHomeAp(ship, { A, rw, airport: a, name, iMin, terrain: g.terrainFn() }));
+    C.engage(flyHomeAp(ship, { A, rw, airport: a, name, iMin, terrain: g.terrainFn(), vertical: !this.canGlideHome() && this.canLandVertically() }));
     g.hud.toast(`Autopilot: flying you home to ${name}. Time warp runs by itself between burns.`);
     this.renderPlan();
   }
@@ -384,18 +400,23 @@ export class MapView {
     const executing = C.ap && (C.ap.name === 'Burn' || /^Home to/.test(C.ap.name));
     const have = deltaV(ship.craft, false, (P) => P.eng.active);
     const short = dv > have * 0.98 ? `<div style="color:var(--red)">Not enough fuel: ${Math.round(have)} m/s left on the active engines</div>` : '';
-    const homeInfo = n.target ? `<div class="dim">Reentry ends ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}</div>` : '';
+    const homeInfo = !n.target ? '' : n.vertical ? `<div class="dim">Falls to ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}; the landing steers out the rest</div>` : `<div class="dim">Reentry ends ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}</div>`;
     el.innerHTML = `<div class="node"><div><b>${n.label}</b></div><div>Δv <b>${Math.round(dv)} m/s</b> · burn ${isFinite(bt) ? fmtTime(bt) : 'no thrust'}</div>${short}<div>In <b>${fmtTime(n.t - ship.t)}</b>${n.moonPe !== undefined ? ` · Moon Pe ${this.game.hud.units.dist(n.moonPe)}` : ''}${n.earthPe !== undefined ? ` · Earth Pe ${this.game.hud.units.dist(n.earthPe)}` : ''}</div>${homeInfo}</div>`;
     const row = document.createElement('div'); row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px';
     const b1 = document.createElement('button'); b1.className = 'btn sm primary'; b1.textContent = executing ? 'Flying…' : 'Autopilot';
     b1.disabled = executing;
-    const home = n.target && n.runway;
+    const home = n.target && (n.runway || n.vertical);
     if (home) b1.textContent = executing ? 'Flying…' : 'Fly me home';
     b1.onclick = () => {
       if (home) {
         const g = this.game, A = g.world.airports, name = n.target.name;
-        C.engage(sequenceAp(`Home to ${name}`, [() => nodeExec(n), () => coastToAp(), () => reentryAp(n.target, { then: `lining up for ${name}` }), () => landRunwayAp(A, n.runway, name, g.terrainFn())]));
-        g.hud.toast(`Autopilot: deorbit, reentry and landing at ${name}`);
+        if (n.vertical) {
+          C.engage(sequenceAp(`Home to ${name}`, [() => nodeExec(n), () => landAp(n.target)]));
+          g.hud.toast(`Autopilot: deorbit, fall and powered landing at ${name}`);
+        } else {
+          C.engage(sequenceAp(`Home to ${name}`, [() => nodeExec(n), () => coastToAp(), () => reentryAp(n.target, { then: `lining up for ${name}` }), () => landRunwayAp(A, n.runway, name, g.terrainFn())]));
+          g.hud.toast(`Autopilot: deorbit, reentry and landing at ${name}`);
+        }
       } else { C.engage(nodeExec(n)); this.game.hud.toast('Autopilot will fly the burn'); }
       this.renderNode();
     };

@@ -368,7 +368,7 @@ class Game {
       parked: ship.parked ? { body: ship.parked.body === MOON ? 'moon' : 'earth', pF: v3(ship.parked.pF), qF: [ship.parked.qF.x, ship.parked.qF.y, ship.parked.qF.z, ship.parked.qF.w] } : null,
       parts: craft.parts.map((P) => ({ a: P.alive ? 1 : 0, r: Object.fromEntries(Object.entries(P.res).map(([k, x]) => [k, x.amt])), T: Math.round(P.temp) })),
       ec: craft.ec, gear: ship.ctl.gear, rcs: ship.ctl.rcs, eg: this.engGroup, sas: C.sas, thr: C.input.throttle,
-      node: n ? { t: n.t, dv: v3(n.dv), label: n.label, body: n.body === MOON ? 'moon' : 'earth', moonPe: n.moonPe, earthPe: n.earthPe, eTarget: n.eTarget, target: n.target || null, miss: n.miss, rw: n.runway ? n.runway.idx : null } : null,
+      node: n ? { t: n.t, dv: v3(n.dv), label: n.label, body: n.body === MOON ? 'moon' : 'earth', moonPe: n.moonPe, earthPe: n.earthPe, eTarget: n.eTarget, target: n.target || null, miss: n.miss, rw: n.runway ? n.runway.idx : null, vertical: !!n.vertical } : null,
       flight: F ? { ...F, from: F.from ? F.from.ident : null } : null,
       flightTime: this.flightTime, where: this.whereText(),
     };
@@ -417,7 +417,7 @@ class Game {
     C.sas = s.sas || 'hold'; C.input.throttle = s.thr || 0;
     if (s.node) {
       const nd = s.node;
-      C.node = { t: nd.t, dv: new THREE.Vector3().fromArray(nd.dv), label: nd.label, body: nd.body === 'moon' ? MOON : EARTH, moonPe: nd.moonPe, earthPe: nd.earthPe, eTarget: nd.eTarget, target: nd.target, miss: nd.miss };
+      C.node = { t: nd.t, dv: new THREE.Vector3().fromArray(nd.dv), label: nd.label, body: nd.body === 'moon' ? MOON : EARTH, moonPe: nd.moonPe, earthPe: nd.earthPe, eTarget: nd.eTarget, target: nd.target, miss: nd.miss, vertical: nd.vertical };
       if (nd.rw != null && A.runways[nd.rw]) { C.node.runway = A.runways[nd.rw]; C.node.airport = C.node.runway.ap; }
     }
     ship.updateEnv(ship.t);

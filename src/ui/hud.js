@@ -292,7 +292,7 @@ export class Hud {
   updateInfo(ship, ctl, extra) {
     const craft = ship.craft, U = this.units;
     let html = '';
-    for (const k of ['LF', 'OX', 'FU']) {
+    for (const k of ['LF', 'OX', 'FU', 'GAS']) {
       const cap = craft.capacity(k);
       if (cap <= 0) continue;
       const amt = craft.amount(k);

@@ -6,6 +6,7 @@ import { atmosphere } from '../core/atmo.js';
 import { gravity, moonPos, earthAngle } from '../core/astro.js';
 
 const Y = new THREE.Vector3(0, 1, 0);
+const _rF = new THREE.Vector3(), _rT = new THREE.Vector3();
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
 const _F = new THREE.Vector3(), _T = new THREE.Vector3(), _Fa = new THREE.Vector3(), _Ta = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
@@ -268,6 +269,7 @@ export class Ship {
     const trans = _e.set(ctl.tx, ctl.ty, ctl.tz);
     const cmd = this.rcsT || this.cmdT;
     let fuel = 0;
+    _rF.set(0, 0, 0); _rT.set(0, 0, 0);
     for (const P of craft.rcsList) {
       const R = P.rcs;
       _b.copy(R.pos).sub(com);
@@ -277,19 +279,26 @@ export class Ship {
         _a.copy(d).multiplyScalar(-1);
         _c.crossVectors(_b, _a);
         const cl = _c.length();
-        let f = 0;
-        if (cl > 1e-3) f += Math.max(0, _c.dot(cmd) / cl);
-        f += Math.max(0, _a.dot(trans));
-        f = Math.min(1, f);
+        let fr = 0;
+        if (cl > 1e-3) fr = Math.max(0, _c.dot(cmd) / cl);
+        const ft = Math.max(0, _a.dot(trans));
+        const f = Math.min(1, fr + ft);
         R.fire[i] = f;
         if (f < 0.02) continue;
         const thrust = P.def.rcs.thrust * f;
-        F.addScaledVector(_a, thrust);
-        T.add(_c.multiplyScalar(thrust));
+        // turning fires thrusters in opposed pairs (a pure couple); only translation pushes the craft along
+        _rF.addScaledVector(_a, P.def.rcs.thrust * Math.min(ft, f));
+        _rT.add(_c.multiplyScalar(thrust));
         fuel += thrust / (P.def.rcs.isp * G0) * dt;
       }
     }
-    if (fuel > 0 && craft.draw('LF', fuel) < fuel * 0.5) { for (const P of craft.rcsList) P.rcs.fire.fill(0); }
+    // thrusters only push while there is propellant for them
+    if (fuel > 0) {
+      const gas = craft.draw('GAS', fuel);
+      const got = (gas + (gas < fuel ? craft.draw('LF', fuel - gas) : 0)) / fuel;
+      if (got < 0.999) for (const P of craft.rcsList) for (let i = 0; i < 4; i++) P.rcs.fire[i] *= got;
+      F.addScaledVector(_rF, got); T.addScaledVector(_rT, got);
+    }
   }
 
   contactForces(dt, Fw, Tb) {

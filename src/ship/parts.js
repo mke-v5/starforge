@@ -12,6 +12,7 @@ export const RES = {
   OX: { name: 'Oxidizer', color: '#7fd4ff', unit: 'kg' },
   FU: { name: 'Fusion pellets', color: '#c58bff', unit: 'kg' },
   EC: { name: 'Charge', color: '#9cf28a', unit: 'kWh' },
+  GAS: { name: 'RCS gas', color: '#d8e2ec', unit: 'kg' },
 };
 export const CATS = [
   { id: 'cockpit', name: 'Cockpits' },
@@ -135,8 +136,8 @@ export const PARTS = [
     nodes: stack(0.5, 'S'), surface: true, mesh: 'wheelS' },
   { id: 'ct-wheel-m', cat: 'control', name: 'Reaction wheel M', desc: 'Big gyro ring for 2.5 m ships.', size: 'M', len: 0.6, mass: 450, maxT: 1500, torque: 80000, ec: 0,
     nodes: stack(0.6, 'M'), surface: true, mesh: 'wheelM' },
-  { id: 'ct-rcs', cat: 'control', name: 'RCS thruster block', desc: 'Four-way cold-gas thrusters for fine attitude control in space. Uses fuel.', mass: 60, maxT: 1500, crash: 8,
-    rcs: { thrust: 2500, isp: 260 }, nodes: [], surface: true, mesh: 'rcs', com: [0.18, 0, 0] },
+  { id: 'ct-rcs', cat: 'control', name: 'RCS thruster block', desc: 'Four-way cold-gas thrusters for fine attitude control in space. Carries its own gas; tops up from jet fuel.', mass: 40, maxT: 1500, crash: 8,
+    rcs: { thrust: 2500, isp: 260 }, res: { GAS: 60 }, nodes: [], surface: true, mesh: 'rcs', com: [0.18, 0, 0] },
 
   // ---------------- gear ----------------
   { id: 'gr-light', cat: 'gear', name: 'Light landing gear', desc: 'Retractable wheel for small planes. Steers if mounted up front.', mass: 120, maxT: 1300, crash: 7,

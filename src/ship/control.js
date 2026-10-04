@@ -914,7 +914,7 @@ export function flyHomeAp(ship, o) {
     const target = { lat: rw.latC, lon: rw.lonC, elev: ((rw.e1 || 0) + (rw.e2 || 0)) / 2, name };
     steps.push((s0, C) => planBurnAp(`Deorbit to ${name}`, (s) => planLandingTo(s, target.lat, target.lon, name, null, landingModel(s.craft, C.thrustAxis(s.craft, s.env), target.elev))));
     steps.push(() => landAp(target));
-    return sequenceAp(`Home to ${name}`, steps);
+    return Object.assign(sequenceAp(`Home to ${name}`, steps), { home: o.airport ? o.airport.ident : null });
   }
   steps.push(() => planBurnAp(`Deorbit to ${name}`, async (s) => {
     deorbit = await planDeorbitTo(s, rw.latC, rw.lonC, name);
@@ -924,7 +924,8 @@ export function flyHomeAp(ship, o) {
   steps.push(() => coastToAp());
   steps.push(() => reentryAp(deorbit && deorbit.target, { then: `lining up for ${name}` }));
   steps.push(() => landRunwayAp(A, rw, name, o.terrain));
-  return sequenceAp(`Home to ${name}`, steps);
+  // (remembered in saved flights, so a reload picks the trip up again)
+  return Object.assign(sequenceAp(`Home to ${name}`, steps), { home: o.airport ? o.airport.ident : null });
 }
 
 // Run autopilots one after another. Each step is a factory (ship, C) => autopilot, built when it starts.

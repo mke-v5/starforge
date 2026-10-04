@@ -371,6 +371,7 @@ class Game {
       node: n ? { t: n.t, dv: v3(n.dv), label: n.label, body: n.body === MOON ? 'moon' : 'earth', moonPe: n.moonPe, earthPe: n.earthPe, eTarget: n.eTarget, target: n.target || null, miss: n.miss, rw: n.runway ? n.runway.idx : null, vertical: !!n.vertical } : null,
       flight: F ? { ...F, from: F.from ? F.from.ident : null } : null,
       flightTime: this.flightTime, where: this.whereText(),
+      homeTo: C.ap && C.ap.home ? C.ap.home : null,
     };
   }
   saveFlight() { try { const s = this.snapshot(); if (s) save('flight', s); } catch (e) { /* storage full or unavailable */ } }
@@ -444,6 +445,11 @@ class Game {
     $('h-info').hidden = false;
     this.hud.toast(`Welcome back — ${this.whereText()}`, '');
     this.input.take();
+    // a fly-me-home trip in progress carries on (not mid-reentry: that needs the stick or Land at…)
+    if (s.homeTo && (ship.env.body === MOON || ship.env.h > EARTH.atmoTop + 5000)) {
+      const a = findAp(s.homeTo);
+      if (a) setTimeout(() => { if (this.ship === ship && !this.controller.ap) { this.mapView.flyHomeAll(a); this.hud.toast(`Autopilot resumed: flying you home to ${a.iata || a.ident}`); } }, 1500);
+    }
   }
 
   // choose a start time so the launch site has the requested lighting

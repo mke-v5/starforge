@@ -33,7 +33,78 @@ const FRAG_EARTH = /* glsl */`
 uniform sampler2D map; uniform sampler2D nightMap;
 uniform vec3 uImg; uniform vec3 uNight; uniform float uHasNight;
 uniform vec3 uSun; uniform float uCamAlt; uniform float uFogK; uniform float uNightK; uniform float uDebug;
-varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH;
+uniform vec4 uCloud; uniform int uCloudOct;
+varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH; varying vec3 vB;
+// 3-D simplex noise (Ian McEwan / Ashima Arts, MIT licence)
+vec3 mod289(vec3 x){ return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x){ return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x){ return mod289(((x * 34.0) + 1.0) * x); }
+vec4 taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
+float snoise(vec3 v){
+  const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0) * 2.0 + 1.0;
+  vec4 s1 = floor(b1) * 2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+}
+// Cloud cover (0..1) at Earth-fixed direction p: swirled fractal noise, with the planet's weather belts — the
+// cloudy tropical convergence zone, clear subtropics, stormy mid-latitudes. uCloud = (fade, cos, sin, time).
+float clouds(vec3 p, float dist){
+  float lat = asin(clamp(p.y, -1.0, 1.0)) * 57.2958, al = abs(lat);
+  // drift east with the weather, slowly reshaping
+  vec3 q = vec3(p.x * uCloud.y - p.z * uCloud.z, p.y, p.x * uCloud.z + p.z * uCloud.y) * 2.6 + vec3(0.0, 0.0, uCloud.w);
+  // swirl: storms coil the opposite way in each hemisphere
+  vec3 q0 = q;
+  vec3 w = vec3(snoise(q * 0.7), snoise(q * 0.7 + 17.3), snoise(q * 0.7 - 9.1));
+  q += w * (0.55 + 0.25 * smoothstep(30.0, 60.0, al));
+  // detail down to a few pixels: more octaves close up (each octave's wavelength is ~2,450 km / 2.07^i)
+  float nOct = min(float(uCloudOct), log(2.45e6 / max(dist * 0.004, 1.0)) / log(2.07));
+  float f = 0.0, a = 0.5, fr = 1.0;
+  for (int i = 0; i < 12; i++) {
+    float fi = float(i);
+    if (fi >= nOct) break;
+    f += a * snoise(q * fr) * clamp(nOct - fi, 0.0, 1.0);
+    fr *= 2.07; a *= i < 3 ? 0.48 : 0.56;
+  }
+  float cover = 0.47 + 0.2 * exp(-pow((lat - 6.0) / 9.0, 2.0)) - 0.17 * exp(-pow((al - 24.0) / 11.0, 2.0)) + 0.16 * exp(-pow((al - 56.0) / 13.0, 2.0)) - 0.08 * smoothstep(70.0, 88.0, al);
+  float c = smoothstep(0.0, 0.42, f + cover - 0.5);
+  // thin high cirrus, drawn out along the jet streams
+  vec3 qc = (vec3(q0.x, q0.y * 3.2, q0.z) + w * 0.15) * 1.7 + 31.0;
+  float ci = smoothstep(0.2, 0.8, snoise(qc) + 0.5 * snoise(qc * 2.3)) * (0.06 + 0.26 * smoothstep(25.0, 50.0, al));
+  return max(c, ci);
+}
 void main(){
   #include <logdepthbuf_fragment>
   vec3 alb = texture2D(map, uImg.xy + vUv * uImg.z).rgb;
@@ -50,9 +121,17 @@ void main(){
     float fr = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
     col += sunCol * pow(max(dot(N, Hh), 0.0), 180.0) * (0.12 + 1.6 * fr) * day;
   }
+  float cl = 0.0;
+  if (uCloud.x > 0.001) {
+    cl = clouds(normalize(vB), length(vW)) * uCloud.x;
+    // tops lit by the sun (reddened at the terminator), a little grey in their thick cores
+    vec3 cSun = mix(vec3(1.0, 0.58, 0.38), vec3(1.0, 0.98, 0.96), smoothstep(0.0, 0.12, sd));
+    vec3 cc = cSun * (0.9 * sqrt(max(sd + 0.04, 0.0)) * smoothstep(-0.06, 0.06, sd) + 0.04 * day) * (1.0 - 0.18 * cl * cl) + vec3(0.003, 0.004, 0.007);
+    col = mix(col, cc, cl * 0.92);
+  }
   if (uHasNight > 0.5) {
     vec3 nl = texture2D(nightMap, uNight.xy + vUv * uNight.z).rgb;
-    col += nl * nl * vec3(1.0, 0.82, 0.55) * 1.6 * (1.0 - smoothstep(-0.15, 0.02, sd)) * uNightK;
+    col += nl * nl * vec3(1.0, 0.82, 0.55) * 1.6 * (1.0 - smoothstep(-0.15, 0.02, sd)) * uNightK * (1.0 - 0.75 * cl);
   }
   float Hs = 8000.0;
   float hc = max(uCamAlt, 0.0), hf = max(vH, 0.0), dh = hc - hf;
@@ -61,11 +140,12 @@ void main(){
   float od = length(vW) * dens * uFogK;
   float hiCam = smoothstep(4000.0, 60000.0, hc);
   vec3 kRGB = mix(vec3(0.92, 1.0, 1.1), vec3(0.4, 0.75, 1.6), hiCam);
-  vec3 fog = 1.0 - exp(-od * kRGB);
+  vec3 fog = (1.0 - exp(-od * kRGB)) * (1.0 - 0.45 * cl);   // cloud tops sit above much of the haze
   vec3 haze = mix(vec3(1.0, 0.55, 0.32), mix(vec3(0.56, 0.68, 0.88), vec3(0.45, 0.62, 0.95), hiCam), smoothstep(0.0, 0.35, sd)) * smoothstep(-0.18, 0.12, sd);
   // seen from space the sky's glow follows the sunlight: bright under a high sun, fading toward the terminator
-  haze *= mix(1.0, 0.35 + 0.75 * smoothstep(0.0, 0.7, sd), hiCam);
+  haze *= mix(1.0, (0.3 + 0.55 * smoothstep(0.0, 0.7, sd)), hiCam);
   col = col * (1.0 - fog) + haze * fog;
+  if (uDebug > 1.5) col = vec3(cl);
   gl_FragColor = vec4(col, 1.0);
   #include <colorspace_fragment>
 }`;
@@ -238,7 +318,7 @@ export class Planet {
     if (this.kind === 'earth') {
       Object.assign(u, {
         nightMap: { value: ntex || this.whiteTex }, uNight: { value: new THREE.Vector3(...(nwin || [0, 0, 1])) }, uHasNight: { value: ntex ? 1 : 0 },
-        uCamAlt: s.uCamAlt, uFogK: s.uFogK, uNightK: s.uNightK, uDebug: s.uDebug,
+        uCamAlt: s.uCamAlt, uFogK: s.uFogK, uNightK: s.uNightK, uDebug: s.uDebug, uCloud: s.uCloud, uCloudOct: s.uCloudOct,
       });
     } else u.uEarthshine = s.uEarthshine;
     return new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: this.kind === 'earth' ? FRAG_EARTH : FRAG_MOON });

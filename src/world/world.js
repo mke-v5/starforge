@@ -23,6 +23,8 @@ export class World {
       uNightK: { value: 1 },
       uDebug: { value: 0 },
       uEarthshine: { value: 0.01 },
+      uCloud: { value: new THREE.Vector4(0, 1, 0, 0) },
+      uCloudOct: { value: { low: 5, medium: 8, high: 11 }[settings.quality || 'medium'] || 8 },
       anisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
       night: 0,
     };
@@ -136,6 +138,12 @@ export class World {
     this.sky.sun.position.copy(sun).multiplyScalar(4e9);
     const ground = this.earth.heightAt(ll.lat, ll.lon).h;
     this.shared.uCamAlt.value = Math.max(0, ll.h);
+    // clouds: painted onto the globe, so they only show from high up (they fade in through the stratosphere)
+    {
+      const on = this.settings.clouds !== '0';
+      const t = eph.t || 0, rot = (t / 86400) * 0.35;
+      this.shared.uCloud.value.set(on ? smoothstep(9000, 30000, ll.h) : 0, Math.cos(rot), Math.sin(rot), ((t / 86400) * 0.04) % 50);
+    }
     const up = _w.copy(camI).normalize();
     const sunEl = up.dot(sun);
     const air = Math.exp(-Math.max(0, ll.h) / 8000);

@@ -66,8 +66,9 @@ export class Craft {
           e, pos: new THREE.Vector3(...def.nozzle).applyMatrix4(T),
           dir: new THREE.Vector3(...def.thrustAxis).applyMatrix3(N).normalize(),
           thr: 0, mode: e.type === 'hybrid' ? 'air' : e.type, flame: 0, thrust: 0, active: true,
-          gx: new THREE.Vector3(1, 0, 0).applyMatrix3(N).normalize(), gz: new THREE.Vector3(0, 0, 1).applyMatrix3(N).normalize(),
-          g1: 0, g2: 0,
+          // gimbal axes: the two part axes across the thrust line (side-mounted lift engines thrust along their x axis)
+          gx: new THREE.Vector3(...(Math.abs(def.thrustAxis[0]) > 0.5 ? [0, 1, 0] : [1, 0, 0])).applyMatrix3(N).normalize(), gz: new THREE.Vector3(0, 0, 1).applyMatrix3(N).normalize(),
+          g1: 0, g2: 0, dq: 0,
         };
       }
       if (def.gear) {
@@ -227,8 +228,11 @@ export class Craft {
   engineOutput(P, env) {
     const E = P.eng, e = E.e;
     const sig = env.rho / 1.225;
+    if (E.mode === 'jet' || E.mode === 'air' || E.mode === 'scram') {
+      // air-breathers need oxygen: nothing to burn in thin air or in the carbon dioxide of Mars
+      if (env.rho < 1e-4 || (env.body && env.body.id === 'mars')) return [0, 0];
+    }
     if (E.mode === 'jet' || E.mode === 'air') {
-      if (env.rho < 1e-4) return [0, 0];
       const maxM = e.maxMach, M = env.mach;
       let mf;
       if (e.type === 'hybrid') mf = (1 + 0.55 * Math.min(M, 3.6)) * (1 - smoothstep(maxM - 1.6, maxM, M)) * 0.62;
@@ -325,7 +329,10 @@ export class Craft {
     const k = smoothstep(stall, stall + 0.25, Math.abs(ad));
     let cl = lin * (1 - k) + plate * k;
     let cd = 0.006 + (M > 0.85 ? 0.012 * smoothstep(0.85, 1.1, M) : 0) + (cl * cl) / (Math.PI * 0.85 * ar) * (1 - k) + 1.2 * sa * sa * k + Math.abs(defl) * 0.02;
-    let dCl = cla * W.tau * (1 - k * 0.7);           // lift change per radian of control deflection
+    // lift change per radian of control deflection: the slope of the same curve (it flips sign past ~45°,
+    // where a deflected flap on a wing falling flat pushes the other way)
+    const clAt = (x) => { const kk = smoothstep(stall, stall + 0.25, Math.abs(x)); return cla * Math.sin(x) * Math.cos(x) * (1 - kk) + 1.1 * Math.sin(2 * x) * kk; };
+    let dCl = W.tau * (clAt(ad + 0.02) - clAt(ad - 0.02)) / 0.04;
     // hypersonic flow (Newtonian impact): normal force 2·sin²(incidence) on the fixed part and on the moving
     // control surface, which sees its full deflection — flaps get stronger at high angles of attack
     const hyp = smoothstep(2.5, 5, M);

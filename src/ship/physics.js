@@ -222,7 +222,8 @@ export class Ship {
       eng.thr += clamp(cmd - eng.thr, -rate * dt, rate * dt);
       if (eng.thr < 1e-4) { eng.flame = 0; eng.thrust = 0; continue; }
       const [Tmax, isp] = craft.engineOutput(P, E);
-      let T = Tmax * eng.thr * (eng.bal ?? 1);
+      // dq: differential throttle trim from the attitude controller (fast-spooling engines only)
+      let T = Tmax * Math.min(1, eng.thr * (eng.bal ?? 1) * (1 + (eng.dq || 0)));
       if (T <= 0 || isp <= 0) { eng.flame = 0; eng.thrust = 0; continue; }
       const mdot = T / (isp * G0);
       const mix = craft.fuelMix(P);

@@ -1,13 +1,40 @@
 // Flight control computer: fly-by-wire rate control, SAS pointing modes, actuator mixing and autopilots.
 
 import * as THREE from 'three';
-import { EARTH, MOON, G0, clamp, smoothstep, D2R, fmtTime, gcDist, gcBearing, llh } from '../core/geo.js';
-import { elements, relState, burnTime, planCircularize, propagate, engineClass, ENTRY_GLIDE, glideRange, coastGround, predict, planReturn, planCorrection, planDeorbitTo, planLandingTo, landingModel, fallDrag, brakeSim, thrustScale, fallLanding, basis, moonLanding, moonToI, moonFixed, deltaV } from './orbit.js';
+import { EARTH, MOON, MARS, SUN, G0, clamp, smoothstep, D2R, fmtTime, gcDist, gcBearing, llh } from '../core/geo.js';
+import { elements, relState, burnTime, planCircularize, propagate, engineClass, ENTRY_GLIDE, glideRange, coastGround, predict, planReturn, planCorrection, planDeorbitTo, planLandingTo, landingModel, fallDrag, brakeSim, thrustScale, fallLanding, basis, moonLanding, moonToI, moonFixed, deltaV, bodyPos, bodyVelAt } from './orbit.js';
 import { moonPos, moonVel, earthAngle, gravity } from '../core/astro.js';
-import { atmosphere } from '../core/atmo.js';
+import { atmosphere, airAt } from '../core/atmo.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
+const _e = new THREE.Vector3(), _remR = new THREE.Vector3();
+const DQ_MAX = 0.3, DQ_SPOOL = 0.8;   // differential throttle: trim range and the slowest engine that can use it
+const _t1 = new THREE.Vector3(), _M = new THREE.Matrix3(), _y = new THREE.Vector3(), _rq = new THREE.Vector3();
+
+// Torque allocation over a set of actuators, each giving torque vector ts[i] at full command (+1).
+// Least squares with the request first clipped, per axis, to what the set can give on that axis — so an axis
+// the actuators barely reach (roll for a single gimballed engine on the centre line) can't drive them hard
+// and spill huge torques onto the other axes — then scaled down as a whole if any command would pass ±1.
+function solveAlloc(ts, req) {
+  let cx = 0, cy = 0, cz = 0;
+  let a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;   // symmetric 3x3: [a d e; d b f; e f c]
+  for (const t of ts) {
+    cx += Math.abs(t.x); cy += Math.abs(t.y); cz += Math.abs(t.z);
+    a += t.x * t.x; b += t.y * t.y; c += t.z * t.z; d += t.x * t.y; e += t.x * t.z; f += t.y * t.z;
+  }
+  const out = new Array(ts.length).fill(0);
+  const tr = a + b + c;
+  if (!(tr > 1e-12)) return out;
+  _rq.set(clamp(req.x, -cx, cx), clamp(req.y, -cy, cy), clamp(req.z, -cz, cz));
+  const l = tr * 1e-6;
+  _M.set(a + l, d, e, d, b + l, f, e, f, c + l).invert();
+  _y.copy(_rq).applyMatrix3(_M);
+  let m = 1;
+  ts.forEach((t, i) => { out[i] = t.dot(_y); m = Math.max(m, Math.abs(out[i])); });
+  if (m > 1) for (let i = 0; i < out.length; i++) out[i] /= m;
+  return out;
+}
 const _err = new THREE.Vector3(), _treq = new THREE.Vector3(), _ga = new THREE.Vector3(), _gb = new THREE.Vector3(), _gc = new THREE.Vector3();
 const NOSE = new THREE.Vector3(0, 0, -1), UPB = new THREE.Vector3(0, 1, 0);
 
@@ -33,14 +60,14 @@ export class Controller {
   // ----- reference directions (world) -----
   refVel(ship) {
     const E = ship.env;
-    if (E.body === EARTH && E.h < 50000) return E.vAir.clone();
+    if ((E.body === EARTH || E.body === MARS) && E.h < 50000) return E.vAir.clone();
     if (E.body === MOON && E.agl < 20000) return E.vAir.clone();
     if (E.body === EARTH) return ship.v.clone();
-    moonVel(ship.t, _a); return ship.v.clone().sub(_a);
+    return ship.v.clone().sub(bodyVelAt(E.body, ship.t, _a));
   }
   refPos(ship) {
     if (ship.env.body === EARTH) return ship.r.clone();
-    moonPos(ship.t, _a); return ship.r.clone().sub(_a);
+    return ship.r.clone().sub(bodyPos(ship.env.body, ship.t, _a));
   }
   modeDir(ship, mode) {
     const v = this.refVel(ship), r = this.refPos(ship);
@@ -110,10 +137,10 @@ export class Controller {
     const beta = V > 5 ? Math.atan2(vb.x, -vb.z) : 0;
     let pointing = false;
     // near a planet, rates and attitude hold are relative to the rotating surface, not the stars
-    const local = (E.body === EARTH && E.h < 100000) || (E.body === MOON && E.agl < 30000);
+    const local = (E.body === EARTH && E.h < 100000) || (E.body === MOON && E.agl < 30000) || (E.body === MARS && E.h < 100000);
     const wRef = _d.set(0, 0, 0);
     if (local) {
-      if (E.body === EARTH) wRef.set(0, EARTH.omega, 0); else wRef.copy(ship.eph.mY).multiplyScalar(MOON.omega);
+      if (E.body === EARTH) wRef.set(0, EARTH.omega, 0); else wRef.copy(E.body === MARS ? ship.eph.aY : ship.eph.mY).multiplyScalar(E.body.omega);
       ship.dirToBody(wRef, wRef);
     }
     const frameQ = local ? ship.bodyFrameQ(E.body, ship.t, new THREE.Quaternion()) : null;
@@ -223,7 +250,7 @@ export class Controller {
       const north = new THREE.Vector3(0, 1, 0).addScaledVector(upW, -upW.y).normalize();
       const east = new THREE.Vector3().crossVectors(north, upW);
       const hdg = Math.atan2(fw.dot(east), fw.dot(north));
-      const yawRate = ship.w.clone().applyQuaternion(ship.q).dot(upW) - (E.body === EARTH ? EARTH.omega * upW.y : 0);
+      const yawRate = ship.w.clone().applyQuaternion(ship.q).dot(upW) - (E.body === EARTH ? EARTH.omega * upW.y : E.body === MARS ? MARS.omega * ship.eph.aY.dot(upW) : 0);
       if (Math.abs(inp.yaw) > 0.05 || Math.abs(inp.roll) > 0.05 || E.vSurf < 3) this.gHeading = hdg;
       if (this.gHeading == null) this.gHeading = hdg;
       let he = this.gHeading - hdg; he = Math.atan2(Math.sin(he), Math.cos(he));
@@ -287,6 +314,15 @@ export class Controller {
       _gb.crossVectors(_ga, _gc.copy(P.eng.gx).multiplyScalar(T)); a.x += Math.abs(_gb.x); a.y += Math.abs(_gb.y); a.z += Math.abs(_gb.z);
       _gb.crossVectors(_ga, _gc.copy(P.eng.gz).multiplyScalar(T)); a.x += Math.abs(_gb.x); a.y += Math.abs(_gb.y); a.z += Math.abs(_gb.z);
     }
+    // differential throttle between engines (an engine near full throttle can only throttle down: average the two ways)
+    for (const P of craft.engines) {
+      if (!(P.eng.thrust > 0) || !(P.eng.e.spool <= DQ_SPOOL)) continue;
+      const lvl = Math.max(0.05, P.eng.thr * (P.eng.bal ?? 1));
+      const span = (Math.min(DQ_MAX, Math.max(0, 1 / lvl - 1)) + DQ_MAX) * 0.5;
+      _ga.copy(P.eng.pos).sub(craft.com);
+      _gb.crossVectors(_ga, _gc.copy(P.eng.dir).multiplyScalar(P.eng.thrust / (1 + (P.eng.dq || 0)) * span));
+      a.x += Math.abs(_gb.x); a.y += Math.abs(_gb.y); a.z += Math.abs(_gb.z);
+    }
     if (ship.ctl.rcs && ship.env.rho < 0.05) for (const P of craft.rcsList) {
       const l = P.rcs.pos.distanceTo(craft.com) * P.def.rcs.thrust * 2;
       a.x += l; a.y += l; a.z += l;
@@ -301,43 +337,57 @@ export class Controller {
     const uw = _a.set(clamp(tReq.x, -W, W), clamp(tReq.y, -W, W), clamp(tReq.z, -W, W));
     ship.cmdT.set(W ? uw.x / W : 0, W ? uw.y / W : 0, W ? uw.z / W : 0);
     const rem = _b.copy(tReq).sub(uw);
-    // 2. control surfaces (least squares per axis)
-    let sx = 0, sy = 0, sz = 0;
-    for (const P of craft.wings) if (P.wing.ctrl > 0) { const t = P.wing.torq; sx += t.x * t.x; sy += t.y * t.y; sz += t.z * t.z; }
-    const got = _c.set(0, 0, 0);
-    const rateLim = 3.0 * dt;
+    // 2. control surfaces (deflection per surface, rate limited)
+    const wl = [];
     for (const P of craft.wings) {
       const Wg = P.wing;
       if (Wg.ctrl <= 0) { Wg.defl = 0; continue; }
-      const t = Wg.torq;
-      let d = (sx > 1e-9 ? rem.x * t.x / sx : 0) + (sy > 1e-9 ? rem.y * t.y / sy : 0) + (sz > 1e-9 ? rem.z * t.z / sz : 0);
-      d = clamp(d, -Wg.maxDefl, Wg.maxDefl);
-      Wg.defl += clamp(d - Wg.defl, -rateLim, rateLim);
-      got.addScaledVector(t, Wg.defl);
+      wl.push(_t1.copy(Wg.torq).multiplyScalar(Wg.maxDefl).clone());
     }
-    rem.sub(got);
-    // 3. engine gimbal
-    let gx = 0, gy = 0, gz = 0;
-    const gl = [];
+    const got = _c.set(0, 0, 0);
+    if (wl.length) {
+      const k = solveAlloc(wl, rem);
+      const rateLim = 3.0 * dt;
+      let i = 0;
+      for (const P of craft.wings) {
+        const Wg = P.wing;
+        if (Wg.ctrl <= 0) continue;
+        Wg.defl += clamp(k[i++] * Wg.maxDefl - Wg.defl, -rateLim, rateLim);
+        got.addScaledVector(Wg.torq, Wg.defl);
+      }
+      rem.sub(got);
+    }
+    // 3. engine gimbal (two axes across each engine's thrust line)
+    const gl = [], gt = [];
     for (const P of craft.engines) {
       const gm = (P.eng.e.gimbal || 0) * D2R;
       if (!gm || P.eng.thrust <= 0) { P.eng.g1 = P.eng.g2 = 0; continue; }
-      const r = new THREE.Vector3().copy(P.eng.pos).sub(craft.com);
+      const r = _d.copy(P.eng.pos).sub(craft.com);
       const T = P.eng.thrust * gm;
-      const t1 = new THREE.Vector3().crossVectors(r, P.eng.gx.clone().multiplyScalar(T));
-      const t2 = new THREE.Vector3().crossVectors(r, P.eng.gz.clone().multiplyScalar(T));
-      gl.push([P, t1, t2]);
-      gx += t1.x * t1.x + t2.x * t2.x; gy += t1.y * t1.y + t2.y * t2.y; gz += t1.z * t1.z + t2.z * t2.z;
+      gl.push(P);
+      gt.push(new THREE.Vector3().crossVectors(r, _e.copy(P.eng.gx).multiplyScalar(T)), new THREE.Vector3().crossVectors(r, _e.copy(P.eng.gz).multiplyScalar(T)));
     }
-    for (const [P, t1, t2] of gl) {
-      const g1 = (gx > 1e-9 ? rem.x * t1.x / gx : 0) + (gy > 1e-9 ? rem.y * t1.y / gy : 0) + (gz > 1e-9 ? rem.z * t1.z / gz : 0);
-      const g2 = (gx > 1e-9 ? rem.x * t2.x / gx : 0) + (gy > 1e-9 ? rem.y * t2.y / gy : 0) + (gz > 1e-9 ? rem.z * t2.z / gz : 0);
-      P.eng.g1 = clamp(g1, -1, 1); P.eng.g2 = clamp(g2, -1, 1);
+    _remR.copy(rem);
+    if (gl.length) {
+      const k = solveAlloc(gt, rem);
+      gl.forEach((P, i) => { P.eng.g1 = k[2 * i]; P.eng.g2 = k[2 * i + 1]; rem.addScaledVector(gt[2 * i], -k[2 * i]).addScaledVector(gt[2 * i + 1], -k[2 * i + 1]); });
+    }
+    // 3b. differential throttle (lift engines fore and aft or left and right of the centre of mass)
+    const dl = [], dt_ = [];
+    for (const P of craft.engines) {
+      const e = P.eng;
+      if (!(e.thrust > 0) || !(e.e.spool <= DQ_SPOOL)) { e.dq += clamp(-e.dq, -dt * 2, dt * 2); continue; }
+      const r = _d.copy(e.pos).sub(craft.com);
+      dl.push(e); dt_.push(new THREE.Vector3().crossVectors(r, _e.copy(e.dir).multiplyScalar(e.thrust / (1 + e.dq) * DQ_MAX)));
+    }
+    if (dl.length) {
+      const k = solveAlloc(dt_, rem);
+      dl.forEach((e, i) => { const rate = dt / Math.max(0.1, e.e.spool); e.dq += clamp(k[i] * DQ_MAX - e.dq, -rate, rate); });
     }
     // 4. RCS gets the rest (as a direction)
-    const rl = rem.length();
+    const rl = _remR.length();
     ship.rcsT = ship.rcsT || new THREE.Vector3();
-    if (rl > 1) ship.rcsT.copy(rem).divideScalar(Math.max(rl, craft.mass * 20)); else ship.rcsT.set(0, 0, 0);
+    if (rl > 1) ship.rcsT.copy(_remR).divideScalar(Math.max(rl, craft.mass * 20)); else ship.rcsT.set(0, 0, 0);
   }
 
   // during time warp: snap attitude to the SAS/AP direction
@@ -361,7 +411,7 @@ export function nodeExec(node) {
   let left = node.dv.length();
   let started = false, startedAt = 0, comp = null, body = node.body || null, eTarget = null, eSign = 1;
   let dvVec = node.dv.clone(), frozenDir = null;   // remaining delta-v (inertial) for short / off-prograde burns
-  const muOf = (b) => (b === MOON ? MOON.mu : EARTH.mu);
+  const muOf = (b) => b.mu;
   const basisNow = (ship) => {
     const b = body || ship.env.body;
     const rs = relState(ship, b);
@@ -389,7 +439,7 @@ export function nodeExec(node) {
         // express the planned burn in the orbital frame at the node
         if (!body) body = ship.env.body;
         const st = node.t > ship.t + 1 ? propagate(ship.r, ship.v, ship.t, node.t - ship.t) : { r: ship.r, v: ship.v, t: ship.t };
-        const rs = body === EARTH ? { r: st.r, v: st.v } : (() => { const m = moonPos(st.t, new THREE.Vector3()), mv = moonVel(st.t, new THREE.Vector3()); return { r: st.r.clone().sub(m), v: st.v.clone().sub(mv) }; })();
+        const rs = relState({ r: st.r, v: st.v, t: st.t }, body);
         const pro = rs.v.clone().normalize(), nor = new THREE.Vector3().crossVectors(rs.r, rs.v).normalize(), rad = new THREE.Vector3().crossVectors(nor, pro).normalize();
         const d = node.dv.clone().normalize();
         comp = new THREE.Vector3(d.dot(pro), d.dot(nor), d.dot(rad));
@@ -529,14 +579,15 @@ export function landAp(target = null) {
       const rs = relState(ship, body);
       const el = elements(rs.r, rs.v, body.mu);
       const ground = E.h - E.agl;                       // terrain height under us
-      const vac = E.rho < 0.01;
+      const vac = E.rho < (body === MARS ? 0.05 : 0.01);
       // big burns on the efficient main engine, the final hover on lift thrusters when the craft has them
       const brakeEng = hasMain && (vac || !hasLift) ? 'main' : hasLift ? 'lift' : 'all';
       const finalEng = hasLift ? 'lift' : hasMain ? 'main' : 'all';
       const swap = brakeEng !== finalEng;
       // where the braking burn should bring us to rest (higher when the craft must then turn over onto hover thrusters,
       // falling while it turns)
-      const hTarget = (swap ? SWAP_H : 120) + 0.03 * agl;
+      // (on Mars, stop high: the thin air still pushes hard on a ship flying tail-first at orbital speed)
+      const hTarget = body === MARS ? 5000 + 0.03 * agl : (swap ? SWAP_H : 120) + 0.03 * agl;
       if (!phase) {
         const alive = craft.engines.filter((P) => P.alive !== false);
         hasMain = alive.some((P) => engineClass(P) === 'main');
@@ -546,10 +597,11 @@ export function landAp(target = null) {
         else if (vh > 60 && agl > 1500) phase = 'coast';
         else phase = 'final';
       }
-      if (body === EARTH && !model) model = fallModel(craft, axis, Math.max(0, ground), swap ? SWAP_H : 120);
+      const airy = body === EARTH || body === MARS;
+      if (airy && !model) model = fallModel(craft, axis, body === MARS ? ground : Math.max(0, ground), swap ? SWAP_H : 120);
       // in air the braking model includes drag, and rocket thrust that drops in thick air (a is the vacuum value)
-      const aVac = body === EARTH ? amax / model.tScale(E.p) : amax;
-      const air = body === EARTH && E.h < EARTH.atmoTop ? { k: model.k, ground: Math.max(0, ground), tScale: model.tScale } : null;
+      const aVac = airy ? amax / model.tScale(E.p) : amax;
+      const air = airy && E.h < body.atmoTop ? { k: model.k, ground: body === MARS ? ground : Math.max(0, ground), tScale: model.tScale, air: body === MARS ? (h) => airAt(MARS, h) : null } : null;
       if (amax < g * 1.05 && agl < 20000 && phase !== 'deorbit') return { done: true, throttle: 0, msg: 'Not enough thrust to land' };
 
       if (phase === 'deorbit') {
@@ -602,7 +654,7 @@ export function landAp(target = null) {
         }
         // how early must braking start? keep a 15 % thrust reserve
         const stop = brakeSim(agl, vz, vh, aVac * 0.85, g, body.R, air);
-        if (stop <= hTarget) phase = 'brake';
+        if (stop <= hTarget || (body === MARS && E.h < 95000 && vz < 0)) phase = 'brake';
         else {
           // tell the game how long it may time-warp before we need control again
           if (ship.t - lastWake > 20) {
@@ -611,6 +663,7 @@ export function landAp(target = null) {
             if (guided && !onMoon && corr === 0) ap.wakeAt = Math.min(ap.wakeAt, coastStart + 290, timeToAlt(ship, 152000));
             if (guided && !onMoon && corr === 1) ap.wakeAt = Math.min(ap.wakeAt, timeToAlt(ship, 130000));
             if (guided && onMoon && corr === 0) ap.wakeAt = Math.min(ap.wakeAt, coastStart + 250);
+            if (body === MARS) ap.wakeAt = Math.min(ap.wakeAt, timeToAlt(ship, 100000, MARS) - 30);
           }
           let st = ap.wakeAt ? `Coasting · braking in ${fmtTime(Math.max(0, ap.wakeAt + 60 - ship.t))}` : 'Coasting to braking burn';
           if (guided) {
@@ -629,7 +682,7 @@ export function landAp(target = null) {
           const dir = vS.clone().normalize().negate();
           let thr;
           const aRef = air ? aVac : amax;
-          if (brakeSim(agl, vz, vh, aRef * 0.97, g, body.R, air) <= hTarget) thr = 1;
+          if (brakeSim(agl, vz, vh, aRef * 0.97, g, body.R, air) <= hTarget || (body === MARS && sp > 700)) thr = 1;
           else {
             let lo = 0, hi = 0.97;
             for (let i = 0; i < 8; i++) { const m = (lo + hi) / 2; if (brakeSim(agl, vz, vh, aRef * m, g, body.R, air) > hTarget) hi = m; else lo = m; }
@@ -642,7 +695,8 @@ export function landAp(target = null) {
 
       // final: vertical descent, kill horizontal drift, land upright
       const anet = Math.max(0.6, amax * 0.85 - g);
-      let vzT = -clamp(Math.sqrt(2 * anet * agl) * 0.5, 1.3, 80);
+      // (in Mars' air, sink slowly: a winged ship falling belly-first gets pushed around by the wind of its fall)
+      let vzT = -clamp(Math.sqrt(2 * anet * agl) * 0.5, 1.3, body === MARS ? (E.rho > 0.003 && craft.wings.length ? 28 : 140) : 80);
       let hor = vH.clone().multiplyScalar(agl < 30 ? -1.0 : -0.6);
       let maxTilt = agl < 30 ? 0.18 : agl < 300 ? 0.3 : 0.6;
       let status = agl > 100 ? 'Descending' : 'Touchdown in ' + Math.max(0, agl / Math.max(1, -vz)).toFixed(0) + ' s';
@@ -691,10 +745,11 @@ function fallModel(craft, axis, ground, hTarget) {
   return { cda: k, k: (M) => k(M) / craft.mass, tScale: thrustScale(craft), ground, hTarget };
 }
 
-// When the craft will be down to altitude `alt` (vacuum coast)
-function timeToAlt(ship, alt) {
+// When the craft will be down to altitude `alt` above `body` (vacuum coast)
+function timeToAlt(ship, alt, body = EARTH) {
   let st = { r: ship.r.clone(), v: ship.v.clone(), t: ship.t };
-  for (let k = 0; k < 400; k++) { const n = propagate(st.r, st.v, st.t, 15); if (n.r.length() - EARTH.R < alt) return st.t; st = n; }
+  const c = new THREE.Vector3();
+  for (let k = 0; k < 400; k++) { const n = propagate(st.r, st.v, st.t, 15); if (n.r.distanceTo(bodyPos(body, n.t, c)) - body.R < alt) return st.t; st = n; }
   return st.t;
 }
 
@@ -737,6 +792,7 @@ function estimateBrakeStart(ship, amax, groundRef) {
   for (let i = 0; i < 400; i++) {
     let r = st.r, v = st.v;
     if (body === MOON) { moonPos(st.t, m); moonVel(st.t, mv); r = st.r.clone().sub(m); v = st.v.clone().sub(mv); }
+    else if (body === MARS) { bodyPos(MARS, st.t, m); bodyVelAt(MARS, st.t, mv); r = st.r.clone().sub(m); v = st.v.clone().sub(mv).sub(ship.eph.aY.clone().multiplyScalar(MARS.omega).cross(r)); }
     else v = v.clone().sub(new THREE.Vector3(0, EARTH.omega, 0).cross(r));
     const rl = r.length();
     const upv = r.clone().divideScalar(rl);
@@ -1121,19 +1177,19 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         return o;
       }
       const craft = ship.craft, E = ship.env, body = E.body;
-      const moon = body === MOON;
-      const tAlt = targetAlt ?? (moon ? 40000 : 160000);
+      const moon = body === MOON, mars = body === MARS, lowG = moon || mars;
+      const tAlt = targetAlt ?? (moon ? 40000 : mars ? 180000 : 160000);
       const up = E.up.clone();
-      const spin = moon ? new THREE.Vector3(0, Math.cos(0.4091), Math.sin(0.4091)) : new THREE.Vector3(0, 1, 0);
+      const spin = moon ? new THREE.Vector3(0, Math.cos(0.4091), Math.sin(0.4091)) : mars ? ship.eph.aY.clone() : new THREE.Vector3(0, 1, 0);
       const east = spin.clone().cross(up).normalize();      // toward local east in I
       const north = up.clone().cross(east).normalize();
       const hdg = north.clone().multiplyScalar(Math.cos(heading)).addScaledVector(east, Math.sin(heading));
       const rs = relState(ship, body);
       const el = elements(rs.r, rs.v, body.mu);
       const apAlt = el.ap - body.R, peAlt = el.pe - body.R;
-      const safePe = moon ? 15000 : EARTH.atmoTop + 5000;
+      const safePe = moon ? 15000 : body.atmoTop + 5000;
       if (phase === 'init') {
-        plane = !moon && craft.wings.reduce((s, P) => s + P.wing.area, 0) > craft.mass / 1500 && !craft.vertical;
+        plane = body === EARTH && craft.wings.reduce((s, P) => s + P.wing.area, 0) > craft.mass / 1500 && !craft.vertical;
         const alive = craft.engines.filter((P) => P.alive !== false);
         hasMain = alive.some((P) => engineClass(P) === 'main');
         hasLift = alive.some((P) => engineClass(P) === 'lift');
@@ -1157,13 +1213,13 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         if (peAlt > safePe) return { done: true, throttle: 0, msg: `Orbit reached: ${Math.round(apAlt / 1000)} × ${Math.round(peAlt / 1000)} km` };
         // once the high point reaches the target (and the air is too thin to matter), coast up to it and
         // circularize there instead of burning on: powerful engines would otherwise fling the apoapsis far out
-        const coastOk = moon ? (mainOn || !hasLift) && E.agl > 3000 : E.h > 100000;
+        const coastOk = moon ? (mainOn || !hasLift) && E.agl > 3000 : mars ? (mainOn || !hasLift) && E.h > 40000 : E.h > 100000;
         if (coastOk && apAlt > tAlt - 500) {
           if (circularize(ship, C)) return { throttle: 0, dir: rs.v.clone().normalize(), axis, status: 'coasting to apoapsis' };
         }
-        // engines: on the Moon, hop up on lift thrusters, then switch to the main engine for the climb to orbit
+        // engines: on the Moon or Mars, hop up on lift thrusters, then switch to the main engine for the climb to orbit
         let engines;
-        if (moon && hasLift && hasMain) {
+        if (lowG && hasLift && hasMain) {
           if (!mainOn && E.agl > 400 && E.vVert > 5) mainOn = true;
           engines = mainOn ? 'main' : 'lift';
         } else if (hasMain) engines = 'main';
@@ -1175,23 +1231,25 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         const vh = vI.clone().addScaledVector(up, -vz).length();
         const g = body.mu / (r * r);
         const aT = Math.max(0.1, maxAccel(ship));
-        const vzT = moon ? Math.min(150, Math.sqrt(2 * 0.8 * Math.max(0, tAlt - h))) * (apAlt > tAlt ? 0 : 1) : clamp((tAlt - h) / 80, 0, 900);
+        const vzT = moon ? Math.min(150, Math.sqrt(2 * 0.8 * Math.max(0, tAlt - h))) * (apAlt > tAlt ? 0 : 1)
+          : mars ? Math.min(450, Math.sqrt(2 * 1.2 * Math.max(0, tAlt - h))) * (apAlt > tAlt ? 0 : 1) : clamp((tAlt - h) / 80, 0, 900);
         const aVert = g - (vh * vh) / r + (vzT - vz) / 6;
         let s = clamp(aVert / aT, -0.25, 1);
         pitch = Math.asin(s) / D2R;
         if (moon) { if (E.agl < 400 || !mainOn && hasLift && hasMain) pitch = 90; else pitch = Math.max(pitch, E.agl < 3000 ? 20 : E.agl < 8000 ? 3 : -15); }
+        else if (mars) { if (E.agl < 400 || !mainOn && hasLift && hasMain) pitch = 90; else pitch = Math.max(pitch, E.agl < 3000 ? 40 : E.agl < 15000 ? 12 : -10); }
         else if (wasPlane) pitch = clamp(pitch, 3, 70);          // a spaceplane already flying: no vertical launch phase
         else if (h < 1500 || E.vSurf < 80) pitch = 90;
         else if (h < 12000) pitch = Math.max(pitch, 90 - (h - 1500) / 10500 * 35);
         const dir = up.clone().multiplyScalar(Math.sin(pitch * D2R)).addScaledVector(hdg, Math.cos(pitch * D2R)).normalize();
         if (E.q > 35000) thr = 0.7;
-        if (moon) thr = Math.min(thr, (2.5 * G0) / aT);              // a gentler ride on very powerful landers
+        if (lowG) thr = Math.min(thr, (2.5 * G0) / aT);              // a gentler ride on very powerful landers
         const vCirc = Math.sqrt(body.mu / r);
-        if (vh > vCirc * 0.95) thr = Math.min(thr, clamp((safePe + 3000 - peAlt) / (moon ? 15000 : 60000), 0.06, 1));
+        if (vh > vCirc * 0.95) thr = Math.min(thr, clamp((safePe + 3000 - peAlt) / (moon ? 15000 : mars ? 30000 : 60000), 0.06, 1));
         // roll reference: -heading projected off the thrust axis keeps the cockpit facing up once pitched over
         const upRef = hdg.clone().negate();
-        if (!moon || E.agl > 30) ship.ctl.gear = E.agl < 200;
-        return { dir, axis, up: upRef, throttle: thr, engines, status: moon ? (mainOn || !hasLift ? 'Climbing to orbit' : 'Lift-off') : undefined };
+        if (!lowG || E.agl > 30) ship.ctl.gear = E.agl < 200;
+        return { dir, axis, up: upRef, throttle: thr, engines, status: lowG ? (mainOn || !hasLift ? 'Climbing to orbit' : 'Lift-off') : undefined };
       }
       // spaceplane profile: take off and climb on the jets, then light the rocket / fusion engines.
       // Hover thrusters stay off. Hybrid engines switch modes by themselves.

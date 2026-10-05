@@ -99,14 +99,15 @@ export function helio(key, t, out) {
   const ze = (so * sI) * xp + (co * sI) * yp;
   return eclJ2000ToI(xe, ye, ze, T, out);
 }
-const _h1 = new THREE.Vector3(), _h2 = new THREE.Vector3();
+const _h1 = new THREE.Vector3(), _h2 = new THREE.Vector3(), _h3 = new THREE.Vector3();
 // the Sun's centre and Mars' centre in frame I (geocentric)
 export function sunPos(t, out) { return helio('earth', t, out).negate(); }
-export function marsPos(t, out) { helio('mars', t, out); return out.sub(helio('earth', t, _h1)); }
-export function marsVel(t, out) { marsPos(t + 30, _h1); marsPos(t - 30, _h2); return out.subVectors(_h1, _h2).divideScalar(60); }
-export function sunVel(t, out) { sunPos(t + 30, _h1); sunPos(t - 30, _h2); return out.subVectors(_h1, _h2).divideScalar(60); }
+export function marsPos(t, out) { helio('earth', t, _h3); return helio('mars', t, out).sub(_h3); }
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
+export function marsVel(t, out) { marsPos(t + 30, _v1); marsPos(t - 30, _v2); return out.subVectors(_v1, _v2).divideScalar(60); }
+export function sunVel(t, out) { sunPos(t + 30, _v1); sunPos(t - 30, _v2); return out.subVectors(_v1, _v2).divideScalar(60); }
 // any planet relative to the Earth, in frame I
-export function planetPos(key, t, out) { helio(key, t, out); return out.sub(helio('earth', t, _h1)); }
+export function planetPos(key, t, out) { helio('earth', t, _h3); return helio(key, t, out).sub(_h3); }
 
 // Orientation of Mars' body-fixed frame in I (IAU 2015 pole and prime meridian): columns X (lon 0), Y (north), Z.
 export function marsBasis(t, outX, outY, outZ) {

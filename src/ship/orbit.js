@@ -115,7 +115,7 @@ export function predict(r0, v0, t0, opts = {}) {
     if (de < EARTH.soi * 1.05) earthPts.push(s[0], s[1], s[2]);
     if (nowSoi) moonPts.push(dx, dy, dz, t);
     if (body === SUN || (body !== MARS && de > EARTH.soi * 0.7)) { sunPos(t, sp); sunPts.push(s[0] - sp.x, s[1] - sp.y, s[2] - sp.z, t); }
-    if (body === MARS || (D.da !== undefined && D.da < MARS.soi * 1.5)) {
+    if (body === MARS || D.da !== undefined) {
       marsPos(t, ap);
       const ax = s[0] - ap.x, ay = s[1] - ap.y, az = s[2] - ap.z, da = Math.hypot(ax, ay, az);
       if (body === MARS) marsPts.push(ax, ay, az, t);
@@ -179,8 +179,8 @@ export function propagate(r, v, t, dt) {
 // real Earth–Moon trajectory: far from a circular orbit the other body's pull can move it by many minutes.
 export function refineApsis(ship, body, dt0, peri = true) {
   const rv = (st) => {
-    if (body !== MOON) return st.r.dot(st.v);
-    moonPos(st.t, _m); moonVel(st.t, _mv);
+    if (body === EARTH) return st.r.dot(st.v);
+    bodyPos(body, st.t, _m); bodyVelAt(body, st.t, _mv);
     return st.r.clone().sub(_m).dot(st.v.clone().sub(_mv));
   };
   const W = clamp(dt0 * 0.25, 600, 6 * 3600), N = 48;
@@ -211,7 +211,7 @@ export function planCircularize(ship, atApo = true) {
   if (!isFinite(dtTo)) return null;
   if (el.e > 0.02 && dtTo > 300) dtTo = refineApsis(ship, body, dtTo, !atApo);
   const st = propagate(ship.r, ship.v, ship.t, dtTo);
-  const rel = body === EARTH ? { r: st.r, v: st.v } : (() => { moonPos(st.t, _m); moonVel(st.t, _mv); return { r: st.r.clone().sub(_m), v: st.v.clone().sub(_mv) }; })();
+  const rel = relState(st, body);
   const rl = rel.r.length();
   const vc = Math.sqrt(rs.mu / rl);
   const { pro, rad } = basis(rel.r, rel.v);
@@ -230,7 +230,7 @@ export function planPeriapsis(ship, targetAlt, now = false) {
   if (dtTo > 300 && el.e > 0.02 && el.e < 1) dtTo = refineApsis(ship, body, dtTo, false);
   const st = propagate(ship.r, ship.v, ship.t, dtTo);
   let r, v;
-  if (body === EARTH) { r = st.r; v = st.v; } else { moonPos(st.t, _m); moonVel(st.t, _mv); r = st.r.clone().sub(_m); v = st.v.clone().sub(_mv); }
+  ({ r, v } = relState(st, body));
   const { pro } = basis(r, v);
   // binary search the prograde/retrograde dv that gives the requested periapsis
   const target = rs.R + targetAlt;
@@ -248,13 +248,13 @@ export function planPeriapsis(ship, targetAlt, now = false) {
 // of work since the last break: each break costs a whole frame, which is slow on weak devices.
 let _lastYield = 0;
 const _now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-const yieldFrame = () => {
+export const yieldFrame = () => {
   if (_now() - _lastYield < 25) return Promise.resolve();
   return new Promise((r) => setTimeout(() => { _lastYield = _now(); r(); }, 0));
 };
 
 // thrust and mass flow of the active engines in vacuum (with thrust trim)
-function vacPerf(ship) {
+export function vacPerf(ship) {
   const craft = ship.craft;
   let T = 0, mdot = 0;
   for (const P of craft.engines) {
@@ -283,13 +283,13 @@ function simBurn(ship, perf, tNode, dv, body, sign = 1) {
     rk4(s, t, h);
     t += h;
     vr.set(s[3], s[4], s[5]);
-    if (body === MOON) vr.sub(moonVel(t, _mv));
+    if (body !== EARTH) vr.sub(bodyVelAt(body, t, _mv));
     vr.normalize().multiplyScalar(sign * perf.T / m * h);
     s[3] += vr.x; s[4] += vr.y; s[5] += vr.z;
     m -= perf.mdot * h;
   }
   const r = new THREE.Vector3(s[0], s[1], s[2]), v = new THREE.Vector3(s[3], s[4], s[5]);
-  const rr = body === MOON ? r.clone().sub(moonPos(t, _m)) : r, vv = body === MOON ? v.clone().sub(moonVel(t, _mv)) : v;
+  const rr = body !== EARTH ? r.clone().sub(bodyPos(body, t, _m)) : r, vv = body !== EARTH ? v.clone().sub(bodyVelAt(body, t, _mv)) : v;
   const energy = vv.lengthSq() / 2 - body.mu / rr.length();
   return { r, v, t, energy, bt };
 }
@@ -354,7 +354,7 @@ export async function planMoonTransfer(ship, targetAlt = 120000, onProgress) {
 // From lunar orbit (or flyby) back to Earth: target an Earth periapsis of ~45 km for aerobraking reentry.
 // ---- coming home from the Moon ----
 // Velocity at position r on the two-body hyperbola (about mu) whose outgoing asymptote is vInf.
-function hyperbolaVel(r, vInf, mu) {
+export function hyperbolaVel(r, vInf, mu) {
   const rl = r.length(), vi = vInf.length();
   const rh = r.clone().divideScalar(rl), u = vInf.clone().divideScalar(vi);
   const cphi = clamp(rh.dot(u), -1, 1);
@@ -400,7 +400,7 @@ function returnAim(t, goal, psi, vr) {
 
 // Simulate a finite burn whose direction is held fixed in the orbital frame (prograde/normal/radial
 // components `comp`) relative to `body`, centred on tNode — the way the burn executor flies it.
-function simBurnComp(base, perf, tNode, comp, dv, body) {
+export function simBurnComp(base, perf, tNode, comp, dv, body) {
   const ve = perf.T / perf.mdot;
   const bt = (perf.m0 - perf.m0 / Math.exp(Math.abs(dv) / ve)) / perf.mdot;
   const st0 = propagate(base.r, base.v, base.t, Math.max(0, tNode - bt / 2 - base.t));
@@ -412,14 +412,14 @@ function simBurnComp(base, perf, tNode, comp, dv, body) {
     rk4(s, t, h);
     t += h;
     r.set(s[0], s[1], s[2]); v.set(s[3], s[4], s[5]);
-    if (body === MOON) { r.sub(moonPos(t, _m)); v.sub(moonVel(t, _mv)); }
+    if (body !== EARTH) { r.sub(bodyPos(body, t, _m)); v.sub(bodyVelAt(body, t, _mv)); }
     nor.crossVectors(r, v).normalize(); v.normalize(); rad.crossVectors(nor, v);
     d.copy(v).multiplyScalar(comp.x).addScaledVector(nor, comp.y).addScaledVector(rad, comp.z).normalize().multiplyScalar(perf.T / m * h);
     s[3] += d.x; s[4] += d.y; s[5] += d.z;
     m -= perf.mdot * h;
   }
   const R = new THREE.Vector3(s[0], s[1], s[2]), V = new THREE.Vector3(s[3], s[4], s[5]);
-  const rr = body === MOON ? R.clone().sub(moonPos(t, _m)) : R, vv = body === MOON ? V.clone().sub(moonVel(t, _mv)) : V;
+  const rr = body !== EARTH ? R.clone().sub(bodyPos(body, t, _m)) : R, vv = body !== EARTH ? V.clone().sub(bodyVelAt(body, t, _mv)) : V;
   return { r: R, v: V, t, energy: vv.lengthSq() / 2 - body.mu / rr.length(), bt };
 }
 
@@ -635,7 +635,7 @@ async function solveCorrection(ship, lead, target, goal, targetAlt, onProgress) 
   return node;
 }
 
-function solve3(M, g) {
+export function solve3(M, g) {
   const [a, b, c] = M;
   const det = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
   if (!isFinite(det) || Math.abs(det) < 1e-30) return null;
@@ -720,7 +720,7 @@ export function brakeSim(h, vz, vh, a, g, Rb, drag = null, out = null) {
     if (sp < 1.5 || (w > 0 && u < 2)) { if (out) { out.x = x; out.t = t; } return z; }
     let ad = a;
     if (drag) {
-      const atm = atmosphere(drag.ground + z);
+      const atm = drag.air ? drag.air(drag.ground + z) : atmosphere(drag.ground + z);
       if (drag.tScale) ad *= drag.tScale(atm.p);      // rocket thrust drops in thick air
       ad += 0.5 * atm.rho * sp * sp * drag.k(sp / atm.a);
     }

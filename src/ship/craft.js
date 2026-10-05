@@ -2,7 +2,7 @@
 // Body frame: -Z = nose/forward, +Y = up (dorsal), +X = right.
 
 import * as THREE from 'three';
-import { PART, SIZES } from './parts.js';
+import { PART, SIZES, variantDef } from './parts.js';
 import { buildPartMesh, makeMaterials } from './meshes.js';
 import { G0, clamp, smoothstep } from '../core/geo.js';
 
@@ -28,7 +28,7 @@ export class Craft {
     const D = this.design.parts;
     for (let i = 0; i < D.length; i++) {
       const d = D[i];
-      const def = PART[d.id];
+      const def = d.w ? variantDef(PART[d.id], d.w) : PART[d.id];
       if (!def) continue;
       const T = new THREE.Matrix4().compose(new THREE.Vector3(...d.p), new THREE.Quaternion(...d.q), new THREE.Vector3(d.mirror ? -1 : 1, 1, 1));
       const N = new THREE.Matrix3().setFromMatrix4(T);

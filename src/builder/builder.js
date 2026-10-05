@@ -1,6 +1,6 @@
 // Hangar: snap-together ship editor with live stats.
 import * as THREE from 'three';
-import { PARTS, PART, CATS, SIZES, RES } from '../ship/parts.js';
+import { PARTS, PART, CATS, SIZES, RES, WING_LIMITS, variantDef } from '../ship/parts.js';
 import { Craft } from '../ship/craft.js';
 import { buildPartMesh, makeMaterials } from '../ship/meshes.js';
 import { Q_FWD, mirrorQuat, PRESETS } from '../ship/designs.js';
@@ -122,6 +122,60 @@ export class Builder {
       if (tap) this.tap(e);
     });
   }
+  // ---- reshaping wings: span, chords and sweep of the selected wing (and its mirror twin) ----
+  renderShape() {
+    const el = $('hb-shape');
+    const d = this.selected >= 0 ? this.design.parts[this.selected] : null;
+    const base = d && PART[d.id];
+    if (!base || !base.wing || this.placing) { el.hidden = true; this._shapeFor = -1; return; }
+    if (this._shapeFor === this.selected && !el.hidden) { this.shapeValues(); return; }
+    this._shapeFor = this.selected;
+    const L = WING_LIMITS;
+    const row = (k, label, min, max, step) => `<label><span class="dim">${label}</span><input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}"><span class="v" data-v="${k}"></span></label>`;
+    el.innerHTML = `<div class="sh-h"><b>Shape ${base.name}</b><button class="btn sm" id="sh-reset" style="min-height:26px">Reset</button></div>
+      ${row('span', 'Span', L.span[0], Math.min(L.span[1], base.wing.span * 3), 0.05)}
+      ${row('root', 'Root chord', L.root[0], Math.min(L.root[1], base.wing.root * 2.5), 0.05)}
+      ${row('tip', 'Tip chord', L.tip[0], Math.min(L.tip[1], Math.max(base.wing.tip * 3, base.wing.root * 1.5)), 0.05)}
+      ${row('sweep', 'Sweep', -35, 70, 1)}
+      <div class="dim" id="sh-info"></div>`;
+    el.hidden = false;
+    $('hb-paintp').hidden = true;
+    for (const inp of el.querySelectorAll('input')) {
+      inp.addEventListener('pointerdown', () => { if (!this._shapeUndo) { this.push(); this._shapeUndo = true; } });
+      inp.addEventListener('change', () => { this._shapeUndo = false; });
+      inp.addEventListener('input', () => {
+        if (!this._shapeUndo) { this.push(); this._shapeUndo = true; }
+        const cur = this.shapeOf(this.design.parts[this.selected]);
+        const k = inp.dataset.k;
+        cur[k] = k === 'sweep' ? (+inp.value * Math.PI) / 180 : +inp.value;
+        if (k === 'root' && cur.tip > cur.root * 1.5) cur.tip = cur.root * 1.5;
+        this.setShape(cur);
+      });
+    }
+    $('sh-reset').onclick = () => { this.push(); this.setShape(null); };
+    this.shapeValues();
+  }
+  shapeOf(d) { const w = variantDef(PART[d.id], d.w).wing; return { span: w.span, root: w.root, tip: w.tip, sweep: w.sweep }; }
+  setShape(o) {
+    const d = this.design.parts[this.selected];
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const val = o ? { span: r2(o.span), root: r2(o.root), tip: r2(o.tip), sweep: Math.round(o.sweep * 1000) / 1000 } : undefined;
+    for (const rec of [d, d.sym >= 0 ? this.design.parts[d.sym] : null]) { if (!rec) continue; if (val) rec.w = { ...val }; else delete rec.w; }
+    if (!this._shapeRaf) this._shapeRaf = requestAnimationFrame(() => { this._shapeRaf = 0; this.rebuild(); });
+    this.shapeValues();
+  }
+  shapeValues() {
+    const el = $('hb-shape'), d = this.design.parts[this.selected];
+    if (!d || el.hidden) return;
+    const w = variantDef(PART[d.id], d.w).wing;
+    for (const inp of el.querySelectorAll('input')) {
+      const k = inp.dataset.k, v = k === 'sweep' ? (w.sweep * 180) / Math.PI : w[k];
+      if (document.activeElement !== inp) inp.value = v;
+      el.querySelector(`[data-v="${k}"]`).textContent = k === 'sweep' ? `${Math.round(v)}°` : `${v.toFixed(2)} m`;
+    }
+    const def = variantDef(PART[d.id], d.w);
+    $('sh-info').textContent = `${w.area.toFixed(1)} m² each · aspect ratio ${w.ar.toFixed(1)} · ${(def.mass / 1000).toFixed(2)} t`;
+  }
   renderCats() { for (const b of $('hb-cats').children) b.classList.toggle('on', b.dataset.cat === this.cat); }
   renderParts() {
     const el = $('hb-parts'); el.innerHTML = '';
@@ -139,13 +193,15 @@ export class Builder {
     let t;
     if (!this.design.parts.length) t = 'Pick a cockpit to start your ship';
     else if (this.placing) t = `Tap on your ship to attach the ${PART[this.placing].name} · tap empty space to cancel`;
-    else if (this.selected >= 0) t = `${PART[this.design.parts[this.selected].id].name} selected · rotate, tilt or delete it`;
+    else if (this.selected >= 0) t = `${PART[this.design.parts[this.selected].id].name} selected · ${PART[this.design.parts[this.selected].id].wing ? 'reshape it with the sliders, ' : ''}rotate, tilt or delete it`;
     else t = 'Pick a part, then tap your ship · drag to look around · tap a part to select it';
     $('hb-hint').textContent = t;
+    this.renderShape();
   }
   togglePaint() {
     const p = $('hb-paintp');
     if (!p.hidden) { p.hidden = true; return; }
+    $('hb-shape').hidden = true; this._shapeFor = -1;
     const sw = (list, key) => list.map((c) => `<button class="sw${this.design.colors[key] === c ? ' on' : ''}" data-k="${key}" data-c="${c}" style="background:${c}"></button>`).join('');
     p.innerHTML = `<div class="dim small">Hull</div><div class="swatches">${sw(COLORS, 'hull')}</div><div class="dim small">Accent</div><div class="swatches">${sw(ACCENTS, 'accent')}</div>`;
     for (const b of p.querySelectorAll('.sw')) b.onclick = () => { this.push(); this.design.colors[b.dataset.k] = b.dataset.c; this.rebuild(); this.togglePaint(); this.togglePaint(); };

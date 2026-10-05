@@ -175,20 +175,44 @@ export const PARTS = [
 
 export const PART = Object.fromEntries(PARTS.map((p) => [p.id, p]));
 
+// wing planform -> area, aspect ratio, mean aerodynamic chord and aerodynamic centre
+function deriveWing(w) {
+  w.area = w.span * (w.root + w.tip) / 2;
+  w.ar = (2 * w.span * w.span) / w.area;            // as part of a mirrored pair
+  // aerodynamic centre: quarter chord of the mean aerodynamic chord
+  const lam = w.tip / w.root;
+  const mac = (2 / 3) * w.root * (1 + lam + lam * lam) / (1 + lam);
+  const yMac = (w.span / 3) * (1 + 2 * lam) / (1 + lam);
+  const leY = -Math.tan(w.sweep) * yMac;             // leading edge offset at MAC (chord axis = +Y forward)
+  w.ac = [yMac, leY - 0.25 * mac + w.root * 0.5, 0];  // in part coords: x = spanwise, y = chordwise
+  w.mac = mac;
+}
+
+// limits for reshaping a wing in the hangar (metres; sweep in radians)
+export const WING_LIMITS = { span: [0.5, 18], root: [0.3, 16], tip: [0.05, 16], sweep: [-0.7, 1.25] };
+// A reshaped copy of a wing part: o = { span, root, tip, sweep }. Structure (mass, fuel, heat capacity) scales
+// with the area, a little more for long slender spans.
+const _variants = new Map();
+export function variantDef(def, o) {
+  if (!def.wing || !o) return def;
+  const L = WING_LIMITS, c = (v, k, d) => Math.min(L[k][1], Math.max(L[k][0], Number.isFinite(v) ? v : d));
+  const w0 = def.wing;
+  const span = c(o.span, 'span', w0.span), root = c(o.root, 'root', w0.root), tip = Math.min(root * 1.5, c(o.tip, 'tip', w0.tip)), sweep = c(o.sweep, 'sweep', w0.sweep);
+  const key = `${def.id}|${span.toFixed(2)}|${root.toFixed(2)}|${tip.toFixed(2)}|${sweep.toFixed(3)}`;
+  let v = _variants.get(key);
+  if (v) return v;
+  const w = { ...w0, span, root, tip, sweep, thick: w0.thick * Math.sqrt(root / w0.root) };
+  deriveWing(w);
+  const k = (w.area / w0.area) * Math.pow(span / w0.span, 0.3) / Math.pow(w.area / w0.area, 0.15);
+  v = { ...def, wing: w, mass: Math.round(def.mass * k), com: [w.ac[0], w.ac[1], 0], shaped: true };
+  if (def.res) v.res = Object.fromEntries(Object.entries(def.res).map(([r, a]) => [r, Math.round(a * w.area / w0.area)]));
+  _variants.set(key, v);
+  return v;
+}
+
 // derived properties
 for (const p of PARTS) {
-  if (p.wing) {
-    const w = p.wing;
-    w.area = w.span * (w.root + w.tip) / 2;
-    w.ar = (2 * w.span * w.span) / w.area;            // as part of a mirrored pair
-    // aerodynamic centre: quarter chord of the mean aerodynamic chord
-    const lam = w.tip / w.root;
-    const mac = (2 / 3) * w.root * (1 + lam + lam * lam) / (1 + lam);
-    const yMac = (w.span / 3) * (1 + 2 * lam) / (1 + lam);
-    const leY = -Math.tan(w.sweep) * yMac;             // leading edge offset at MAC (chord axis = +Y forward)
-    w.ac = [yMac, leY - 0.25 * mac + w.root * 0.5, 0];  // in part coords: x = spanwise, y = chordwise
-    w.mac = mac;
-  }
+  if (p.wing) deriveWing(p.wing);
   if (p.engine) {
     const e = p.engine;
     if (e.type === 'rocket') e.isp = e.ispVac;

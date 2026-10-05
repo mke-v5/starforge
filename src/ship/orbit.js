@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { EARTH, MOON, clamp, llh, toLLH, gcDist } from '../core/geo.js';
-import { moonPos, moonVel, gravity, earthAngle } from '../core/astro.js';
+import { moonPos, moonVel, gravity, earthAngle, moonBasis } from '../core/astro.js';
 import { rk4 } from './physics.js';
 import { atmosphere } from '../core/atmo.js';
 
@@ -846,7 +846,7 @@ export function fallLanding(r0, v0, t0, model) {
       up.copy(r).divideScalar(rl);
       va.crossVectors(W, r).negate().add(v);
       const vz = va.dot(up), vh = Math.sqrt(Math.max(0, va.lengthSq() - vz * vz));
-      if (brakeSim(agl, vz, vh, model.aVac, EARTH.mu / (rl * rl), EARTH.R, drag, res) <= model.hTarget) { brakeX = res.x; break; }
+      if (brakeSim(agl, vz, vh, model.aVac, EARTH.mu / (rl * rl), EARTH.R, drag, res) <= model.hTarget + 0.03 * agl) { brakeX = res.x; break; }
     }
     const dt = h > 30000 ? 1 : 0.5;
     accel(r, v, a);
@@ -865,9 +865,138 @@ export function fallLanding(r0, v0, t0, model) {
 // Everything the landing predictions need to know about a craft (falling with its thrust axis into the flow)
 export function landingModel(craft, axisBody, ground = 0) {
   const cda = fallDrag(craft, axisBody), tScale = thrustScale(craft);
+  // the braking burn runs on the main engines when there are any (lift thrusters take over for the hover)
+  const alive = craft.engines.filter((P) => P.alive !== false);
+  const hasMain = alive.some((P) => engineClass(P) === 'main'), hasLift = alive.some((P) => engineClass(P) === 'lift');
   let T = 0;
-  for (const P of craft.engines) if (P.eng.active && P.alive !== false) T += craft.engineOutput(P, { rho: 0, p: 0, mach: 0, h: 1e6, a: 300 })[0] * (P.eng.bal ?? 1);
-  return { mass: craft.mass, cda, ground, aVac: (T / craft.mass) * 0.85, tScale, hTarget: 120 };
+  for (const P of alive) if (!hasMain || engineClass(P) === 'main') T += craft.engineOutput(P, { rho: 0, p: 0, mach: 0, h: 1e6, a: 300 })[0];
+  return { mass: craft.mass, cda, ground, aVac: (T / craft.mass) * 0.85, tScale, hTarget: hasMain && hasLift ? 650 : 120 };   // (matches SWAP_H in control.js)
+}
+
+// ---- landing on a chosen spot on the Moon ----
+const _mx = new THREE.Vector3(), _my = new THREE.Vector3(), _mz = new THREE.Vector3();
+// Moon-fixed coordinates of an inertial vector (position if `pos`, else a direction) at time t
+export function moonFixed(v, t, pos = true, out = new THREE.Vector3()) {
+  moonPos(t, _m); moonBasis(t, _m, _mx, _my, _mz);
+  const d = pos ? v.clone().sub(_m) : v;
+  return out.set(d.dot(_mx), d.dot(_my), d.dot(_mz));
+}
+// inertial position of a Moon-fixed point at time t
+export function moonToI(pF, t, out = new THREE.Vector3()) {
+  moonPos(t, _m); moonBasis(t, _m, _mx, _my, _mz);
+  return out.copy(_m).addScaledVector(_mx, pF.x).addScaledVector(_my, pF.y).addScaledVector(_mz, pF.z);
+}
+// Where a craft coasting toward the Moon comes down after its braking burn (vacuum: coast, then brake).
+// Returns the Moon-fixed landing point p (unit vector), the track direction d and the time.
+export function moonLanding(r0, v0, t0, model) {
+  let st = { r: r0.clone(), v: v0.clone(), t: t0 };
+  const res = { x: 0, t: 0 };
+  const rr = new THREE.Vector3(), vv = new THREE.Vector3();
+  for (let k = 0; k < 5000; k++) {
+    moonPos(st.t, _m); moonVel(st.t, _mv);
+    rr.copy(st.r).sub(_m); vv.copy(st.v).sub(_mv);
+    const rl = rr.length(), h = rl - MOON.R - model.ground;
+    const vz = vv.dot(rr) / rl, vh = Math.sqrt(Math.max(0, vv.lengthSq() - vz * vz));
+    let done = h <= 0, margin = Infinity;
+    if (!done && h < 40000 && vz < 0) {
+      margin = brakeSim(h, vz, vh, model.aVac, MOON.mu / (rl * rl), MOON.R, null, res) - (model.hTarget + 0.03 * h);
+      if (margin <= 0) done = true;
+    }
+    if (done) {
+      const p = moonFixed(st.r, st.t).normalize();
+      const d = moonFixed(vv, st.t, false); d.addScaledVector(p, -d.dot(p)).normalize();
+      if (h > 0) p.addScaledVector(d, res.x / MOON.R).normalize();
+      return { p, d, t: st.t + (h > 0 ? res.t : 0) };
+    }
+    // big steps while the braking burn would still end well above the target height, 1 s near the point
+    const step = h > 45000 ? clamp(((h - 40000) / Math.max(1, -vz)) * 0.3, 1, 120)
+      : isFinite(margin) ? clamp((margin / Math.max(1, -vz)) * 0.4, 1, 60) : vz >= 0 ? 10 : 1;
+    st = propagate(st.r, st.v, st.t, step);
+  }
+  return { p: moonFixed(st.r, st.t).normalize(), d: new THREE.Vector3(1, 0, 0), t: st.t };
+}
+
+// Deorbit from lunar orbit to land at (lat, lon) on the Moon: a retrograde burn onto an impact course
+// (the braking burn stops it just above the ground), timed and swung sideways so it ends on the spot.
+// The Moon turns slowly under the orbit, so the next few days are searched for a pass close to the site.
+export async function planMoonLandingTo(ship, lat, lon, name, onProgress, model, hours = 14 * 24) {
+  if (ship.env.body !== MOON) return null;
+  const rs0 = relState(ship, MOON);
+  const el = elements(rs0.r, rs0.v, MOON.mu);
+  if (!(el.e < 1) || el.pe - MOON.R < 8000) return null;
+  const tgt = llh(lat, lon, 0, 1, new THREE.Vector3());
+  const peTarget = model.ground - 25000;
+  const evalAt = (st, dvN) => {
+    moonPos(st.t, _m); moonVel(st.t, _mv);
+    const r = st.r.clone().sub(_m), v = st.v.clone().sub(_mv);
+    const b = basis(r, v);
+    const vN = v.clone().addScaledVector(b.nor, dvN);
+    let lo = 0, hi = 1500;
+    for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; const e2 = elements(r, vN.clone().addScaledVector(b.pro, -m), MOON.mu); if (e2.pe - MOON.R > peTarget) lo = m; else hi = m; }
+    const dv = (lo + hi) / 2;
+    const vec = b.pro.clone().multiplyScalar(-dv).addScaledVector(b.nor, dvN);
+    const L = moonLanding(st.r, st.v.clone().add(vec), st.t, model);
+    const off = tgt.clone().sub(L.p);
+    return { st, dv, dvN, vec, end: L.p, along: off.dot(L.d) * MOON.R, cross: off.dot(new THREE.Vector3().crossVectors(L.p, L.d)) * MOON.R, miss: Math.acos(clamp(L.p.dot(tgt), -1, 1)) * MOON.R, tLand: L.t };
+  };
+  // 1) quick scan: the landing lies a fixed arc of orbit beyond the burn, after a fixed fall time
+  let st = propagate(ship.r, ship.v, ship.t, 180);
+  const ref = evalAt(st, 0);
+  const fallT = ref.tLand - st.t;
+  const rI = st.r.clone().sub(moonPos(st.t, new THREE.Vector3()));
+  const landI = moonToI(ref.end.clone().multiplyScalar(MOON.R), ref.tLand).sub(moonPos(ref.tLand, new THREE.Vector3()));
+  const arc = Math.acos(clamp(rI.clone().normalize().dot(landI.clone().normalize()), -1, 1));
+  const scan = [];
+  const N = Math.ceil((hours * 3600) / 60);
+  for (let i = 0; i < N; i++) {
+    if (i) st = propagate(st.r, st.v, st.t, 60);
+    moonPos(st.t, _m); moonVel(st.t, _mv);
+    const r = st.r.clone().sub(_m), v = st.v.clone().sub(_mv);
+    const nrm = new THREE.Vector3().crossVectors(r, v).normalize();
+    const pI = r.clone().normalize().applyAxisAngle(nrm, arc);
+    const pF = moonFixed(pI, st.t + fallT, false).normalize();
+    scan.push({ st, miss: Math.acos(clamp(pF.dot(tgt), -1, 1)) * MOON.R });
+    if (i % 120 === 0) { if (onProgress) onProgress((i / N) * 0.5); await yieldFrame(); }
+  }
+  const cands = [];
+  for (let i = 1; i < scan.length - 1; i++) if (scan[i].miss <= scan[i - 1].miss && scan[i].miss <= scan[i + 1].miss) cands.push({ ...scan[i], base: scan[Math.max(0, i - 40)].st });
+  cands.sort((a, b) => a.miss - b.miss);
+  // 2) refine the best few on the full coast-and-brake prediction
+  const sols = [];
+  // the closest passes, plus the closest within the first day (so there's a soon option to weigh)
+  const soon = cands.filter((c) => c.st.t - ship.t < 86400).slice(0, 2);
+  const top = [...new Set([...cands.slice(0, 6), ...soon])];
+  for (let ci = 0; ci < top.length; ci++) {
+    const c0 = top[ci];
+    const base = c0.base;
+    let tOff = c0.st.t - base.t, n = 0;
+    const at = (dt, dn) => evalAt(propagate(base.r, base.v, base.t, Math.max(0, dt)), dn);
+    let cur = at(tOff, 0);
+    for (let it = 0; it < 12 && cur.miss > 150; it++) {
+      const a = at(tOff + 1, n), b = at(tOff, n + 5);
+      const J = [[a.along - cur.along, (b.along - cur.along) / 5], [a.cross - cur.cross, (b.cross - cur.cross) / 5]];
+      const det = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+      if (!isFinite(det) || Math.abs(det) < 1e-9) break;
+      let dt = clamp((-cur.along * J[1][1] + cur.cross * J[0][1]) / det, -900, 900);
+      let dn = clamp((-cur.cross * J[0][0] + cur.along * J[1][0]) / det, -300, 300);
+      let next = at(tOff + dt, n + dn);
+      for (let k = 0; k < 4 && next.miss > cur.miss; k++) { dt /= 2; dn /= 2; next = at(tOff + dt, n + dn); }
+      if (globalThis.__dbgDeorbit && ci === 0) console.log('     it', it, (cur.along / 1e3).toFixed(1), (cur.cross / 1e3).toFixed(1), 'J', J.map((r) => r.map((x) => x.toFixed(1)).join(',')).join(' | '), 'dt', dt.toFixed(1), 'dn', dn.toFixed(1), 'next', (next.miss / 1e3).toFixed(1));
+      if (next.miss > cur.miss) break;
+      tOff += dt; n += dn; cur = next;
+      await yieldFrame();
+    }
+    if (globalThis.__dbgDeorbit) console.log('   cand', ci, { h: ((c0.st.t - ship.t) / 3600).toFixed(1), quick: (c0.miss / 1e3).toFixed(1), full: (cur.miss / 1e3).toFixed(1), n: n.toFixed(0), along: (cur.along / 1e3).toFixed(1), cross: (cur.cross / 1e3).toFixed(1) });
+    if (cur.miss < 1500 && Math.abs(n) < 1200) sols.push(cur);
+    if (onProgress) onProgress(0.5 + (0.5 * (ci + 1)) / top.length);
+  }
+  if (onProgress) onProgress(1);
+  // fuel matters more than waiting (time warp makes days short), but not endlessly
+  const cost = (r) => r.vec.length() + ((r.st.t - ship.t) / 3600) * 1.5;
+  const best = sols.sort((a, b) => cost(a) - cost(b))[0];
+  if (globalThis.__dbgDeorbit) console.log('  planMoonLandingTo', { sols: sols.map((r) => `${((r.st.t - ship.t) / 3600).toFixed(1)}h dv ${r.vec.length().toFixed(0)} n ${r.dvN.toFixed(0)} miss ${(r.miss / 1000).toFixed(2)}`), cand0: cands[0] && (cands[0].miss / 1000).toFixed(0), arcDeg: (arc * 57.3).toFixed(1), fallT: fallT.toFixed(0) });
+  if (!best) return null;
+  return { t: best.st.t, dv: best.vec, body: MOON, label: `Descent to ${name || 'target'}`, target: { lat, lon, name, elev: model.ground, body: 'moon' }, miss: best.miss, vertical: true };
 }
 
 // Deorbit for a vertical lander that falls ballistically (engines first) and lands propulsively at (lat, lon):

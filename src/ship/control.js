@@ -2,8 +2,8 @@
 
 import * as THREE from 'three';
 import { EARTH, MOON, G0, clamp, smoothstep, D2R, fmtTime, gcDist, gcBearing, llh } from '../core/geo.js';
-import { elements, relState, burnTime, planCircularize, propagate, engineClass, ENTRY_GLIDE, glideRange, coastGround, predict, planReturn, planCorrection, planDeorbitTo, planLandingTo, landingModel, fallDrag, brakeSim, thrustScale, fallLanding, basis } from './orbit.js';
-import { moonPos, moonVel, earthAngle } from '../core/astro.js';
+import { elements, relState, burnTime, planCircularize, propagate, engineClass, ENTRY_GLIDE, glideRange, coastGround, predict, planReturn, planCorrection, planDeorbitTo, planLandingTo, landingModel, fallDrag, brakeSim, thrustScale, fallLanding, basis, moonLanding, moonToI, moonFixed, deltaV } from './orbit.js';
+import { moonPos, moonVel, earthAngle, gravity } from '../core/astro.js';
 import { atmosphere } from '../core/atmo.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
@@ -98,6 +98,8 @@ export class Controller {
     ctl.brake = inp.brake ? 1 : (assisted && onGround && ctl.throttle < 0.02 && !apOut ? 1 : 0);
     if (apOut && apOut.brake !== undefined) ctl.brake = apOut.brake;
     if (apOut && apOut.gear !== undefined) ctl.gear = apOut.gear;
+    // autopilots own the translation thrusters while they fly (zero unless they ask)
+    if (apOut) { const tr = apOut.trans; ctl.tx = tr ? tr.x : 0; ctl.ty = tr ? tr.y : 0; ctl.tz = tr ? tr.z : 0; }
     // -------- desired angular rates (body) --------
     const w = ship.w;
     const wd = this.wd.set(0, 0, 0);
@@ -374,6 +376,8 @@ export function nodeExec(node) {
     return B.pro.multiplyScalar(comp.x).addScaledVector(B.nor, comp.y).addScaledVector(B.rad, comp.z).normalize();
   };
   let wake = node.t - 120;
+  let rcsMode = null, prevV = null, prevT = 0;
+  const _g = new THREE.Vector3(), _mp = new THREE.Vector3(), _qInv = new THREE.Quaternion();
   return {
     name: 'Burn', node,
     // time warp runs up to just before the burn starts
@@ -397,6 +401,34 @@ export function nodeExec(node) {
           eTarget = node.eTarget ?? (v2.lengthSq() / 2 - muOf(body) / rs.r.length());
           eSign = comp.x > 0 ? 1 : -1;
         }
+      }
+      // small burns on a craft with RCS: translate with the thrusters (precise, and no need to turn)
+      if (rcsMode === null) {
+        rcsMode = false;
+        const dvl = node.dv.length();
+        if (dvl < 3 && craft.rcsList.length && ship.env.rho < 0.05 && craft.amount('GAS') + craft.amount('LF') > 1) {
+          const u = node.dv.clone().normalize().applyQuaternion(_qInv.copy(ship.q).invert());
+          let F = 0;
+          for (const P of craft.rcsList) for (const d of P.rcs.dirs) F += Math.max(0, -d.dot(u)) * P.def.rcs.thrust;
+          const a = F / craft.mass;
+          if (a > 0.02 && dvl / a < 90) rcsMode = { a, dur: dvl / a };
+        }
+      }
+      if (rcsMode) {
+        if (prevV && started) {
+          gravity(ship.r, moonPos(ship.t, _mp), _g);
+          dvVec.sub(ship.v.clone().sub(prevV).addScaledVector(_g, -(ship.t - prevT)));
+        }
+        prevV = ship.v.clone(); prevT = ship.t;
+        const tS = node.t - rcsMode.dur / 2;
+        wake = tS - 30;
+        if (!started && ship.t < tS) { C.node = { ...node, dvLeft: dvVec.clone(), started, tStart: tS }; return { throttle: 0, status: `RCS burn in ${Math.round(tS - ship.t)} s` }; }
+        started = true;
+        left = dvVec.dot(node.dv) > 0 ? dvVec.length() : 0;
+        C.node = { ...node, dvLeft: dvVec.clone(), started, tStart: tS };
+        if (left < 0.01 || ship.t > node.t + rcsMode.dur * 2 + 30) { C.node = null; return { done: true, throttle: 0, trans: new THREE.Vector3(), msg: 'Burn complete' }; }
+        const b = dvVec.clone().applyQuaternion(_qInv.copy(ship.q).invert()).normalize();
+        return { throttle: 0, trans: b.multiplyScalar(clamp(left / (rcsMode.a * 0.4), 0.05, 1)), status: `RCS · ${left.toFixed(2)} m/s` };
       }
       // point the engines' actual thrust (gimbal trim included) once they are firing
       const firing = ship.thrustNow > 0 && ship.thrustB && ship.thrustB.lengthSq() > 1;
@@ -461,9 +493,14 @@ const _Y = new THREE.Vector3(0, 1, 0);
 // so the craft comes to rest just above the ground, then a gentle vertical touchdown. On Earth it falls
 // engines-first and lets the air do most of the braking. With a target ({ lat, lon, elev, name }, Earth) it
 // trims the fall with small correction burns on the way in and hovers across to the exact spot at the end.
+export const SWAP_H = 650;
 export function landAp(target = null) {
   let phase = null, lastWake = -1e9, hasMain = false, hasLift = false, model = null, sub = null, corr = 0, trimT = 0, trimLeft = 0, giveUp = false;
-  const aimAt = (t, hAbove) => llh(target.lat, target.lon, (target.elev || 0) + hAbove, EARTH.R, new THREE.Vector3()).applyAxisAngle(_Y, earthAngle(t));
+  const onMoon = !!target && target.body === 'moon';
+  const aimAt = (t, hAbove) => onMoon
+    ? moonToI(llh(target.lat, target.lon, (target.elev || 0) + hAbove, MOON.R, new THREE.Vector3()), t)
+    : llh(target.lat, target.lon, (target.elev || 0) + hAbove, EARTH.R, new THREE.Vector3()).applyAxisAngle(_Y, earthAngle(t));
+  let coastStart = null;
   const ap = {
     name: 'Auto-land',
     wakeAt: null,
@@ -486,7 +523,7 @@ export function landAp(target = null) {
       const vH = vS.clone().addScaledVector(up, -vz);
       const vh = vH.length();
       const landed = ship.parked || (ship.contacts > 0 && E.vSurf < 0.6);
-      const guided = !!target && body === EARTH && !giveUp;
+      const guided = !!target && (body === EARTH) !== onMoon && !giveUp;
       if (landed) { ap.wakeAt = null; return { done: true, throttle: 0, msg: body === MOON ? 'Touchdown on the Moon' : guided ? `Touchdown at ${target.name || 'the target'}` : 'Touchdown' }; }
       const fwd = axis.clone().applyQuaternion(ship.q);
       const rs = relState(ship, body);
@@ -497,7 +534,9 @@ export function landAp(target = null) {
       const brakeEng = hasMain && (vac || !hasLift) ? 'main' : hasLift ? 'lift' : 'all';
       const finalEng = hasLift ? 'lift' : hasMain ? 'main' : 'all';
       const swap = brakeEng !== finalEng;
-      const hTarget = (swap ? 350 : 120) + 0.03 * agl;   // where the braking burn should bring us to rest
+      // where the braking burn should bring us to rest (higher when the craft must then turn over onto hover thrusters,
+      // falling while it turns)
+      const hTarget = (swap ? SWAP_H : 120) + 0.03 * agl;
       if (!phase) {
         const alive = craft.engines.filter((P) => P.alive !== false);
         hasMain = alive.some((P) => engineClass(P) === 'main');
@@ -507,7 +546,7 @@ export function landAp(target = null) {
         else if (vh > 60 && agl > 1500) phase = 'coast';
         else phase = 'final';
       }
-      if (body === EARTH && !model) model = fallModel(craft, axis, Math.max(0, ground), swap ? 350 : 120);
+      if (body === EARTH && !model) model = fallModel(craft, axis, Math.max(0, ground), swap ? SWAP_H : 120);
       // in air the braking model includes drag, and rocket thrust that drops in thick air (a is the vacuum value)
       const aVac = body === EARTH ? amax / model.tScale(E.p) : amax;
       const air = body === EARTH && E.h < EARTH.atmoTop ? { k: model.k, ground: Math.max(0, ground), tScale: model.tScale } : null;
@@ -526,16 +565,25 @@ export function landAp(target = null) {
 
       if (phase === 'coast') {
         const dir = vS.clone().normalize().negate();
-        // aiming for a spot: on the way down, re-predict where the fall ends and trim it with a small burn
-        // (once high up, once more just above the air)
-        if (guided && vz < 0 && ((corr === 0 && E.h < 150000) || (corr === 1 && E.h < 102000))) {
+        if (coastStart === null) coastStart = ship.t;
+        // on the Moon: one small correction a few minutes into the coast, from the coast-and-brake prediction
+        if (guided && onMoon && corr === 0 && ship.t - coastStart > 240 && E.agl > 15000) {
+          corr++;
+          const fix = landingCorrection(ship, target, { aVac: amax * 0.85, hTarget: swap ? SWAP_H : 120, ground: target.elev || 0 }, MOON);
+          if (globalThis.__dbgLand) console.log('  moon correction', fix && { dv: fix.dv.length().toFixed(2), miss0: fix.miss0.toFixed(0), miss: fix.miss.toFixed(0) });
+          if (fix && fix.dv.length() > (craft.rcsList.length ? 0.04 : 0.2)) { const node = { t: ship.t + 25, dv: fix.dv, body: MOON, label: 'Landing correction' }; C.node = node; sub = nodeExec(node); return { dir, axis, throttle: 0, status: 'Course correction' }; }
+        }
+        // aiming for a spot: on the way down, re-predict where the fall ends and trim it with a small burn —
+        // a few minutes after the deorbit burn, and once more at the top of the air (still too thin to push
+        // the ship around while it turns to burn)
+        if (guided && !onMoon && vz < 0 && ((corr === 0 && (ship.t - coastStart > 300 || E.h < 150000)) || (corr === 1 && E.h < 128000))) {
           corr++;
           const fix = landingCorrection(ship, target, { ...model, mass: craft.mass, aVac: aVac * 0.85 });
           if (globalThis.__dbgLand) console.log('  correction', corr, fix && { dv: fix.dv.length().toFixed(2), miss0: fix.miss0.toFixed(0), miss: fix.miss.toFixed(0) });
-          if (fix && fix.dv.length() > 0.3) { const node = { t: ship.t + 25, dv: fix.dv, body: EARTH, label: 'Landing correction' }; C.node = node; sub = nodeExec(node); return { dir, axis, throttle: 0, status: 'Course correction' }; }
+          if (fix && fix.dv.length() > (craft.rcsList.length ? 0.04 : 0.3)) { const node = { t: ship.t + 25, dv: fix.dv, body: EARTH, label: 'Landing correction' }; C.node = node; sub = nodeExec(node); return { dir, axis, throttle: 0, status: 'Course correction' }; }
         }
         // lower down, overshooting is trimmed with short retro burns (the engines already face forward)
-        if (guided && E.h < 45000 && E.h > 9000 && ship.t >= trimT) {
+        if (guided && !onMoon && E.h < 45000 && E.h > 9000 && ship.t >= trimT) {
           trimT = ship.t + 1;
           const M = { ...model, mass: craft.mass, aVac: aVac * 0.85 };
           const tgtP = llh(target.lat, target.lon, 0, 1, new THREE.Vector3());
@@ -560,10 +608,15 @@ export function landAp(target = null) {
           if (ship.t - lastWake > 20) {
             lastWake = ship.t;
             ap.wakeAt = estimateBrakeStart(ship, amax, Math.max(0, ground) + (body === MOON ? 3000 : 500)) - 60;
-            if (guided && corr === 0) ap.wakeAt = Math.min(ap.wakeAt, timeToAlt(ship, 152000));
+            if (guided && !onMoon && corr === 0) ap.wakeAt = Math.min(ap.wakeAt, coastStart + 290, timeToAlt(ship, 152000));
+            if (guided && !onMoon && corr === 1) ap.wakeAt = Math.min(ap.wakeAt, timeToAlt(ship, 130000));
+            if (guided && onMoon && corr === 0) ap.wakeAt = Math.min(ap.wakeAt, coastStart + 250);
           }
           let st = ap.wakeAt ? `Coasting · braking in ${fmtTime(Math.max(0, ap.wakeAt + 60 - ship.t))}` : 'Coasting to braking burn';
-          if (guided) { const d = gcDist(E.lat, E.lon, target.lat, target.lon); st = `Falling to ${target.name || 'target'} · ${d > 1000 ? Math.round(d / 1000) + ' km' : Math.round(d) + ' m'}`; }
+          if (guided) {
+            const d = onMoon ? aimAt(ship.t, 0).distanceTo(ship.r) : gcDist(E.lat, E.lon, target.lat, target.lon);
+            st = `${onMoon ? 'Descending' : 'Falling'} to ${target.name || 'target'} · ${d > 1000 ? Math.round(d / 1000) + ' km' : Math.round(d) + ' m'}`;
+          }
           return { dir, axis, throttle: 0, status: st, engines: brakeEng };
         }
       }
@@ -571,7 +624,7 @@ export function landAp(target = null) {
 
       if (phase === 'brake') {
         const sp = vS.length();
-        if (sp < (swap ? 25 : 18) || agl < (swap ? 250 : 150) || (vz > 0 && vh < 10)) phase = 'final';
+        if (sp < (swap ? 25 : 18) || agl < (swap ? SWAP_H - 150 : 150) || (vz > 0 && vh < 10)) phase = 'final';
         else {
           const dir = vS.clone().normalize().negate();
           let thr;
@@ -600,15 +653,21 @@ export function landAp(target = null) {
         const dist = d.length();
         // too far to hover across on the fuel left: put down here instead
         if (dist > 6000) { giveUp = true; C.status = `${target.name || 'The target'} is ${Math.round(dist / 1000)} km away — too far to hover; landing here`; }
-        // cruise across at ~150 m and up to 35 m/s, slowing and sinking to 50 m as it closes in
-        const vMax = agl < 30 ? 1.5 : agl < 45 ? 8 : 35;
-        const vCmd = d.multiplyScalar(agl < 30 ? 0.15 : 0.12);
-        if (vCmd.length() > vMax) vCmd.setLength(vMax);
+        if (ship.t >= (ap._fuelT || 0)) {
+          ap._fuelT = ship.t + 1;
+          if (dist > 60 && deltaV(craft, E.rho > 0.01, (P) => P.eng.active) < 120) { giveUp = true; C.status = 'Fuel low — landing here'; }
+        }
+        // cruise across at ~150 m and up to 35 m/s, slowing (so it can stop in time) and sinking to 50 m as it
+        // closes in
+        if (agl > 45) maxTilt = 0.45;
+        const aLat = g * Math.tan(maxTilt) * 0.5;
+        const vMax = Math.min(agl < 30 ? 1.5 : agl < 45 ? 8 : 35, 0.1 * dist, Math.sqrt(2 * aLat * Math.max(0, dist - 15)));
+        const vCmd = d.normalize().multiplyScalar(vMax);
+        if (agl < 20) vCmd.set(0, 0, 0);          // last few metres: just stop drifting and set down level
         hor = vCmd.sub(vH).multiplyScalar(agl < 30 ? 1.0 : 0.6);
         const hHold = clamp(dist * 0.4, 50, 150);
-        if (dist > 30 && agl < hHold + 40) vzT = clamp((hHold - agl) * 0.3, -4, 4);   // hold height until over it
-        if (agl > 45) maxTilt = 0.45;
-        if (dist > 30) status = `Flying to ${target.name || 'target'} · ${Math.round(dist)} m`;
+        if ((dist > 60 || vh > 2.5) && agl < hHold + 40) vzT = clamp((hHold - agl) * 0.3, -4, 4);   // hold height until over it and slow
+        if (dist > 60) status = `Flying to ${target.name || 'target'} · ${Math.round(dist)} m`;
       }
       const vert = 0.9 * (vzT - vz) + g;
       const vb = Math.max(vert, 0.3 * g);
@@ -642,17 +701,19 @@ function timeToAlt(ship, alt) {
 const LONG_AIM = 2500;
 // A small burn (in 25 s) that moves the end of the fall onto the target: Newton on the along/cross-track miss
 // with prograde and sideways components.
-function landingCorrection(ship, target, model) {
+function landingCorrection(ship, target, model, body = EARTH) {
   const st = propagate(ship.r, ship.v, ship.t, 25);
-  const b = basis(st.r, st.v);
+  const moon = body === MOON;
+  const rel = moon ? relState({ r: st.r, v: st.v, t: st.t }, MOON) : st;
+  const b = basis(rel.r, rel.v);
   const tgt = llh(target.lat, target.lon, 0, 1, new THREE.Vector3());
   const evalC = (x, y) => {
     const v = st.v.clone().addScaledVector(b.pro, x).addScaledVector(b.nor, y);
-    const L = fallLanding(st.r, v, st.t, model);
+    const L = moon ? moonLanding(st.r, v, st.t, model) : fallLanding(st.r, v, st.t, model);
     const off = tgt.clone().sub(L.p);
-    // aim a little long: the fall is touchy (a few metres of height early on change where it ends by
-    // kilometres), and overshoot can be trimmed later with retro burns while undershoot can't
-    return { along: off.dot(L.d) * EARTH.R + LONG_AIM, cross: off.dot(new THREE.Vector3().crossVectors(L.p, L.d)) * EARTH.R };
+    // on Earth aim a little long: the fall is touchy (a few metres of height early on change where it ends
+    // by kilometres), and overshoot can be trimmed later with retro burns while undershoot can't
+    return { along: off.dot(L.d) * body.R + (moon ? 0 : LONG_AIM), cross: off.dot(new THREE.Vector3().crossVectors(L.p, L.d)) * body.R };
   };
   let x = 0, y = 0, cur = evalC(0, 0);
   const miss0 = Math.hypot(cur.along, cur.cross);

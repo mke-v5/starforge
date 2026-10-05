@@ -18,6 +18,9 @@ export const MILESTONES = [
   { id: 'moonReturn', name: 'Homecoming', desc: 'Land back on Earth after visiting the Moon.' },
   { id: 'fullTrip', name: 'Hangar to the Moon and back', desc: 'Take off from an airport, land on the Moon, and land on a runway at any airport.' },
   { id: 'builder', name: 'Shipwright', desc: 'Launch a ship you designed yourself.' },
+  { id: 'tranquility', name: 'The Eagle has landed', desc: 'Land within 500 m of the Apollo 11 site.' },
+  { id: 'pinpoint', name: 'Stuck the landing', desc: 'Land a tail-sitting starship on its legs at an airport.' },
+  { id: 'homeAgain', name: 'There and back again', desc: 'Land on the Moon, then land back at the airport you took off from.' },
 ];
 
 export class Progress {
@@ -68,13 +71,22 @@ export class Progress {
   }
   landed(ship, airport) {
     const F = this.flight; if (!F) return;
-    if (ship.env.body === MOON) { F.landedMoon = true; this.unlock('moonLand'); return; }
+    if (ship.env.body === MOON) {
+      F.landedMoon = true; this.unlock('moonLand');
+      // Tranquility Base, 0.674° N 23.473° E
+      const E = ship.env, D = Math.PI / 180;
+      const c = Math.sin(E.lat * D) * Math.sin(0.674 * D) + Math.cos(E.lat * D) * Math.cos(0.674 * D) * Math.cos((E.lon - 23.473) * D);
+      if (Math.acos(Math.min(1, c)) * MOON.R < 500) this.unlock('tranquility');
+      return;
+    }
     if (!F.tookOff) return;
     if (F.visitedMoon) this.unlock('moonReturn');
     if (airport) {
       this.unlock('land');
       if (F.from && airport.ident !== F.from.ident) this.unlock('otherAirport');
       if (F.landedMoon && F.from) this.unlock('fullTrip');
+      if (F.landedMoon && F.from && airport.ident === F.from.ident) this.unlock('homeAgain');
+      if (ship.craft.vertical) this.unlock('pinpoint');
     }
   }
 }

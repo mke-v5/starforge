@@ -232,6 +232,10 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   .hb-cats button{width:auto;flex:none}
   .hb-stats{top:calc(94px + var(--st));width:170px}
   .infopanel{display:none}
+  .title-wrap{max-width:100%;width:100%;padding:20px calc(18px + var(--sl)) 20px calc(18px + var(--sl))}
+  .logo.big{font-size:clamp(30px,10.5vw,56px);letter-spacing:.2em}
+  .tag{font-size:14px;letter-spacing:.05em}
+  .menu{max-width:none}
 }
 /* narrow windows: keep the flight-school card clear of the info panel */
 @media (max-width:900px) and (min-height:441px){

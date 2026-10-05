@@ -2,10 +2,22 @@
 import * as THREE from 'three';
 import { EARTH, MOON, clamp, fmtTime, D2R } from '../core/geo.js';
 import { moonPos, moonVel } from '../core/astro.js';
-import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, planCorrection, planDeorbitTo, planLandingTo, landingModel, burnTime, deltaV } from '../ship/orbit.js';
-import { nodeExec, landAp, ascentAp, reentryAp, coastToAp, landRunwayAp, sequenceAp, flyHomeAp } from '../ship/control.js';
+import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, planCorrection, planDeorbitTo, planLandingTo, planMoonLandingTo, landingModel, burnTime, deltaV } from '../ship/orbit.js';
+import { nodeExec, landAp, ascentAp, reentryAp, coastToAp, landRunwayAp, sequenceAp, flyHomeAp, planBurnAp } from '../ship/control.js';
 
 const $ = (id) => document.getElementById(id);
+
+// places to land on the Moon (selenographic, east positive)
+export const MOON_SITES = [
+  { name: 'Tranquility Base', sub: 'Apollo 11, 1969', lat: 0.674, lon: 23.473 },
+  { name: 'Ocean of Storms', sub: 'Apollo 12 and Surveyor 3', lat: -3.012, lon: -23.422 },
+  { name: 'Hadley Rille', sub: 'Apollo 15', lat: 26.132, lon: 3.634 },
+  { name: 'Taurus–Littrow', sub: 'Apollo 17, the last crewed landing', lat: 20.191, lon: 30.772 },
+  { name: 'Von Kármán crater', sub: 'Chang’e 4, far side', lat: -45.444, lon: 177.588 },
+  { name: 'Shackleton rim', sub: 'South pole', lat: -89.4, lon: 129.8 },
+  { name: 'Tycho crater', sub: 'Bright young crater', lat: -43.3, lon: -11.2 },
+  { name: 'Copernicus crater', sub: '93 km wide, terraced walls', lat: 9.62, lon: -20.08 },
+];
 
 export class MapView {
   constructor(game) {
@@ -264,6 +276,7 @@ export class MapView {
       }
       if (E.agl < 20000 && E.vSurf < 300) btns.push(['Autopilot: take off to lunar orbit', () => { this.game.engage(ascentAp()); this.game.toggleMap(); }]);
       if (el.e < 1) btns.push(['Circularize at apoapsis', () => this.plan(() => planCircularize(ship, true))]);
+      if (el.e < 1 && !landed) btns.push(['Land at a site…', () => this.pickMoonSite()]);
       btns.push(['Autopilot: land on the Moon', () => { this.game.engage(landAp()); this.game.toggleMap(); }]);
     }
     return btns;
@@ -305,6 +318,39 @@ export class MapView {
     await this.planAsync((cb) => planLandingTo(ship, rw.latC, rw.lonC, name, cb, landingModel(ship.craft, C.thrustAxis(ship.craft, ship.env), elev)), 'No landing found today');
     const n = C.node;
     if (n && n.target) { n.target.elev = elev; n.vertical = true; this.renderNode(); }
+  }
+  // pick a famous spot on the Moon and plan the descent to it
+  pickMoonSite(onPick = (s) => this.planMoonSite(s)) {
+    const g = this.game, $b = $('d-btns');
+    $('d-title').textContent = 'Land at…';
+    $('d-body').innerHTML = '<p class="dim small">The autopilot times the descent burn (it may wait for the Moon to turn the site under your orbit), brakes, and hovers onto the spot.</p>';
+    $b.innerHTML = ''; $b.style.flexDirection = 'column';
+    for (const site of MOON_SITES) {
+      const b = document.createElement('button'); b.className = 'btn wide';
+      b.textContent = `${site.name} · ${site.sub}`;
+      b.onclick = () => { g.modal('dialog', false); onPick(site); };
+      $b.appendChild(b);
+    }
+    const c = document.createElement('button'); c.className = 'btn ghost wide'; c.textContent = 'Cancel'; c.onclick = () => g.modal('dialog', false); $b.appendChild(c);
+    g.modal('dialog');
+  }
+  // all on autopilot: plan the descent, wait for it, fly it, brake and hover onto the spot
+  landAtSiteAuto(site) {
+    const g = this.game, C = g.controller;
+    const elev = g.world.groundAt(MOON, site.lat, site.lon) || 0;
+    const target = { lat: site.lat, lon: site.lon, elev, name: site.name, body: 'moon' };
+    C.node = null;
+    C.engage(sequenceAp(`Landing at ${site.name}`, [
+      (s0, CC) => planBurnAp('Descent burn', (s) => planMoonLandingTo(s, site.lat, site.lon, site.name, null, landingModel(s.craft, CC.thrustAxis(s.craft, s.env), elev))),
+      () => landAp(target),
+    ]));
+    g.hud.toast(`Autopilot: landing at ${site.name} — it may wait for the Moon to turn the site under your orbit`);
+  }
+  async planMoonSite(site) {
+    const g = this.game, ship = g.ship, C = g.controller;
+    const elev = g.world.groundAt(MOON, site.lat, site.lon) || 0;
+    await this.planAsync((cb) => planMoonLandingTo(ship, site.lat, site.lon, site.name, cb, landingModel(ship.craft, C.thrustAxis(ship.craft, ship.env), elev)), 'No way down to there from this orbit');
+    if (C.node && C.node.target) this.renderNode();
   }
   // the airport this flight started from (where "home" is), if it has a long enough runway
   homeAirport() {
@@ -397,20 +443,23 @@ export class MapView {
     if (!n) { el.innerHTML = ''; return; }
     const dv = (n.dvLeft || n.dv).length();
     const bt = burnTime(ship, dv);
-    const executing = C.ap && (C.ap.name === 'Burn' || /^Home to/.test(C.ap.name));
+    const executing = C.ap && (C.ap.name === 'Burn' || /^(Home to|Landing at)/.test(C.ap.name));
     const have = deltaV(ship.craft, false, (P) => P.eng.active);
     const short = dv > have * 0.98 ? `<div style="color:var(--red)">Not enough fuel: ${Math.round(have)} m/s left on the active engines</div>` : '';
-    const homeInfo = !n.target ? '' : n.vertical ? `<div class="dim">Falls to ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}; the landing steers out the rest</div>` : `<div class="dim">Reentry ends ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}</div>`;
+    const homeInfo = !n.target ? '' : n.target.body === 'moon' ? `<div class="dim">Comes down ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}; the landing hovers onto the spot</div>` : n.vertical ? `<div class="dim">Falls to ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}; the landing steers out the rest</div>` : `<div class="dim">Reentry ends ≈ ${this.game.hud.units.dist(n.miss)} from ${n.target.name}</div>`;
     el.innerHTML = `<div class="node"><div><b>${n.label}</b></div><div>Δv <b>${Math.round(dv)} m/s</b> · burn ${isFinite(bt) ? fmtTime(bt) : 'no thrust'}</div>${short}<div>In <b>${fmtTime(n.t - ship.t)}</b>${n.moonPe !== undefined ? ` · Moon Pe ${this.game.hud.units.dist(n.moonPe)}` : ''}${n.earthPe !== undefined ? ` · Earth Pe ${this.game.hud.units.dist(n.earthPe)}` : ''}</div>${homeInfo}</div>`;
     const row = document.createElement('div'); row.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px';
     const b1 = document.createElement('button'); b1.className = 'btn sm primary'; b1.textContent = executing ? 'Flying…' : 'Autopilot';
     b1.disabled = executing;
     const home = n.target && (n.runway || n.vertical);
-    if (home) b1.textContent = executing ? 'Flying…' : 'Fly me home';
+    if (home) b1.textContent = executing ? 'Flying…' : n.target.body === 'moon' ? 'Land there' : 'Fly me home';
     b1.onclick = () => {
       if (home) {
         const g = this.game, A = g.world.airports, name = n.target.name;
-        if (n.vertical) {
+        if (n.target.body === 'moon') {
+          C.engage(sequenceAp(`Landing at ${name}`, [() => nodeExec(n), () => landAp(n.target)]));
+          g.hud.toast(`Autopilot: descent burn, braking and landing at ${name}`);
+        } else if (n.vertical) {
           C.engage(sequenceAp(`Home to ${name}`, [() => nodeExec(n), () => landAp(n.target)]));
           g.hud.toast(`Autopilot: deorbit, fall and powered landing at ${name}`);
         } else {

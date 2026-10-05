@@ -571,6 +571,14 @@ class Game {
     // powered landings need engines that can hold the craft up: lift thrusters, or rockets on a tail-sitter / in low gravity
     const canHover = cls.has('lift') || (rocket && (this.craft.vertical || ship.env.body === MOON));
     if (canHover && !ship.parked && ship.contacts === 0) opts.push([ship.env.body === MOON || (ship.env.h > EARTH.atmoTop && ship.env.body === EARTH) ? 'Land here (deorbit, brake, touch down)' : 'Powered landing (hover down)', () => this.engage(landAp())]);
+    // the whole way home (or down to a famous spot) in one go
+    {
+      const E = ship.env, MV = this.mapView;
+      const rs = relState(ship, E.body), el = elements(rs.r, rs.v, rs.mu);
+      const inSpace = E.body === MOON || el.e >= 1 || E.h > 2e6 || (E.h > EARTH.atmoTop && el.pe - EARTH.R > 100000);
+      if (rocket && inSpace && MV.canComeHome()) opts.push([E.body === MOON && E.agl < 50 ? 'Take off and fly me home…' : 'Fly me home to an airport…', () => MV.pickHome((a) => MV.flyHomeAll(a))]);
+      if (rocket && E.body === MOON && el.e < 1 && E.agl > 5000) opts.push(['Land at a famous site…', () => MV.pickMoonSite((s) => MV.landAtSiteAuto(s))]);
+    }
     if (ship.env.body === EARTH && ship.env.rho > 0.05) opts.push(['Cruise: hold altitude & heading', () => this.engage(cruiseAp(ship))]);
     { const E = ship.env, rw = E.body === EARTH && E.h < 25000 && ship.contacts === 0 && this.craft.wings.length ? this.landingRunway() : null;
       if (rw) opts.push([`Land at ${rw.name} (${this.hud.units.dist(rw.d)})`, () => this.engage(landRunwayAp(this.world.airports, rw.rw, rw.name, this.terrainFn()))]); }
@@ -704,7 +712,13 @@ class Game {
     base.y += EARTH.R * 0.9;
     this.camI.copy(base);
     this.camera.position.set(0, 0, 0); this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(new THREE.Vector3().sub(this.camI).add(new THREE.Vector3(0, 0, 0)).normalize().add(sun.clone().multiplyScalar(-0.25)));
+    const d = this.camI.clone().negate().normalize();
+    this.camera.lookAt(d);
+    // frame the planet beside the menu on wide screens, low behind it on tall ones
+    const asp = this.camera.aspect, tanV = Math.tan((this.camera.fov * D2R) / 2), tanH = tanV * asp;
+    const nx = asp > 1.15 ? clamp(0.25 + (asp - 1.15) * 0.25, 0.25, 0.42) : 0, ny = asp > 1.15 ? -0.04 : -0.55;
+    const dc = new THREE.Vector3(nx * tanH, ny * tanV, -1).normalize();
+    this.camera.quaternion.multiply(new THREE.Quaternion().setFromUnitVectors(dc, new THREE.Vector3(0, 0, -1)));
     this.camera.near = 1000; this.camera.updateProjectionMatrix();
     this.world.update(this.camI, this.camera, this.eph, dt);
   }

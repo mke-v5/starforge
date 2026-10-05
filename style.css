@@ -95,7 +95,7 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
 .hb-hint{position:absolute;bottom:calc(66px + var(--sb));left:50%;transform:translateX(-50%);font-size:12px;color:var(--muted);background:rgba(5,7,12,.6);padding:4px 10px;border-radius:3px;z-index:2;white-space:nowrap;pointer-events:none}
 .hb-paint{position:absolute;bottom:calc(66px + var(--sb));left:50%;transform:translateX(-50%);padding:10px;display:grid;gap:8px;z-index:3}
 .swatches{display:flex;gap:6px;flex-wrap:wrap}
-.hb-shape{position:absolute;bottom:calc(66px + var(--sb));left:50%;transform:translateX(-50%);padding:8px 12px;display:grid;gap:4px;z-index:3;width:min(360px,calc(100vw - 24px));font-size:11px}
+.hb-shape{position:absolute;bottom:calc(96px + var(--sb));left:50%;transform:translateX(-50%);padding:8px 12px;display:grid;gap:4px;z-index:3;width:min(360px,calc(100vw - 24px));font-size:11px}
 .hb-shape .sh-h{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .hb-shape .sh-h b{font:600 13px var(--display);letter-spacing:.06em;text-transform:uppercase;color:var(--amber)}
 .hb-shape label{display:grid;grid-template-columns:70px 1fr 52px;align-items:center;gap:8px}
@@ -210,8 +210,9 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   .toggles{grid-template-columns:repeat(2,56px)}.toggles button{height:32px;font-size:11px}
   .infopanel{width:150px;font-size:9.5px}
   .hb-parts{width:210px}.hb-stats{width:180px;font-size:10px;padding:7px;max-height:calc(100vh - 130px - var(--st) - var(--sb));overflow-y:auto;touch-action:pan-y}
-  .hb-shape{bottom:calc(56px + var(--sb));padding:5px 10px;gap:1px;left:calc(352px + var(--sl));right:calc(196px + var(--sr));width:auto;transform:none}
-  .hb-shape label{grid-template-columns:58px 1fr 44px}
+  .hb-shape{bottom:calc(56px + var(--sb));padding:5px 10px;gap:1px;left:calc(134px + var(--sl));width:300px;transform:none;font-size:10px}
+  .hb-shape label{grid-template-columns:62px 1fr 50px;white-space:nowrap}
+  #hangar.shaping .hb-parts{display:none}
   .hb-shape input[type=range]{height:18px}
   .hb-stats .row{padding:1px 0}
   .hb-hint{display:none}

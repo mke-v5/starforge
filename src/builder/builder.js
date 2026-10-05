@@ -127,7 +127,8 @@ export class Builder {
     const el = $('hb-shape');
     const d = this.selected >= 0 ? this.design.parts[this.selected] : null;
     const base = d && PART[d.id];
-    if (!base || !base.wing || this.placing) { el.hidden = true; this._shapeFor = -1; return; }
+    const show = (on) => { el.hidden = !on; $('hangar').classList.toggle('shaping', on); };
+    if (!base || !base.wing || this.placing) { show(false); this._shapeFor = -1; return; }
     if (this._shapeFor === this.selected && !el.hidden) { this.shapeValues(); return; }
     this._shapeFor = this.selected;
     const L = WING_LIMITS;
@@ -138,7 +139,7 @@ export class Builder {
       ${row('tip', 'Tip chord', L.tip[0], Math.min(L.tip[1], Math.max(base.wing.tip * 3, base.wing.root * 1.5)), 0.05)}
       ${row('sweep', 'Sweep', -35, 70, 1)}
       <div class="dim" id="sh-info"></div>`;
-    el.hidden = false;
+    show(true);
     $('hb-paintp').hidden = true;
     for (const inp of el.querySelectorAll('input')) {
       inp.addEventListener('pointerdown', () => { if (!this._shapeUndo) { this.push(); this._shapeUndo = true; } });
@@ -201,7 +202,7 @@ export class Builder {
   togglePaint() {
     const p = $('hb-paintp');
     if (!p.hidden) { p.hidden = true; return; }
-    $('hb-shape').hidden = true; this._shapeFor = -1;
+    $('hb-shape').hidden = true; $('hangar').classList.remove('shaping'); this._shapeFor = -1;
     const sw = (list, key) => list.map((c) => `<button class="sw${this.design.colors[key] === c ? ' on' : ''}" data-k="${key}" data-c="${c}" style="background:${c}"></button>`).join('');
     p.innerHTML = `<div class="dim small">Hull</div><div class="swatches">${sw(COLORS, 'hull')}</div><div class="dim small">Accent</div><div class="swatches">${sw(ACCENTS, 'accent')}</div>`;
     for (const b of p.querySelectorAll('.sw')) b.onclick = () => { this.push(); this.design.colors[b.dataset.k] = b.dataset.c; this.rebuild(); this.togglePaint(); this.togglePaint(); };

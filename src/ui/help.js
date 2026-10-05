@@ -19,6 +19,7 @@ export const HELP_HTML = `
 <p>Coming back from space at 7–11 km/s heats your ship. Fly belly-first at a high angle of attack so the heat-tiled underside and heat shields take it. Parts that overheat burn away. Landing too hard breaks gear; hitting the ground or a building destroys the ship. Fusion drives also run hot — bring radiators.</p>
 <h3>Building</h3>
 <p>In the hangar, pick a part and tap on your ship to attach it. Parts snap to the ends of other parts or stick to their surfaces; symmetry mirrors them to the other side. Keep the centre of lift (blue) just behind the centre of mass (yellow) and your plane will be stable. Put the main wheels a little behind the centre of mass and spread them wide.</p>
+<p>Tap a wing, tail or canard to reshape it: stretch the span, change the chord at the root and tip, and set the sweep. Long thin wings glide and climb well; short, sharply swept wings are lighter and better at high Mach. A bigger wing lands slower but weighs more. Less sweep moves the lift forward, so watch the stability check.</p>
 <h3>Data</h3>
 <p>Satellite imagery © EOX IT Services (Sentinel-2 cloudless, CC BY-NC-SA 4.0) and NASA GIBS. Terrain: Mapzen Terrarium / AWS Open Data. Buildings © OpenStreetMap contributors via OpenFreeMap. Airports: OurAirports (public domain). Moon imagery: NASA/LRO via Moon Trek; Moon elevation: NASA LRO/LOLA. Cities: GeoNames (CC BY).</p>
 `;

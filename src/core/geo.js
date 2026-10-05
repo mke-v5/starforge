@@ -9,13 +9,24 @@ export const R2D = 180 / Math.PI;
 export const G0 = 9.80665;
 
 export const EARTH = {
-  name: 'Earth', R: 6371000, mu: 3.986004418e14, omega: 7.2921159e-5,
-  atmoTop: 140000, soi: Infinity,
+  id: 'earth', name: 'Earth', R: 6371000, mu: 3.986004418e14, omega: 7.2921159e-5,
+  atmoTop: 140000, soi: 9.245e8,
 };
 export const MOON = {
-  name: 'Moon', R: 1737400, mu: 4.9048695e12, omega: 2 * Math.PI / (27.321661 * 86400),
+  id: 'moon', name: 'Moon', R: 1737400, mu: 4.9048695e12, omega: 2 * Math.PI / (27.321661 * 86400),
   atmoTop: 0, soi: 66100000,
 };
+// Mars: mean radius, sidereal day 24 h 37 min 22.7 s, thin CO2 air up to ~125 km
+export const MARS = {
+  id: 'mars', name: 'Mars', R: 3389500, mu: 4.282837e13, omega: 2 * Math.PI / 88642.663,
+  atmoTop: 125000, soi: 5.77e8,
+};
+export const SUN = {
+  id: 'sun', name: 'Sun', R: 6.957e8, mu: 1.32712440018e20, omega: 2 * Math.PI / (25.38 * 86400),
+  atmoTop: 0, soi: Infinity,
+};
+export const AU = 1.495978707e11;
+export const BODIES = { earth: EARTH, moon: MOON, mars: MARS, sun: SUN };
 
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 export const lerp = (a, b, t) => a + (b - a) * t;

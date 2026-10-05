@@ -41,3 +41,23 @@ export function atmosphere(h) {
   out.a = Math.sqrt(1.4 * Rgas * out.T);
   return out;
 }
+
+
+// Mars: NASA Glenn's simple model (pressure 699 Pa at the datum, scale height ~11 km), CO2 gas (R 192, γ 1.29)
+const outM = { rho: 0, T: 210, p: 610, a: 240 };
+export function marsAtmosphere(h) {
+  if (h > 125000) { outM.rho = 0; outM.p = 0; outM.T = 150; outM.a = 220; return outM; }
+  const hh = Math.max(-9000, h);
+  const Tc = hh < 7000 ? -31 - 0.000998 * hh : -23.4 - 0.00222 * hh;
+  const T = Math.max(140, Tc + 273.15);
+  let p = 699 * Math.exp(-0.00009 * hh);
+  if (hh > 100000) p *= Math.max(0, (125000 - hh) / 25000);          // fade to vacuum at the top
+  outM.T = T; outM.p = p; outM.rho = p / (192.1 * T); outM.a = Math.sqrt(1.29 * 192.1 * T);
+  return outM;
+}
+// air at height h above a body's datum (vacuum for airless bodies)
+export function airAt(body, h) {
+  if (body && body.id === 'earth') return atmosphere(h);
+  if (body && body.id === 'mars') return marsAtmosphere(h);
+  return atmosphere(1e9);
+}

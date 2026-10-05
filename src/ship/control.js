@@ -416,7 +416,7 @@ export function nodeExec(node) {
       }
       if (rcsMode) {
         if (prevV && started) {
-          gravity(ship.r, moonPos(ship.t, _mp), _g);
+          gravity(ship.r, ship.t, _g);
           dvVec.sub(ship.v.clone().sub(prevV).addScaledVector(_g, -(ship.t - prevT)));
         }
         prevV = ship.v.clone(); prevT = ship.t;

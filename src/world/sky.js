@@ -17,12 +17,16 @@ void main(){
 const SKY_FRAG = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_fragment>
-uniform vec3 uEarthC;   // Earth centre relative to camera (world)
+uniform vec3 uEarthC;   // centre of the planet whose air we're in, relative to camera (world)
 uniform vec3 uSun;
 uniform float uR;
+uniform float uH;       // scale height
+uniform float uTop;     // top of the air
+uniform vec3 uBeta;     // scattering per metre at the surface (Earth: blue Rayleigh, Mars: red dust)
+uniform vec3 uMie;      // tint of the glow around the Sun
 varying vec3 vDir;
-const float H = 8000.0;
-const vec3 BETA = vec3(5.8e-6, 13.5e-6, 33.1e-6);
+#define H uH
+#define BETA uBeta
 float sunlit(vec3 n){ return smoothstep(-0.16, 0.10, dot(n, uSun)); }
 void main(){
   #include <logdepthbuf_fragment>
@@ -37,7 +41,7 @@ void main(){
   float tau = 0.0;                 // sea-level-equivalent metres of air along the ray
   vec3 nScatter = up;
   float hitsEarth = (t > 0.0 && b < uR) ? 1.0 : 0.0;
-  if (hc < 140000.0) {
+  if (hc < uTop) {
     float se = dot(D, up);
     float hor = -sqrt(max(0.0, 1.0 - (uR / rc) * (uR / rc)));
     float x = max(se - hor, 0.0);
@@ -50,7 +54,7 @@ void main(){
     // limb seen from above: column through the tangent point
     float ht = b - uR;
     float limb = exp(-max(ht, 0.0) / H) * sqrt(6.2832 * (uR + ht) * H);
-    if (hc >= 140000.0) { tau = limb; nScatter = P / b; }
+    if (hc >= uTop) { tau = limb; nScatter = P / b; }
     else tau = max(tau, limb * 0.5 * smoothstep(0.0, 30000.0, hc));
   }
   float lit = sunlit(nScatter);
@@ -61,7 +65,7 @@ void main(){
   vec3 ray = (1.0 - exp(-BETA * tau)) * sunCol * lit;
   float mu = max(dot(D, uSun), 0.0);
   float mie = pow(mu, 18.0) * 0.18 + pow(mu, 600.0) * 1.2;
-  vec3 col = ray * 1.25 + sunCol * mie * (1.0 - exp(-tau / 35000.0)) * lit;
+  vec3 col = ray * 1.25 + sunCol * uMie * mie * (1.0 - exp(-tau / 35000.0)) * lit;
   // sun disk (hidden by the planet itself when the ray hits it)
   float disk = smoothstep(0.99993, 0.99997, mu);
   vec3 sunDisk = vec3(1.0, 0.97, 0.92) * disk * 40.0 * mix(vec3(1.0), sunCol, smoothstep(30000.0, 0.0, hc));
@@ -71,12 +75,18 @@ void main(){
   #include <colorspace_fragment>
 }`;
 
+export const EARTH_AIR = { c: new THREE.Vector3(), R: EARTH.R, H: 8000, top: 140000, beta: [5.8e-6, 13.5e-6, 33.1e-6], mie: [1, 1, 1], dens: 1 };
+export const MARS_AIR = { c: new THREE.Vector3(), R: 3389500, H: 11100, top: 125000, beta: [2.4e-5, 1.5e-5, 0.85e-5], mie: [0.55, 0.72, 1.0], dens: 0.45 };
+
 export class Sky {
   constructor(scene) {
     this.uniforms = {
       uEarthC: { value: new THREE.Vector3() },
       uSun: { value: new THREE.Vector3(1, 0, 0) },
       uR: { value: EARTH.R },
+      uH: { value: 8000 }, uTop: { value: 140000 },
+      uBeta: { value: new THREE.Vector3(5.8e-6, 13.5e-6, 33.1e-6) },
+      uMie: { value: new THREE.Vector3(1, 1, 1) },
     };
     const geo = new THREE.SphereGeometry(1e9, 64, 32);
     this.mat = new THREE.ShaderMaterial({
@@ -133,14 +143,19 @@ export class Sky {
   }
 
   // camI: camera position in frame I; sun: unit vector; returns sky brightness (0..1) at the camera
-  update(camI, sun) {
-    this.uniforms.uEarthC.value.copy(camI).negate();
-    this.uniforms.uSun.value.copy(sun);
+  // atm: { c: planet centre (I), R, H, top, beta: [r,g,b], mie: [r,g,b], dens } — the air the camera is in or nearest to
+  update(camI, sun, atm = EARTH_AIR) {
+    const U = this.uniforms;
+    U.uEarthC.value.copy(atm.c).sub(camI);
+    U.uSun.value.copy(sun);
+    U.uR.value = atm.R; U.uH.value = atm.H; U.uTop.value = atm.top;
+    U.uBeta.value.set(...atm.beta); U.uMie.value.set(...atm.mie);
     this.dome.position.set(0, 0, 0);
-    const r = camI.length(), h = r - EARTH.R;
-    const up = camI.clone().divideScalar(r);
+    const rel = camI.clone().sub(atm.c);
+    const r = rel.length(), h = r - atm.R;
+    const up = rel.divideScalar(r);
     const sunEl = up.dot(sun);
-    const air = Math.exp(-Math.max(0, h) / 8000);
+    const air = Math.exp(-Math.max(0, h) / atm.H) * atm.dens;
     const bright = Math.max(0, Math.min(1, (sunEl + 0.12) / 0.3)) * Math.min(1, air * 3.5);
     this.starMat.opacity = Math.max(0, 1 - bright * 1.6);
     const d = 4e9;

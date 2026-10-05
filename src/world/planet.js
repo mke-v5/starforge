@@ -207,6 +207,28 @@ void main(){
   #include <colorspace_fragment>
 }`;
 
+// Mars: Viking colour mosaic, small craters and wind-blown roughness up close, dusty butterscotch haze
+export const FRAG_MARS = FRAG_MOON
+  .replace('uniform float uEarthshine;', 'uniform float uCamAltM; uniform float uDetail;')
+  .replace(/  float ndl = max\(dot\(N, uSun\), 0\.0\);[\s\S]*?gl_FragColor = vec4\(col, 1\.0\);/, `  float ndl = max(dot(N, uSun), 0.0);
+  float sd = dot(SN, uSun);
+  float lit = mix(max(sd, 0.0), ndl, 0.75);
+  float day = smoothstep(-0.08, 0.08, sd);
+  // dust in the air: dims and reddens the direct light low in the sky, adds a tan skylight
+  vec3 sunC = mix(vec3(1.0, 0.72, 0.5), vec3(1.0, 0.95, 0.88), smoothstep(0.0, 0.35, sd));
+  vec3 col = alb * 1.55 * lit * sunC * smoothstep(-0.02, 0.05, sd) + alb * vec3(0.16, 0.11, 0.08) * day + alb * 0.004;
+  // aerial perspective through the dusty air (scale height 11 km, vertical optical depth ~0.5)
+  float Hs = 11100.0;
+  float hc = max(uCamAltM, 0.0), hf = max(vH, -8000.0), dh = hc - hf;
+  float dens = abs(dh) < 100.0 ? exp(-hf / Hs) : Hs * (exp(-hf / Hs) - exp(-hc / Hs)) / dh;
+  float od = length(vW) * dens * 4.5e-5;
+  vec3 fog = 1.0 - exp(-od * vec3(0.9, 1.0, 1.15));
+  vec3 haze = vec3(0.62, 0.44, 0.3) * smoothstep(-0.15, 0.2, sd) * (0.35 + 0.65 * smoothstep(0.0, 0.6, sd));
+  col = col * (1.0 - fog) + haze * fog;
+  gl_FragColor = vec4(col, 1.0);`)
+  .replace('vec3 g = craterField(vB, 180.0, a2) * w2;', 'vec3 g = craterField(vB, 260.0, a2) * w2 * 0.6;')
+  .replace('if (w1 > 0.0) g += craterField(vB, 40.0, a1) * w1;', 'if (w1 > 0.0) g += craterField(vB, 55.0, a1) * w1 * 0.5;');
+
 // ---------------- tiles ----------------
 class Tile {
   constructor(planet, z, x, y, parent) {
@@ -235,7 +257,9 @@ export class Planet {
     this.body = opts.body;
     this.R = opts.body.R;
     this.loader = opts.loader;
-    this.kind = opts.kind;            // 'earth' | 'moon'
+    this.kind = opts.kind;            // 'earth' | 'moon' | 'mars'
+    this.imgKind = opts.kind === 'mars' ? 'mars' : 'moon';
+    this.imgMaxZ = opts.kind === 'mars' ? 7 : 8;
     this.maxZ = opts.maxZ;
     this.maxRelief = opts.maxRelief;
     this.shared = opts.shared;        // shared uniform objects
@@ -254,7 +278,7 @@ export class Planet {
     this.frustum = new THREE.Frustum();
     this.enabled = true;
     this.whiteTex = makeSolidTex(opts.capColor || '#e8eef5');
-    const rootsX = this.kind === 'moon' ? 2 : 1;
+    const rootsX = this.kind !== 'earth' ? 2 : 1;
     for (let x = 0; x < rootsX; x++) { const t = new Tile(this, 0, x, 0, null); this.tiles.set(t.key, t); this.roots.push(t); }
     if (this.kind === 'earth') this.addPolarCaps();
   }
@@ -320,8 +344,9 @@ export class Planet {
         nightMap: { value: ntex || this.whiteTex }, uNight: { value: new THREE.Vector3(...(nwin || [0, 0, 1])) }, uHasNight: { value: ntex ? 1 : 0 },
         uCamAlt: s.uCamAlt, uFogK: s.uFogK, uNightK: s.uNightK, uDebug: s.uDebug, uCloud: s.uCloud, uCloudOct: s.uCloudOct,
       });
-    } else u.uEarthshine = s.uEarthshine;
-    return new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: this.kind === 'earth' ? FRAG_EARTH : FRAG_MOON });
+    } else if (this.kind === 'mars') Object.assign(u, { uCamAltM: s.uCamAltM, uDetail: s.uDetail });
+    else u.uEarthshine = s.uEarthshine;
+    return new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: this.kind === 'earth' ? FRAG_EARTH : this.kind === 'mars' ? FRAG_MARS : FRAG_MOON });
   }
 
   // ---- texture sharing ----
@@ -507,7 +532,7 @@ export class Planet {
     const ll = this.camLL(camPos);
     const ground = this.heightAt(ll.lat, ll.lon).h;
     const alt = Math.max(5, ll.h - ground);
-    let node = this.roots[this.kind === 'moon' ? (ll.lon < 0 ? 0 : 1) : 0];
+    let node = this.roots[this.kind !== 'earth' ? (ll.lon < 0 ? 0 : 1) : 0];
     for (let z = 1; z <= this.maxZ; z++) {
       const size = (this.R * Math.PI) / 2 ** z;
       if (size / alt < this.splitRatio * 0.7) break;
@@ -547,10 +572,10 @@ export class Planet {
         t._req = null;
       });
     } else {
-      const iz = Math.min(t.z, 8), id = t.z - iz;
-      const reqs = [['moon', iz, t.x >> id, t.y >> id, prio]];
+      const iz = Math.min(t.z, this.imgMaxZ), id = t.z - iz;
+      const reqs = [[this.imgKind, iz, t.x >> id, t.y >> id, prio]];
       const chunk = this.moonChunkFor(t);
-      if (chunk) reqs.push(['moonh', 0, chunk, 0, prio]);
+      if (chunk) reqs.push([this.imgKind + 'h', 0, chunk, 0, prio]);
       t._req = reqs;
       Promise.all(reqs.map((r) => this.loader.get(...r))).then(([img, hm]) => {
         if (t.state !== 'loading') return;
@@ -705,7 +730,7 @@ export class Planet {
     const lon0 = -180 + ci * 45, lat0 = 90 - cj * 45;
     const hFn = (lat, lon) => this.moonHeight(hm, lat, lon, lat0, lon0);
     const ni = 2 ** id;
-    const imgKey = `moon/${t.z - id}/${t.x >> id}/${t.y >> id}`;
+    const imgKey = `${this.imgKind}/${t.z - id}/${t.x >> id}/${t.y >> id}`;
     const tex = this.acquireTex(imgKey, img);
     this.buildMesh(t, N, hFn, imgKey, tex, [(t.x % ni) / ni, (t.y % ni) / ni, 1 / ni], null, null, null);
   }

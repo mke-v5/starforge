@@ -775,7 +775,7 @@ class Game {
     const flux = 1.83e-4 * Math.sqrt(Math.max(0, ship.env.rho)) * Math.pow(ship.env.vSurf, 3) * this.settings.heatScale;
     this.effects.update(dt, craft, ship.env, vb, flux);
     craft.updateVisuals(dt, this.flightTime, ship.ctl);
-    this.effects.updateWorld(dt, this.camI, (p) => gravity(p, this.eph.moon, new THREE.Vector3()), (p) => {
+    this.effects.updateWorld(dt, this.camI, (p) => gravity(p, this.eph.t, new THREE.Vector3()), (p) => {
       const body = p.distanceTo(this.eph.moon) < MOON.soi ? MOON : EARTH;
       const f = this.eph.toFixed(body, p, new THREE.Vector3());
       const ll = toLLH(f, body.R);

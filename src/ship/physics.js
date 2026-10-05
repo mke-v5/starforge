@@ -1,9 +1,9 @@
 // Rigid-body flight physics in the geocentric inertial frame I (doubles throughout).
 
 import * as THREE from 'three';
-import { EARTH, MOON, G0, clamp, toLLH, llh, enu, D2R } from '../core/geo.js';
-import { atmosphere } from '../core/atmo.js';
-import { gravity, moonPos, earthAngle } from '../core/astro.js';
+import { EARTH, MOON, MARS, SUN, G0, clamp, toLLH, llh, enu, D2R } from '../core/geo.js';
+import { atmosphere, airAt } from '../core/atmo.js';
+import { gravity, moonPos, moonVel, marsPos, marsVel, sunPos, sunVel, marsBasis, earthAngle } from '../core/astro.js';
 
 const Y = new THREE.Vector3(0, 1, 0);
 const _rF = new THREE.Vector3(), _rT = new THREE.Vector3();
@@ -15,6 +15,7 @@ const _e = new THREE.Vector3(), _no = new THREE.Vector3(), _up = new THREE.Vecto
 const _gq = new THREE.Quaternion();
 const _cf = new THREE.Vector3();
 const _qShipInv = new THREE.Quaternion();
+const _mx = new THREE.Vector3(), _my = new THREE.Vector3(), _mz = new THREE.Vector3(), _m4 = new THREE.Matrix4(), _sd = new THREE.Vector3();
 
 export class Ship {
   constructor(craft, world, eph, settings) {
@@ -47,11 +48,29 @@ export class Ship {
   // --------- frames ---------
   bodyFrameQ(body, t, out) {
     if (body === EARTH) return out.setFromAxisAngle(Y, earthAngle(t));
+    if (body === SUN) return out.identity();
+    if (body === MARS) {
+      // Mars turns a full degree every ~4 minutes: spin the frame-start orientation on to time t
+      const dt = t - this.eph.t;
+      if (Math.abs(dt) > 600) { marsBasis(t, _mx, _my, _mz); return out.setFromRotationMatrix(_m4.makeBasis(_mx, _my, _mz)); }
+      return out.setFromAxisAngle(this.eph.aY, MARS.omega * dt).multiply(this.eph.marsQ);
+    }
     return out.copy(this.eph.moonQ);   // the Moon turns slowly; frame-level accuracy is enough
   }
+  // centre of a body at time t: extrapolated from the frame's ephemeris for small steps, exact for big ones
   bodyCenter(body, t, out) {
     if (body === EARTH) return out.set(0, 0, 0);
-    return out.copy(this.eph.moon).addScaledVector(this.eph.moonV, t - this.eph.t);
+    const dt = t - this.eph.t, E = this.eph;
+    if (Math.abs(dt) > 2) return body === MARS ? marsPos(t, out) : body === SUN ? sunPos(t, out) : moonPos(t, out);
+    if (body === MARS) return out.copy(E.mars).addScaledVector(E.marsV, dt);
+    if (body === SUN) return out.copy(E.sunP).addScaledVector(E.sunV, dt);
+    return out.copy(E.moon).addScaledVector(E.moonV, dt);
+  }
+  bodyVel(body, t, out) {
+    if (body === EARTH) return out.set(0, 0, 0);
+    const dt = t - this.eph.t, E = this.eph;
+    if (Math.abs(dt) > 2) return body === MARS ? marsVel(t, out) : body === SUN ? sunVel(t, out) : moonVel(t, out);
+    return out.copy(body === MARS ? E.marsV : body === SUN ? E.sunV : E.moonV);
   }
   toFixed(body, pI, t, out) {
     this.bodyCenter(body, t, _a);
@@ -65,14 +84,21 @@ export class Ship {
   }
   surfaceVel(body, pI, t, out) {
     if (body === EARTH) return out.set(EARTH.omega * pI.z, 0, -EARTH.omega * pI.x);
+    if (body === SUN) return this.bodyVel(SUN, t, out);
     this.bodyCenter(body, t, _a);
     _b.copy(pI).sub(_a);
-    out.crossVectors(this.eph.mY, _b).multiplyScalar(MOON.omega);
-    return out.add(this.eph.moonV);
+    out.crossVectors(body === MARS ? this.eph.aY : this.eph.mY, _b).multiplyScalar(body.omega);
+    return out.add(this.bodyVel(body, t, _a));
   }
+  // whose sphere of influence we're in: the Moon's and Mars' inside the Earth's / the Sun's
   dominant(pI, t) {
-    this.bodyCenter(MOON, t, _c);
-    return pI.distanceTo(_c) < MOON.soi ? MOON : EARTH;
+    const de = pI.length();
+    if (de < EARTH.soi) {
+      if (de > 2.5e8) { this.bodyCenter(MOON, t, _c); if (pI.distanceTo(_c) < MOON.soi) return MOON; }
+      return EARTH;
+    }
+    this.bodyCenter(MARS, t, _c);
+    return pI.distanceTo(_c) < MARS.soi ? MARS : SUN;
   }
 
   // place the ship at rest on a body: lat/lon/height of the COM, heading (rad from north), pitch (rad)
@@ -108,12 +134,11 @@ export class Ship {
     this.toFixed(body, this.r, t, _fx);
     const ll = toLLH(_fx, body.R);
     E.lat = ll.lat; E.lon = ll.lon; E.h = ll.h;
-    E.ground = this.world.groundAt(body, ll.lat, ll.lon);
+    E.ground = body === SUN ? 0 : this.world.groundAt(body, ll.lat, ll.lon);
     E.agl = E.h - E.ground;
     E.water = body === EARTH && E.ground <= 0.3 && this.world.isWater(ll.lat, ll.lon);
-    // air (Earth only)
-    let atm;
-    if (body === EARTH && E.h < EARTH.atmoTop) atm = atmosphere(E.h); else atm = atmosphere(1e9);
+    // air (Earth and Mars)
+    const atm = airAt(body, E.h);
     E.rho = atm.rho; E.p = atm.p; E.T = atm.T; E.a = atm.a;
     this.surfaceVel(body, this.r, t, _vg);
     E.vAir.copy(this.v).sub(_vg);
@@ -124,8 +149,9 @@ export class Ship {
     E.vVert = E.vAir.dot(_up);
     E.up = _up.clone();
     // sunlight (simple shadow cylinder for Earth and Moon)
-    const sun = this.eph.sun;
-    E.inSun = !shadowed(this.r, sun, _a.set(0, 0, 0), EARTH.R) && !shadowed(this.r, sun, this.bodyCenter(MOON, t, _b), MOON.R);
+    const sun = this.bodyCenter(SUN, t, _sd).sub(this.r).normalize();
+    E.inSun = !shadowed(this.r, sun, _a.set(0, 0, 0), EARTH.R) && !shadowed(this.r, sun, this.bodyCenter(MOON, t, _b), MOON.R)
+      && (body !== MARS || !shadowed(this.r, sun, this.bodyCenter(MARS, t, _b), MARS.R));
     return E;
   }
 
@@ -161,7 +187,7 @@ export class Ship {
       for (const P of hot) this.breakPart(P, 'overheat');
     }
     // g-force from the change in velocity minus gravity
-    gravity(this.r, this.bodyCenter(MOON, this.t, _b), _a);
+    gravity(this.r, this.t, _a);
     const acc = _c.copy(this.v).sub(this.lastV).divideScalar(Math.max(1e-6, total)).sub(_a);
     this.gForce = this.gForce * 0.85 + (acc.length() / G0) * 0.15;
     this.maxQ = Math.max(this.maxQ, this.env.q);
@@ -246,7 +272,7 @@ export class Ship {
     this.contactForces(dt, Fw, _T);
     if (this.dbg) this.dbg.contact.copy(_T).sub(this.dbg.pre);
     // ---- integrate ----
-    gravity(this.r, this.bodyCenter(MOON, this.t, _b), _a);
+    gravity(this.r, this.t, _a);
     const m = craft.mass;
     this.v.addScaledVector(Fw, dt / m).addScaledVector(_a, dt);
     this.r.addScaledVector(this.v, dt);
@@ -483,16 +509,16 @@ export class Ship {
       const body = this.dominant(this.r, t);
       const c = this.bodyCenter(body, t, _c);
       const rr = Math.hypot(s[0] - c.x, s[1] - c.y, s[2] - c.z);
-      const hmax = clamp(0.01 * Math.sqrt(rr * rr * rr / body.mu), 0.5, 300);
-      const h = Math.min(left, hmax);
+      const h = Math.min(left, railStep(s, t, body, rr));
       rk4(s, t, h);
       t += h; left -= h;
       this.r.set(s[0], s[1], s[2]); this.v.set(s[3], s[4], s[5]);
       // stop warping before hitting air or ground
       const alt = rr - body.R;
-      if ((body === EARTH && alt < EARTH.atmoTop + 2000) || alt < 3000 + (body === MOON ? 8000 : 0)) {
+      const air = body.atmoTop > 0 && alt < body.atmoTop + 2000;
+      if (air || alt < 3000 + (body === MOON ? 8000 : body === MARS ? 22000 : 0)) {
         this.warp = 1;
-        this.events.push({ type: 'warpStop', why: body === EARTH && alt < EARTH.atmoTop + 2000 ? 'atmosphere' : 'surface' });
+        this.events.push({ type: 'warpStop', why: air ? 'atmosphere' : 'surface' });
         break;
       }
     }
@@ -512,6 +538,16 @@ export class Ship {
   }
 }
 
+// RK4 step for coasting: a small fraction of the local orbital time scale about every body that matters
+const _rs = new THREE.Vector3();
+export function railStep(s, t, body, rr) {
+  if (body === EARTH || body === MOON) return clamp(0.01 * Math.sqrt(rr * rr * rr / body.mu), 0.5, 300);
+  const de = Math.hypot(s[0], s[1], s[2]);
+  let h = Math.min(0.01 * Math.sqrt(de * de * de / EARTH.mu), 0.01 * Math.sqrt(rr * rr * rr / body.mu));
+  if (body === SUN) { marsPos(t, _rs); const dm = Math.hypot(s[0] - _rs.x, s[1] - _rs.y, s[2] - _rs.z); h = Math.min(h, 0.01 * Math.sqrt(dm * dm * dm / MARS.mu)); }
+  return clamp(h, 0.5, body === SUN ? 20000 : 1200);
+}
+
 function shadowed(p, sun, c, R) {
   const dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
   const along = dx * sun.x + dy * sun.y + dz * sun.z;
@@ -523,9 +559,8 @@ function shadowed(p, sun, c, R) {
 // ---- gravity-only RK4 on [x,y,z,vx,vy,vz] with the analytic Moon ----
 const _m1 = new THREE.Vector3(), _pp = new THREE.Vector3(), _acc = new THREE.Vector3();
 function deriv(s, t, out) {
-  moonPos(t, _m1);
   _pp.set(s[0], s[1], s[2]);
-  gravity(_pp, _m1, _acc);
+  gravity(_pp, t, _acc);
   out[0] = s[3]; out[1] = s[4]; out[2] = s[5]; out[3] = _acc.x; out[4] = _acc.y; out[5] = _acc.z;
 }
 const k1 = new Array(6), k2 = new Array(6), k3 = new Array(6), k4 = new Array(6), tmp = new Array(6);

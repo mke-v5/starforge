@@ -10,6 +10,7 @@ export const SRC = {
   dem: { maxZ: 12, url: (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png` },
   night: { maxZ: 8, url: (z, x, y) => `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/2012-01-01/GoogleMapsCompatible_Level8/${z}/${y}/${x}.jpeg` },
   moon: { maxZ: 8, url: (z, x, y) => `https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/${z}/${y}/${x}.jpg` },
+  mars: { maxZ: 7, url: (z, x, y) => `https://trek.nasa.gov/tiles/Mars/EQ/Mars_Viking_MDIM21_ClrMosaic_global_232m/1.0.0/default/default028mm/${z}/${y}/${x}.jpg` },
 };
 
 const MAX_CONCURRENT = 16;
@@ -93,6 +94,11 @@ export class Loader {
       }
       if (e.kind === 'night') return await this.bitmap(SRC.night.url(e.z, e.x, e.y));
       if (e.kind === 'moon') return await this.bitmap(SRC.moon.url(e.z, e.x, e.y));
+      if (e.kind === 'mars') return await this.bitmap(SRC.mars.url(e.z, e.x, e.y));
+      if (e.kind === 'marsh') {
+        const b = await this.bitmap(`./data/mars/${e.x}.png`);
+        return b ? decodeMarsHeight(b) : null;
+      }
       if (e.kind === 'dem') {
         const b = await this.bitmap(SRC.dem.url(e.z, e.x, e.y));
         return b ? decodeTerrarium(b) : null;
@@ -153,6 +159,16 @@ function decodeMoonHeight(bmp) {
   const d = pixels(bmp);
   const out = new Float32Array(w * h);
   for (let i = 0, j = 0; i < out.length; i++, j += 4) out[i] = (((d[j] << 8) | d[j + 1]) * 8 - 20000) * 0.5;
+  out.w = w; out.h = h;
+  return out;
+}
+
+// Mars chunk PNG (MOLA): R = high byte, G = low byte of (metres + 10000)
+function decodeMarsHeight(bmp) {
+  const w = bmp.width, h = bmp.height;
+  const d = pixels(bmp);
+  const out = new Float32Array(w * h);
+  for (let i = 0, j = 0; i < out.length; i++, j += 4) out[i] = ((d[j] << 8) | d[j + 1]) - 10000;
   out.w = w; out.h = h;
   return out;
 }

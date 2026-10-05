@@ -1,8 +1,8 @@
 // Orbital mechanics helpers: elements, trajectory prediction (Earth + Moon gravity) and burn planners.
 
 import * as THREE from 'three';
-import { EARTH, MOON, clamp, llh, toLLH, gcDist } from '../core/geo.js';
-import { moonPos, moonVel, gravity, earthAngle, moonBasis } from '../core/astro.js';
+import { EARTH, MOON, MARS, SUN, AU, clamp, llh, toLLH, gcDist } from '../core/geo.js';
+import { moonPos, moonVel, gravity, earthAngle, moonBasis, marsPos, marsVel, sunPos, sunVel } from '../core/astro.js';
 import { rk4 } from './physics.js';
 import { atmosphere } from '../core/atmo.js';
 
@@ -39,24 +39,60 @@ export function elements(r, v, mu) {
   return { a, e, pe, ap, inc, period, energy, nu, tPe, tAp, h, ev };
 }
 
-// Predict a trajectory. Returns points relative to Earth (I) and, inside the Moon's sphere of influence, relative to the Moon.
+// position and velocity of a body's centre in frame I
+export function bodyPos(body, t, out = new THREE.Vector3()) { return body === EARTH ? out.set(0, 0, 0) : body === MOON ? moonPos(t, out) : body === MARS ? marsPos(t, out) : sunPos(t, out); }
+export function bodyVelAt(body, t, out = new THREE.Vector3()) { return body === EARTH ? out.set(0, 0, 0) : body === MOON ? moonVel(t, out) : body === MARS ? marsVel(t, out) : sunVel(t, out); }
+
+// which body's sphere of influence a point is in, and the distance to that body
+const _dp = new THREE.Vector3();
+export function dominantAt(x, y, z, t) {
+  const de = Math.hypot(x, y, z);
+  if (de < EARTH.soi) {
+    if (de > 2.5e8) { moonPos(t, _dp); const dm = Math.hypot(x - _dp.x, y - _dp.y, z - _dp.z); if (dm < MOON.soi) return { body: MOON, rr: dm, de }; }
+    return { body: EARTH, rr: de, de };
+  }
+  marsPos(t, _dp);
+  const da = Math.hypot(x - _dp.x, y - _dp.y, z - _dp.z);
+  if (da < MARS.soi) return { body: MARS, rr: da, de };
+  sunPos(t, _dp);
+  return { body: SUN, rr: Math.hypot(x - _dp.x, y - _dp.y, z - _dp.z), de, da };
+}
+// coasting step (s) for prediction: a fraction of the orbital time scale about every body that matters
+function coastStep(D, k, maxStep) {
+  const { body, rr, de } = D;
+  if (body === EARTH || body === MOON) return clamp(k * Math.sqrt(rr * rr * rr / body.mu), 0.5, maxStep);
+  let h = Math.min(k * Math.sqrt(de * de * de / EARTH.mu), k * Math.sqrt(rr * rr * rr / body.mu));
+  if (body === SUN) h = Math.min(h, k * Math.sqrt(D.da ** 3 / MARS.mu));
+  return clamp(h, 0.5, body === SUN ? 20000 : Math.max(maxStep, 1200));
+}
+
+// Predict a trajectory. Returns points relative to Earth (I) while inside the Earth's sphere of influence, relative
+// to the Moon inside its SOI, relative to the Sun (heliocentric) between the planets and relative to Mars in its SOI.
 export function predict(r0, v0, t0, opts = {}) {
-  const maxT = opts.maxT ?? 6 * 86400;
-  const maxSteps = opts.maxSteps ?? 4000;
+  let maxT = opts.maxT ?? 6 * 86400;
+  let maxSteps = opts.maxSteps ?? 4000;
   const s = [r0.x, r0.y, r0.z, v0.x, v0.y, v0.z];
   let t = t0;
-  const earthPts = [], moonPts = [];
+  const earthPts = [], moonPts = [], sunPts = [], marsPts = [];
   let closeMoon = { d: Infinity, t: 0, r: null, v: null }, impact = null, soiIn = null, soiOut = null, earthPe = { d: Infinity, t: 0, hx: 0, hy: 0, hz: 0 };
+  let closeMars = { d: Infinity, t: 0, r: null, v: null }, earthOut = null, earthBack = null, marsIn = null, marsOut = null;
   let inSoi = null, soiInIdx = -1, soiOutIdx = -1, startInSoi = false, earthPeIdx = 0;
-  const startR = Math.hypot(s[0], s[1], s[2]);
-  let angle = 0, lastDir = new THREE.Vector3(s[0], s[1], s[2]).normalize();
-  const dir = new THREE.Vector3();
+  let lastBody = null, startBody = null;
+  let angle = 0, lastDir = new THREE.Vector3(s[0], s[1], s[2]).normalize(), sunAngle = 0, lastSunDir = null;
+  const dir = new THREE.Vector3(), sp = new THREE.Vector3(), ap = new THREE.Vector3();
   for (let i = 0; i < maxSteps && t - t0 < maxT; i++) {
-    moonPos(t, _m);
-    const dx = s[0] - _m.x, dy = s[1] - _m.y, dz = s[2] - _m.z;
-    const dm = Math.hypot(dx, dy, dz);
-    const de = Math.hypot(s[0], s[1], s[2]);
-    const nowSoi = dm < MOON.soi;
+    const D = dominantAt(s[0], s[1], s[2], t);
+    const body = D.body;
+    if (startBody === null) startBody = body;
+    const de = D.de;
+    // ---- the Earth's neighbourhood (and the Moon) ----
+    let dm = Infinity, dx = 0, dy = 0, dz = 0, nowSoi = false;
+    if (de < EARTH.soi) {
+      moonPos(t, _m);
+      dx = s[0] - _m.x; dy = s[1] - _m.y; dz = s[2] - _m.z;
+      dm = Math.hypot(dx, dy, dz);
+      nowSoi = dm < MOON.soi;
+    }
     if (inSoi === null) { inSoi = nowSoi; startInSoi = nowSoi; }
     if (nowSoi && !inSoi && !soiIn) { soiIn = t; soiInIdx = earthPts.length / 3; }
     if (!nowSoi && inSoi && (soiIn || startInSoi) && !soiOut) { soiOut = t; soiOutIdx = earthPts.length / 3; }
@@ -67,30 +103,54 @@ export function predict(r0, v0, t0, opts = {}) {
       earthPe.d = de; earthPe.t = t; earthPeIdx = earthPts.length / 3;
       earthPe.hx = s[1] * s[5] - s[2] * s[4]; earthPe.hy = s[2] * s[3] - s[0] * s[5]; earthPe.hz = s[0] * s[4] - s[1] * s[3];
     }
-    earthPts.push(s[0], s[1], s[2]);
+    // ---- leaving and coming back into the Earth's sphere, Mars' sphere ----
+    if (lastBody !== null && body !== lastBody) {
+      if ((lastBody === EARTH || lastBody === MOON) && body === SUN && !earthOut) earthOut = t;
+      if (lastBody === SUN && (body === EARTH || body === MOON) && earthOut && !earthBack) earthBack = t;
+      if (body === MARS && !marsIn) marsIn = t;
+      if (lastBody === MARS && marsIn && !marsOut) marsOut = t;
+      if (body === SUN && !opts.noExtend) { maxT = Math.max(maxT, opts.helioT ?? 600 * 86400); maxSteps = Math.max(maxSteps, i + 6000); }
+    }
+    lastBody = body;
+    if (de < EARTH.soi * 1.05) earthPts.push(s[0], s[1], s[2]);
     if (nowSoi) moonPts.push(dx, dy, dz, t);
+    if (body === SUN || (body !== MARS && de > EARTH.soi * 0.7)) { sunPos(t, sp); sunPts.push(s[0] - sp.x, s[1] - sp.y, s[2] - sp.z, t); }
+    if (body === MARS || (D.da !== undefined && D.da < MARS.soi * 1.5)) {
+      marsPos(t, ap);
+      const ax = s[0] - ap.x, ay = s[1] - ap.y, az = s[2] - ap.z, da = Math.hypot(ax, ay, az);
+      if (body === MARS) marsPts.push(ax, ay, az, t);
+      if (da < closeMars.d) { closeMars = { d: da, t, r: new THREE.Vector3(ax, ay, az), v: null, vI: new THREE.Vector3(s[3], s[4], s[5]) }; }
+      if (da < MARS.R + (opts.marsStop ?? 0)) { impact = { body: MARS, t, r: new THREE.Vector3(ax, ay, az) }; break; }
+    }
     if (de < EARTH.R + (opts.earthStop ?? 0)) { impact = { body: EARTH, t, r: new THREE.Vector3(s[0], s[1], s[2]) }; break; }
     if (opts.moonStop !== false && dm < MOON.R + 200) { impact = { body: MOON, t, r: new THREE.Vector3(dx, dy, dz) }; break; }
-    // stop after one full revolution around Earth when not heading for the Moon
-    dir.set(s[0], s[1], s[2]).normalize();
-    angle += Math.acos(clamp(dir.dot(lastDir), -1, 1));
-    lastDir.copy(dir);
-    if (!nowSoi && opts.oneRev !== false && angle > 2 * Math.PI + 0.05 && de < 300e6 && !soiIn) break;
-    const body = nowSoi ? MOON : EARTH;
-    const rr = nowSoi ? dm : de;
-    const h = clamp(0.012 * Math.sqrt(rr * rr * rr / body.mu), 0.5, opts.maxStep ?? 900);
+    if (body === EARTH || body === MOON) {
+      // stop after one full revolution around Earth when not heading for the Moon
+      dir.set(s[0], s[1], s[2]).normalize();
+      angle += Math.acos(clamp(dir.dot(lastDir), -1, 1));
+      lastDir.copy(dir);
+      if (!nowSoi && opts.oneRev !== false && angle > 2 * Math.PI + 0.05 && de < 300e6 && !soiIn && !earthOut) break;
+    } else if (body === SUN) {
+      // ... and after one full lap around the Sun
+      sunPos(t, sp); dir.set(s[0] - sp.x, s[1] - sp.y, s[2] - sp.z).normalize();
+      if (lastSunDir) sunAngle += Math.acos(clamp(dir.dot(lastSunDir), -1, 1)); else lastSunDir = new THREE.Vector3();
+      lastSunDir.copy(dir);
+      if (sunAngle > 2 * Math.PI + 0.05) break;
+    }
+    const h = body === EARTH || body === MOON ? clamp(0.012 * Math.sqrt(D.rr ** 3 / body.mu), 0.5, opts.maxStep ?? 900) : coastStep(D, 0.012, opts.maxStep ?? 900);
     rk4(s, t, h);
     t += h;
   }
   if (closeMoon.r) { moonVel(closeMoon.t, _mv); closeMoon.v = closeMoon.vI.clone().sub(_mv); }
-  return { earthPts, moonPts, closeMoon, impact, soiIn, soiOut, soiInIdx, soiOutIdx, startInSoi, earthPe, earthPeIdx, tEnd: t };
+  if (closeMars.r) { marsVel(closeMars.t, _mv); closeMars.v = closeMars.vI.clone().sub(_mv); }
+  return { earthPts, moonPts, sunPts, marsPts, closeMoon, closeMars, impact, soiIn, soiOut, soiInIdx, soiOutIdx, startInSoi, earthPe, earthPeIdx, earthOut, earthBack, marsIn, marsOut, startBody, tEnd: t };
 }
 
 // velocity of the craft relative to the dominant body and its position relative to it
 export function relState(ship, body) {
   if (body === EARTH) return { r: ship.r.clone(), v: ship.v.clone(), mu: EARTH.mu, R: EARTH.R };
-  moonPos(ship.t, _m); moonVel(ship.t, _mv);
-  return { r: ship.r.clone().sub(_m), v: ship.v.clone().sub(_mv), mu: MOON.mu, R: MOON.R };
+  bodyPos(body, ship.t, _m); bodyVelAt(body, ship.t, _mv);
+  return { r: ship.r.clone().sub(_m), v: ship.v.clone().sub(_mv), mu: body.mu, R: body.R };
 }
 
 // maneuver basis at a state: prograde, normal, radial (unit vectors)
@@ -106,11 +166,8 @@ export function propagate(r, v, t, dt) {
   const s = [r.x, r.y, r.z, v.x, v.y, v.z];
   let left = dt, tt = t;
   while (left > 1e-6) {
-    const de = Math.hypot(s[0], s[1], s[2]);
-    moonPos(tt, _m);
-    const dm = Math.hypot(s[0] - _m.x, s[1] - _m.y, s[2] - _m.z);
-    const body = dm < MOON.soi ? MOON : EARTH, rr = body === MOON ? dm : de;
-    const h = Math.min(left, clamp(0.01 * Math.sqrt(rr ** 3 / body.mu), 0.5, 300));
+    const D = dominantAt(s[0], s[1], s[2], tt);
+    const h = Math.min(left, D.body === EARTH || D.body === MOON ? clamp(0.01 * Math.sqrt(D.rr ** 3 / D.body.mu), 0.5, 300) : coastStep(D, 0.01, 300));
     rk4(s, tt, h); tt += h; left -= h;
   }
   return { r: new THREE.Vector3(s[0], s[1], s[2]), v: new THREE.Vector3(s[3], s[4], s[5]), t: tt };

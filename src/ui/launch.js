@@ -89,6 +89,13 @@ export class LaunchScreen {
     const anchor = this.anchor;
     const list = anchor.ap ? [{ d: 0, a: anchor.ap }, ...A.nearest(anchor.lat, anchor.lon, 10, 1).filter((x) => x.a !== anchor.ap)] : A.nearest(anchor.lat, anchor.lon, 10, 1);
     $('l-sel').textContent = `Airports near ${anchor.name}` + (vertical && this.mode === 'runway' ? ' — vertical ships start on the launch pad.' : '');
+    if (this.mode === 'pad' || (vertical && this.mode === 'runway')) {
+      // or a brand-new pad right at the place itself
+      const b = document.createElement('button'); b.className = 'it';
+      b.innerHTML = `<span><span class="nm">Build a launch pad at ${esc(anchor.name)}</span><span class="sub">${Math.abs(anchor.lat).toFixed(3)}°${anchor.lat >= 0 ? 'N' : 'S'} ${Math.abs(anchor.lon).toFixed(3)}°${anchor.lon >= 0 ? 'E' : 'W'} · concrete pad and service tower</span></span><span class="r">new</span>`;
+      b.addEventListener('click', () => this.pick(b, { type: 'padAt', lat: anchor.lat, lon: anchor.lon, label: `Pad at ${anchor.name}`, anchor }));
+      el.appendChild(b);
+    }
     for (const { d, a } of list) {
       for (const rw of a.runways.slice(0, 3)) {
         for (const fromLe of [true, false]) {

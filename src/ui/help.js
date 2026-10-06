@@ -19,6 +19,8 @@ export const HELP_HTML = `
 <h3>Coming home</h3>
 <p>From Earth orbit, open the map and tap <b>Fly home to an airport…</b>, pick a city, then <b>Fly me home</b>. The autopilot waits for the right pass, burns, flies a belly-first reentry steering toward the airport, then lines up and lands on the runway. Any time you're flying a plane, <b>Autopilot → Land at …</b> lands on the nearest big runway. Move the stick to take over at any moment.</p>
 <p>Tail-sitting starships like <b>Starhopper</b> tap <b>Land at an airport…</b> instead: they fall engines-first (the air does most of the braking), trim the fall with short burns, fire a landing burn near the ground and hover across to the exact spot. If the orbit doesn't pass close to the airport, the deorbit burn swings it sideways — which costs fuel, or waits for a better pass.</p>
+<h3>Launch pads</h3>
+<p>Rockets start from a pad beside any airport's runway — or pick <b>Launch → Pad</b>, search any city, and choose <b>Build a launch pad at…</b> to launch from right there (on the sea it floats like a barge).</p>
 <h3>Views</h3>
 <p>The camera button cycles chase, cockpit, free (turns with the ship) and <b>fly-by</b>, which stands beside your flight path and watches you pass. Low over the ground you'll see roads, rivers and lakes from OpenStreetMap; above about 80 km the stars come out even in daylight.</p>
 <p>Flying a rocket by hand, coast up out of the air and the HUD offers to <b>circularize at apoapsis</b> — one tap plans and flies the burn.</p>

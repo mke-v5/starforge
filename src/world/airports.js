@@ -351,6 +351,40 @@ function runwayMaterial(shared, t1, t2, len, w) {
 }
 
 // A hangar building with apron, built in a local frame (x = right of runway direction, y = up, -z = toward runway direction)
+// A launch pad: concrete square with a flame trench, a lattice service tower with an access arm, floodlights
+// and red obstruction lights. Local frame: y up, the rocket stands at the origin.
+export function buildLaunchPad() {
+  const g = new THREE.Group();
+  const conc = new THREE.MeshStandardMaterial({ color: 0x8d9096, roughness: 0.92, metalness: 0.0 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.9 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0xc23a2a, roughness: 0.6, metalness: 0.3 });
+  const grey = new THREE.MeshStandardMaterial({ color: 0x9aa1aa, roughness: 0.5, metalness: 0.6 });
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(110, 1.2, 110), conc); pad.position.y = -0.55; g.add(pad);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(9, 10, 48), new THREE.MeshBasicMaterial({ color: 0xffb347 })); ring.rotation.x = -Math.PI / 2; ring.position.y = 0.07; g.add(ring);
+  const trench = new THREE.Mesh(new THREE.BoxGeometry(10, 0.2, 46), dark); trench.position.set(0, 0.02, 30); g.add(trench);
+  // service tower: four legs with braces every 6 m, a top deck and an access arm toward the rocket
+  const tx = -22, H = 66;
+  for (const [x, z] of [[-3, -3], [3, -3], [-3, 3], [3, 3]]) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.7, H, 0.7), steel); c.position.set(tx + x, H / 2, z); g.add(c); }
+  for (let y = 6; y < H; y += 6) {
+    for (const z of [-3, 3]) { const b = new THREE.Mesh(new THREE.BoxGeometry(6.7, 0.35, 0.35), steel); b.position.set(tx, y, z); g.add(b); }
+    for (const x of [-3, 3]) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 6.7), steel); b.position.set(tx + x, y, 0); g.add(b); }
+    const d = new THREE.Mesh(new THREE.BoxGeometry(0.25, 8.5, 0.25), steel); d.position.set(tx, y - 3, 3); d.rotation.z = 0.78; g.add(d);
+  }
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(8, 0.6, 8), grey); deck.position.set(tx, H, 0); g.add(deck);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(17, 1.4, 2), grey); arm.position.set(tx + 11, H * 0.55, 0); g.add(arm);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.4, 14, 8), grey); mast.position.set(tx, H + 7, 0); g.add(mast);
+  const red = new THREE.MeshBasicMaterial({ color: 0xff3020 });
+  for (const y of [H + 14.2, H * 0.5]) { const l = new THREE.Mesh(new THREE.SphereGeometry(0.45, 8, 6), red); l.position.set(tx, y, 3.5); g.add(l); }
+  // floodlight poles at the corners
+  const lampM = new THREE.MeshBasicMaterial({ color: 0xfff1d0 });
+  for (const [x, z] of [[48, 48], [-48, 48], [48, -48], [-48, -48]]) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, 26, 8), grey); pole.position.set(x, 13, z); g.add(pole);
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(3, 1.4, 1), lampM); lamp.position.set(x * 0.97, 26, z * 0.97); lamp.lookAt(0, 0, 0); g.add(lamp);
+  }
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
 export function buildHangar() {
   const g = new THREE.Group();
   const wall = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, metalness: 0.4, roughness: 0.55 });

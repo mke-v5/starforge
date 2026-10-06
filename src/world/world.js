@@ -5,7 +5,7 @@ import { EARTH, MOON, clamp, toLLH, smoothstep } from '../core/geo.js';
 import { Loader } from './loader.js';
 import { Planet } from './planet.js';
 import { Sky } from './sky.js';
-import { Airports, buildHangar } from './airports.js';
+import { Airports, buildHangar, buildLaunchPad } from './airports.js';
 import { Buildings } from './buildings.js';
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
@@ -114,6 +114,25 @@ export class World {
     const zAxis = toRunway.clone().negate();
     const xAxis = new THREE.Vector3().crossVectors(up, zAxis).normalize();
     g.matrix.makeBasis(xAxis, up, zAxis).setPosition(pos.clone().addScaledVector(toRunway, -60));
+    g.matrixAutoUpdate = false;
+    this.earth.group.add(g);
+    this.hangar = g;
+    this.earth.invalidate((t) => t.contains(info.lat, info.lon) || (Math.abs(t.lat - info.lat) < 0.2 && Math.abs(t.lon - info.lon) < 0.2));
+  }
+
+  // a launch pad built wherever the player chose: a flattened concrete square with a service tower
+  setLaunchPad(info) {
+    if (this.hangar) { this.earth.group.remove(this.hangar); this.hangar = null; }
+    if (!info) { this.airports.extra = []; return; }
+    const D2R = Math.PI / 180;
+    this.airports.addPad({ idx: -1, latC: info.lat, lonC: info.lon, cosC: Math.cos(info.lat * D2R), dx: 0, dy: 1, len: 130, w: 130, e1: info.elev, e2: info.elev, ap: null });
+    const g = buildLaunchPad();
+    const pos = new THREE.Vector3(Math.cos(info.lat * D2R) * Math.cos(info.lon * D2R), Math.sin(info.lat * D2R), -Math.cos(info.lat * D2R) * Math.sin(info.lon * D2R)).multiplyScalar(EARTH.R + info.elev);
+    const up = pos.clone().normalize();
+    const lonR = Math.atan2(-pos.z, pos.x);
+    const east = new THREE.Vector3(-Math.sin(lonR), 0, -Math.cos(lonR));
+    const north = new THREE.Vector3().crossVectors(up, east).normalize();
+    g.matrix.makeBasis(east, up, north.clone().negate()).setPosition(pos);
     g.matrixAutoUpdate = false;
     this.earth.group.add(g);
     this.hangar = g;

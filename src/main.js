@@ -215,7 +215,7 @@ class Game {
 
   // ---------------- flight lifecycle ----------------
   launch(site) {
-    const label = site.airport ? `${site.airport.iata || site.airport.ident} ${site.type}` : site.name;
+    const label = site.type === 'padAt' ? site.label : site.airport ? `${site.airport.iata || site.airport.ident} ${site.type}` : site.name;
     this.lastSite = { ...site, label, rwIdx: site.rw ? site.rw.idx : undefined, rw: undefined, airport: undefined };
     save('lastSite', this.lastSite);
     this.startFlight(site);
@@ -297,6 +297,9 @@ class Game {
         lat = p.lat; lon = p.lon; hdg = hang.heading;
         h = hang.elev;
       }
+    } else if (site.type === 'padAt') {
+      lat = site.lat; lon = site.lon; hdg = 0;
+      this.world.setLaunchPad(null);
     } else if (site.type === 'moon') {
       body = MOON; lat = site.lat; lon = site.lon; hdg = 0;
     } else if (site.type === 'air') {
@@ -343,10 +346,23 @@ class Game {
         if (this.ship !== ship) { this.spawning = false; return; }   // flight was cancelled
       }
     }
+    if (site.type === 'padAt' && this.ship === ship) {
+      // now that the ground is known, pour the pad level with it (on water it floats like a barge) and let the
+      // terrain rebuild flattened around it
+      const g0 = this.world.groundAt(EARTH, lat, lon);
+      h = site.elev = Math.max(this.world.isWater(lat, lon) ? 1.5 : 0, g0) + 0.3;
+      this.world.setLaunchPad({ lat, lon, elev: h });
+      const t1 = performance.now();
+      while (performance.now() - t1 < 8000 && this.ship === ship) {
+        this.world.update(this.camI, this.camera, this.eph, 0.016);
+        if (this.world.terrainReady(EARTH, lat, lon, 13)) break;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+    }
     this.spawning = false;
     if (this.ship !== ship) return;
     const ground = needGround ? this.world.groundAt(body, lat, lon) : 0;
-    if (site.type === 'runway' || site.type === 'hangar' || site.type === 'pad' || site.type === 'moon') {
+    if (site.type === 'runway' || site.type === 'hangar' || site.type === 'pad' || site.type === 'padAt' || site.type === 'moon') {
       const gh = Math.max(ground, h !== undefined ? h - 0.25 : ground);
       ship.placeAt(body, lat, lon, hComFor(gh), hdg, vert ? Math.PI / 2 : 0);
       ship.ctl.gear = true;
@@ -408,7 +424,7 @@ class Game {
     const v3 = (v) => [v.x, v.y, v.z];
     return {
       v: 1, savedAt: Date.now(), design: this.design,
-      site: { type: site.type, name: site.name || '', label: site.label || '', airport: site.airport ? site.airport.ident : null },
+      site: { type: site.type, name: site.name || '', label: site.label || '', airport: site.airport ? site.airport.ident : null, pad: site.type === 'padAt' ? { lat: site.lat, lon: site.lon, elev: site.elev } : null },
       t: ship.t, r: v3(ship.r), vel: v3(ship.v), q: [ship.q.x, ship.q.y, ship.q.z, ship.q.w], w: v3(ship.w),
       parked: ship.parked ? { body: ship.parked.body === MOON ? 'moon' : 'earth', pF: v3(ship.parked.pF), qF: [ship.parked.qF.x, ship.parked.qF.y, ship.parked.qF.z, ship.parked.qF.w] } : null,
       parts: craft.parts.map((P) => ({ a: P.alive ? 1 : 0, r: Object.fromEntries(Object.entries(P.res).map(([k, x]) => [k, x.amt])), T: Math.round(P.temp) })),
@@ -432,6 +448,7 @@ class Game {
     const A = this.world.airports;
     const findAp = (id) => (id ? A.airports.find((a) => a.ident === id) || null : null);
     this.site = { type: s.site.type, name: s.site.name, label: s.site.label, airport: findAp(s.site.airport), resumed: true };
+    if (s.site.pad && s.site.pad.elev !== undefined) { Object.assign(this.site, s.site.pad); this.world.setLaunchPad(s.site.pad); }
     this.applySettings();
     this.design = s.design;
     const craft = new Craft(this.design);

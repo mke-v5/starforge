@@ -303,7 +303,9 @@ export class Builder {
     this.craft.group.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
     this.shipRoot.add(this.craft.group);
     this.layout();
-    if (frame || !this.framed) { this.frameCamera(); this.framed = true; }
+    // re-frame when the ship has outgrown the view (a growing ship would run off the screen or under the panels)
+    const size = this.craft.parts.length ? this.craft.box.getSize(new THREE.Vector3()).length() : 0;
+    if (frame || !this.framed || size > (this.framedSize || 0) * 1.3) { this.frameCamera(); this.framed = true; this.framedSize = size; }
     this.updateMarkers();
     this.updateStats();
     this.highlight();
@@ -399,7 +401,9 @@ export class Builder {
       }
     }
     if (def.surface === false || !PP.def.surface) return null;
-    // 2. surface attach: +X along the surface normal, +Y toward the nose
+    // 2. surface attach: +X along the surface normal, +Y toward the nose. A tap within a hand's width of the
+    // centreline on the top or belly snaps onto it (a centre part, no mirror twin)
+    if (Math.abs(hit.x) < 0.3 && Math.abs(n.y) > Math.abs(n.x) * 1.4) { hit.x = 0; n.x = 0; n.normalize(); }
     const xAxis = n.clone();
     let fwd = new THREE.Vector3(0, 0, -1);
     if (Math.abs(fwd.dot(xAxis)) > 0.95) fwd = new THREE.Vector3(0, 1, 0);

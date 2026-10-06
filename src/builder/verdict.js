@@ -38,7 +38,14 @@ export function missionCheck(c, design) {
   let takeoff;
   if (vertical) takeoff = { ok: tSL / (mass * G0) > 1.1, label: 'Lifts off its pad', detail: `TWR ${(tSL / (mass * G0)).toFixed(2)} (needs 1.1)` };
   else if (tLiftSL / (mass * G0) > 1.05) takeoff = { ok: true, label: 'Takes off vertically', detail: `hover TWR ${(tLiftSL / (mass * G0)).toFixed(2)}` };
-  else takeoff = { ok: S > 0 && vs < 120 && tSL / (mass * G0) > 0.2, label: 'Takes off from a runway', detail: S > 0 ? `lift-off ~${Math.round(vs * 1.15 * 3.6)} km/h · TWR ${(tSL / (mass * G0)).toFixed(2)}` : 'no wings' };
+  else {
+    const wheels = c.gears.some((P) => !P.gear.g.leg);
+    // wheels both ahead of and behind the centre of mass, or it sits on its tail or nose
+    const ends = c.gears.map((P) => P.gear.ext.clone().multiplyScalar(P.gear.g.len + P.gear.g.wheel).add(P.gear.mount).z);
+    const stance = ends.some((z) => z < c.com.z - 0.2) && ends.some((z) => z > c.com.z);
+    takeoff = { ok: wheels && stance && S > 0 && vs < 120 && tSL / (mass * G0) > 0.2, label: 'Takes off from a runway',
+      detail: !wheels ? 'needs wheeled landing gear' : !stance ? 'needs wheels ahead of and behind the centre of mass' : S > 0 ? `lift-off ~${Math.round(vs * 1.15 * 3.6)} km/h · TWR ${(tSL / (mass * G0)).toFixed(2)}` : 'no wings' };
+  }
   out.push(takeoff);
 
   // ---- orbit: ~9.4 km/s from the ground in a rocket; an air-breathing climb takes some of that ----
@@ -79,7 +86,10 @@ export function missionCheck(c, design) {
   const weak = c.parts.reduce((b, P) => (!b || (P.def.maxT || 1e9) < (b.def.maxT || 1e9) ? P : b), null);
   const maxT = weak.def.maxT || 0;
   if (orbit.ok) out.push({ ok: maxT >= 1200, label: 'Survives reentry', detail: `heat limit ${maxT} K (${weak.def.name})`, soft: maxT >= 1000 });
-  if (glideHome && isFinite(vs)) out.push({ ok: vs < 95, label: 'Lands on a runway', detail: `touchdown ~${Math.round(vs * 1.2 * 3.6)} km/h`, soft: vs < 120 });
+  if (glideHome && isFinite(vs)) {
+    const wheels = c.gears.some((P) => !P.gear.g.leg);
+    out.push({ ok: wheels && vs < 95, label: 'Lands on a runway', detail: wheels ? `touchdown ~${Math.round(vs * 1.2 * 3.6)} km/h` : 'needs wheeled landing gear', soft: wheels && vs < 120 });
+  }
   return { list: out, dv, needOrbit, needStation, needMoon };
 }
 

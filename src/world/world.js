@@ -25,13 +25,13 @@ export class World {
       uEarthshine: { value: 0.01 },
       uCloud: { value: new THREE.Vector4(0, 1, 0, 0) },
       uCloudOct: { value: { low: 5, medium: 8, high: 11 }[settings.quality || 'medium'] || 8 },
+      uDetail: { value: (settings.quality || 'medium') === 'low' ? 0 : 1 },
+      uTime: { value: 0 },
       anisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
       night: 0,
     };
-    const q = settings.quality || 'medium';
-    const detail = { low: [0.95, 240], medium: [0.62, 360], high: [0.45, 520] }[q] || [0.62, 360];
-    this.earth = new Planet({ body: EARTH, loader: this.loader, kind: 'earth', maxZ: 14, maxRelief: 9000, shared: this.shared, splitRatio: detail[0], maxTiles: detail[1] });
-    this.moon = new Planet({ body: MOON, loader: this.loader, kind: 'moon', maxZ: 9, maxRelief: 11000, shared: this.shared, splitRatio: detail[0] * 1.1, maxTiles: Math.round(detail[1] * 0.6), capColor: '#888' });
+    this.earth = new Planet({ body: EARTH, loader: this.loader, kind: 'earth', maxZ: 14, imgMaxZ: 14, maxRelief: 9000, shared: this.shared });
+    this.moon = new Planet({ body: MOON, loader: this.loader, kind: 'moon', maxZ: 9, maxRelief: 11000, shared: this.shared, capColor: '#888' });
     scene.add(this.earth.group, this.moon.group);
     this.sky = new Sky(scene);
     this.airports = new Airports();
@@ -40,7 +40,7 @@ export class World {
     this.airports.load().catch((e) => console.warn('airports', e));
     this.earth.group.add(this.airports.group);
     this.buildings = new Buildings(this.loader, this.shared);
-    this.buildings.radius = q === 'high' ? 2 : 1;
+    this.setQuality(settings.quality || 'medium');
     this.earth.group.add(this.buildings.group);
     this.hangar = null;
     // lighting for ships and props
@@ -55,6 +55,18 @@ export class World {
     this.camLL = { lat: 0, lon: 0, h: 0 };
     this.frame = 0;
     this.nearBuildings = false;
+  }
+
+  // graphics quality, applied live: terrain detail and tile budget, cloud octaves, close-up ground detail,
+  // how far around the camera buildings and roads stream
+  setQuality(q) {
+    const detail = { low: [0.95, 240], medium: [0.62, 360], high: [0.45, 520] }[q] || [0.62, 360];
+    this.earth.splitRatio = detail[0]; this.earth.maxTiles = detail[1];
+    this.moon.splitRatio = detail[0] * 1.1; this.moon.maxTiles = Math.round(detail[1] * 0.6);
+    this.shared.uCloudOct.value = { low: 5, medium: 8, high: 11 }[q] || 8;
+    this.shared.uDetail.value = q === 'low' ? 0 : 1;
+    this.buildings.radius = q === 'high' ? 2 : 1;
+    this.quality = q;
   }
 
   // ---- queries used by physics ----
@@ -111,6 +123,7 @@ export class World {
   // ---- per-frame placement and streaming ----
   update(camI, camera, eph, dt) {
     this.frame++;
+    this.shared.uTime.value = (this.shared.uTime.value + dt) % 3600;
     this.camI.copy(camI);
     const sun = eph.sun;
     this.shared.uSun.value.copy(sun);

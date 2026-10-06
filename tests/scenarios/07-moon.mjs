@@ -1,5 +1,5 @@
 // Earth orbit → Moon landing → fly home to a runway, all on autopilot.
-export const meta = { name: 'moon-round-trip', slow: true, timeout: 1500 };
+export const meta = { name: 'moon-round-trip', slow: true, timeout: 1500, fixtures: true };
 export default async function (t) {
   await t.eval(() => __t.start('Selene', { type: 'orbit', alt: 400000 }));
   const a = await t.eval(async () => {

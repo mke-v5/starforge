@@ -2,7 +2,7 @@
 
 export const SRC = {
   img: {
-    maxZ: 13,
+    maxZ: 14,
     url: (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2021_3857/default/g/${z}/${y}/${x}.jpg`,
     fallbackMaxZ: 8,
     fallback: (z, x, y) => `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/2004-08/GoogleMapsCompatible_Level8/${z}/${y}/${x}.jpeg`,

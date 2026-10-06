@@ -52,6 +52,103 @@ void main(){
   #include <colorspace_fragment>
 }`;
 
+// Roads: asphalt by class with lane markings (dashed centre line, solid edge lines on big roads); railways as
+// gravel beds with rails. They fade out with distance so the edge of the streamed area never shows.
+const ROAD_VERT = /* glsl */`
+#include <common>
+#include <logdepthbuf_pars_vertex>
+attribute vec4 aRoad;
+varying vec4 vR; varying vec3 vW; varying vec3 vUp;
+void main(){
+  vR = aRoad;
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  // depth bias: slide toward the eye along the view ray (screen position unchanged) so coarser terrain drawn
+  // further away doesn't cover the road
+  wp.xyz *= 1.0 - uBias;
+  vW = wp.xyz;
+  vUp = normalize(mat3(modelMatrix) * normalize(position + uOrigin));
+  gl_Position = projectionMatrix * viewMatrix * wp;
+  #include <logdepthbuf_vertex>
+}`;
+const ROAD_FRAG = /* glsl */`
+#include <common>
+#include <logdepthbuf_pars_fragment>
+uniform vec3 uSun; uniform float uCamAlt; uniform float uFogK; uniform float uNight; uniform float uFade;
+varying vec4 vR; varying vec3 vW; varying vec3 vUp;
+void main(){
+  #include <logdepthbuf_fragment>
+  float along = vR.x, across = vR.y, cls = vR.z, hw = vR.w;
+  float dist = length(vW);
+  vec3 U0 = normalize(vUp);
+  float fade = 1.0 - smoothstep(uFade * 0.6, uFade, length(vW - dot(vW, U0) * U0));   // by distance along the ground
+  if (fade <= 0.0) discard;
+  float m = abs(across) * hw;                       // metres from the centre line
+  vec3 alb;
+  float paint = 0.0;
+  if (cls > 7.5) {
+    // railway: ballast with two dark rails
+    alb = vec3(0.30, 0.28, 0.26);
+    float rail = 1.0 - smoothstep(0.05, 0.12, abs(m - 0.72));
+    alb = mix(alb, vec3(0.12, 0.12, 0.13), rail);
+  } else {
+    alb = mix(vec3(0.11, 0.112, 0.118), vec3(0.2, 0.195, 0.185), smoothstep(4.5, 7.0, cls));
+    float px = max(0.04, dist * 0.0012);            // keep lines at least a pixel or so wide
+    if (cls < 4.5) paint += (1.0 - smoothstep(0.12, 0.12 + px, abs(m - (hw - 0.45)))) * 0.9;        // edge lines
+    float dash = step(fract(along / 12.0), 0.5);
+    if (cls < 0.5) {
+      // motorway: dashed lane lines either side of a central barrier
+      paint += (1.0 - smoothstep(0.08, 0.08 + px, abs(m - hw * 0.5))) * dash;
+      alb = mix(alb, vec3(0.32), 1.0 - smoothstep(0.3, 0.3 + px, m));
+    } else if (cls < 5.5) paint += (1.0 - smoothstep(0.08, 0.08 + px, m)) * dash * (cls < 3.5 ? 1.0 : 0.7);
+  }
+  // markings are paint a few centimetres wide: up close only (from afar a road is just a grey line)
+  paint *= 1.0 - smoothstep(180.0, 700.0, dist);
+  alb = mix(alb, cls < 1.5 ? vec3(0.78) : vec3(0.82, 0.8, 0.7), clamp(paint, 0.0, 1.0));
+  float day = 1.0 - uNight;
+  float ndl = max(dot(normalize(vUp), uSun), 0.0);
+  vec3 col = alb * (vec3(1.0, 0.95, 0.88) * ndl * 1.1 * day + vec3(0.3, 0.34, 0.42) * (0.08 + 0.9 * day));
+  // street lights along the bigger roads at night
+  col += vec3(1.0, 0.62, 0.28) * uNight * (cls < 5.5 && cls < 7.5 ? 0.16 * (1.0 - cls / 7.0) : 0.0) * (0.6 + 0.4 * step(0.5, fract(along / 40.0)));
+  float Hs = 8000.0; float hc = max(uCamAlt, 0.0);
+  float fog = 1.0 - exp(-dist * exp(-min(hc, 3000.0) / Hs) * uFogK);
+  col = mix(col, vec3(0.56, 0.68, 0.88) * (0.05 + 0.95 * day), clamp(fog, 0.0, 1.0));
+  gl_FragColor = vec4(col, fade);
+  #include <colorspace_fragment>
+}`;
+// Lakes and rivers: deep green-blue, rippled by the wind, mirroring the sky at grazing angles and the sun
+const WATER_FRAG = /* glsl */`
+#include <common>
+#include <logdepthbuf_pars_fragment>
+uniform vec3 uSun; uniform float uCamAlt; uniform float uFogK; uniform float uNight; uniform float uFade; uniform float uTime;
+varying vec4 vR; varying vec3 vW; varying vec3 vUp;
+float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
+void main(){
+  #include <logdepthbuf_fragment>
+  float dist = length(vW);
+  vec3 U = normalize(vUp), V = normalize(-vW);
+  float fade = 1.0 - smoothstep(uFade * 0.6, uFade, length(vW - dot(vW, U) * U));
+  if (fade <= 0.0) discard;
+  // ripples from screen-space derivatives of a moving noise in world metres
+  vec2 q = vec2(dot(vW, normalize(cross(U, vec3(0.0, 1.0, 0.0)))), dot(vW, normalize(cross(U, cross(U, vec3(0.0, 1.0, 0.0))))));
+  float h = n2(q / 3.0 + vec2(uTime * 0.5, uTime * 0.3)) * 0.6 + n2(q / 1.1 - vec2(uTime * 0.8, 0.0)) * 0.4;
+  vec3 dpdx = dFdx(vW), dpdy = dFdy(vW); float dhx = dFdx(h) * 0.12, dhy = dFdy(h) * 0.12;
+  vec3 r1 = cross(dpdy, U), r2 = cross(U, dpdx); float det = dot(dpdx, r1);
+  vec3 N = normalize(abs(det) * U - sign(det) * (dhx * r1 + dhy * r2));
+  float day = 1.0 - uNight;
+  float fr = 0.03 + 0.97 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+  vec3 deep = vec3(0.02, 0.05, 0.06) * (0.3 + 0.7 * day);
+  vec3 sky = vec3(0.45, 0.6, 0.82) * (0.05 + 0.95 * day);
+  vec3 col = mix(deep, sky, fr * 0.8);
+  vec3 Hh = normalize(uSun + V);
+  col += vec3(1.0, 0.95, 0.85) * pow(max(dot(N, Hh), 0.0), 220.0) * 2.5 * day * step(0.0, dot(U, uSun));
+  float Hs = 8000.0; float hc = max(uCamAlt, 0.0);
+  float fog = 1.0 - exp(-dist * exp(-min(hc, 3000.0) / Hs) * uFogK);
+  col = mix(col, vec3(0.56, 0.68, 0.88) * (0.05 + 0.95 * day), clamp(fog, 0.0, 1.0));
+  gl_FragColor = vec4(col, fade * 0.96);
+  #include <colorspace_fragment>
+}`;
+
 export class Buildings {
   constructor(loader, shared) {
     this.loader = loader;
@@ -66,6 +163,13 @@ export class Buildings {
       uniforms: { uSun: shared.uSun, uCamAlt: shared.uCamAlt, uFogK: shared.uFogK, uNight: this.nightU },
       vertexShader: VERT, fragmentShader: FRAG, vertexColors: true, side: THREE.DoubleSide,
     });
+    // roads and inland water share the buildings' vector tiles
+    this.fadeU = { value: 4000 };
+    const common = { uSun: shared.uSun, uCamAlt: shared.uCamAlt, uFogK: shared.uFogK, uNight: this.nightU, uFade: this.fadeU, uOrigin: { value: new THREE.Vector3() } };
+    const vert = ROAD_VERT.replace('#include <common>', '#include <common>\nuniform vec3 uOrigin; uniform float uBias;');
+    this.roadMat = new THREE.ShaderMaterial({ uniforms: { ...common, uBias: { value: 0.004 } }, vertexShader: vert, fragmentShader: ROAD_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    this.waterMat = new THREE.ShaderMaterial({ uniforms: { ...common, uTime: shared.uTime, uBias: { value: 0.003 } }, vertexShader: vert, fragmentShader: WATER_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    this.roadsOn = true;
     this.worker = null;
     this.jobs = new Map();
     this.jobId = 0;
@@ -82,11 +186,13 @@ export class Buildings {
 
   // lat/lon of the camera (Earth-fixed), altitude above ground (m), earth planet for terrain heights
   update(lat, lon, agl, earth) {
-    if (!this.enabled || !this.urlTpl || !this.worker) return;
+    if (!this.urlTpl || !this.worker) return;
     const n = 2 ** Z;
     const cx = Math.floor((lon + 180) / 360 * n), cy = Math.floor(mercY(lat) * n);
-    const show = agl < 6000;
+    const show = agl < 6000 && (this.enabled || this.roadsOn);
     const r = agl < 1500 ? this.radius + 1 : this.radius;
+    this.fadeU.value = (r * 2.4 + 1.0) * 1000;                    // fade out before the edge of what's loaded
+    for (const t of this.tiles.values()) if (t.mesh) t.mesh.visible = this.enabled;
     const want = new Set();
     if (show) {
       for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
@@ -136,7 +242,25 @@ export class Buildings {
     this.busy = Math.max(0, this.busy - 1);
     if (!job || this.tiles.get(job.k) !== job.t) return;
     const t = job.t;
-    if (!m.ok || !m.pos.length) { t.state = 'empty'; return; }
+    if (!m.ok) { t.state = 'empty'; return; }
+    // roads and water (drawn after the terrain, water under the roads that cross it)
+    t.extra = [];
+    for (const [o, mat, order] of [[m.water, this.waterMat, 2], [m.roads, this.roadMat, 3]]) {
+      if (!o || !o.pos.length) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(o.pos, 3));
+      g.setAttribute('aRoad', new THREE.BufferAttribute(o.att, 4));
+      g.setIndex(new THREE.BufferAttribute(o.idx, 1));
+      const mesh = new THREE.Mesh(g, mat.clone());
+      mesh.material.uniforms = { ...mat.uniforms, uOrigin: { value: new THREE.Vector3(m.center[0], m.center[1], m.center[2]) } };
+      mesh.position.set(m.center[0], m.center[1], m.center[2]);
+      mesh.frustumCulled = false; mesh.renderOrder = order;
+      mesh.matrixAutoUpdate = false; mesh.updateMatrix();
+      mesh.visible = this.roadsOn;
+      this.group.add(mesh);
+      t.extra.push(mesh);
+    }
+    if (!m.pos.length) { t.state = 'empty'; t.latC = m.latC; t.lonC = m.lonC; return; }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(m.nor, 3));
@@ -145,6 +269,7 @@ export class Buildings {
     g.setIndex(new THREE.BufferAttribute(m.idx, 1));
     g.computeBoundingSphere();
     const mesh = new THREE.Mesh(g, this.mat);
+    mesh.visible = this.enabled;
     mesh.position.set(m.center[0], m.center[1], m.center[2]);
     mesh.frustumCulled = false;
     mesh.matrixAutoUpdate = false; mesh.updateMatrix();
@@ -158,6 +283,7 @@ export class Buildings {
     const t = this.tiles.get(k);
     if (!t) return;
     if (t.mesh) { this.group.remove(t.mesh); t.mesh.geometry.dispose(); }
+    if (t.extra) for (const e of t.extra) { this.group.remove(e); e.geometry.dispose(); e.material.dispose(); }
     this.tiles.delete(k);
   }
 
@@ -166,7 +292,7 @@ export class Buildings {
     const n = 2 ** Z;
     const x = Math.floor((lon + 180) / 360 * n), y = Math.floor(mercY(lat) * n);
     const t = this.tiles.get(this.key(x, y));
-    if (!t || !t.foot) return null;
+    if (!this.enabled || !t || !t.foot) return null;
     const px = (lon - t.lonC) * D2R * EARTH.R * t.cosC, py = (lat - t.latC) * D2R * EARTH.R;
     for (const b of t.foot) {
       if (h > b.top || h < b.base || px < b.x0 || px > b.x1 || py < b.y0 || py > b.y1) continue;
@@ -176,6 +302,7 @@ export class Buildings {
   }
 
   get count() { let c = 0; for (const t of this.tiles.values()) if (t.mesh) c++; return c; }
+  get roadCount() { let c = 0; for (const t of this.tiles.values()) if (t.extra) c += t.extra.length; return c; }
 }
 
 function parseFoot(f) {

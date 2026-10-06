@@ -1,5 +1,5 @@
 // "Fly here": place search, the HUD's distance/ETA and marker, tapping the map, and a whole flight SFO → LAX.
-export const meta = { name: 'navigate', timeout: 900 };
+export const meta = { name: 'navigate', timeout: 900, fixtures: true };
 export default async function (t) {
   const s = await t.eval(async () => {
     const sf = __sf; await sf.places.ready;

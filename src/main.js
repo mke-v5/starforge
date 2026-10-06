@@ -10,7 +10,7 @@ import { Ship } from './ship/physics.js';
 import { Controller, landAp, ascentAp, nodeExec, reentryAp, landRunwayAp } from './ship/control.js';
 import { PRESETS } from './ship/designs.js';
 import { PART } from './ship/parts.js';
-import { deltaV, elements, relState, predict, engineClass } from './ship/orbit.js';
+import { deltaV, elements, relState, predict, engineClass, planCircularize } from './ship/orbit.js';
 import { Effects } from './fx/effects.js';
 import { Audio } from './fx/audio.js';
 import { Input } from './ui/input.js';
@@ -182,7 +182,8 @@ class Game {
     this.audio.setOn(this.settings.sound !== '0');
     this.input.invertPitch = this.settings.invert === '1';
     this.world.buildings.enabled = this.settings.buildings !== '0';
-    if (this.pr > this.prMax()) { this.pr = this.prMax(); this.renderer.setPixelRatio(this.pr); this.resize(); }
+    if (this.pr !== this.prMax()) { this.pr = this.prMax(); this.renderer.setPixelRatio(this.pr); this.resize(); }
+    if (this.world.quality !== this.settings.quality) this.world.setQuality(this.settings.quality);
   }
   syncSettings() { for (const seg of document.querySelectorAll('.seg')) for (const b of seg.children) b.classList.toggle('on', String(this.settings[seg.dataset.set]) === b.dataset.v); }
   openSettings() { this.syncSettings(); this.modal('settings'); }
@@ -350,7 +351,8 @@ class Game {
       ship.placeAt(body, lat, lon, hComFor(gh), hdg, vert ? Math.PI / 2 : 0);
       ship.ctl.gear = true;
     } else if (site.type === 'air') {
-      ship.placeAt(EARTH, lat, lon, site.alt, hdg, 0);
+      // never start below the hills (the terrain here may still be coarse: keep a margin)
+      ship.placeAt(EARTH, lat, lon, Math.max(site.alt, this.world.groundAt(EARTH, lat, lon) + 150), hdg, 0);
       ship.parked = null;
       const up = ship.env.up || ship.r.clone().normalize();
       const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(ship.q);
@@ -837,9 +839,10 @@ class Game {
     this.modal('pause', on);
   }
   cycleCam() {
-    const modes = ['chase', 'cockpit', 'free'];
+    const modes = ['chase', 'cockpit', 'free', 'flyby'];
     this.camMode = modes[(modes.indexOf(this.camMode) + 1) % modes.length];
-    this.hud.toast({ chase: 'Chase camera', cockpit: 'Cockpit view', free: 'Free camera (follows attitude)' }[this.camMode]);
+    this.flyby = null;
+    this.hud.toast({ chase: 'Chase camera', cockpit: 'Cockpit view', free: 'Free camera (follows attitude)', flyby: 'Fly-by camera' }[this.camMode]);
   }
   toggleMap() {
     if (!this.ship) return;
@@ -1101,6 +1104,23 @@ class Game {
     this.progress.landed(ship, ap);
   }
 
+  // A one-tap suggestion while flying by hand: coasting up out of the air on a path that falls back in →
+  // offer to circularize at apoapsis (the burn is planned and flown for you)
+  assist(ship, dv) {
+    const C = this.controller, E = ship.env;
+    if (C.ap || ship.contacts > 0 || ship.ctl.throttle > 0.05 || E.vVert <= 0 || dv < 30) return null;
+    const rs = relState(ship, E.body), el = elements(rs.r, rs.v, E.body.mu);
+    if (el.e >= 1) return null;
+    const R = E.body.R, apAlt = el.ap - R, peAlt = el.pe - R;
+    if (E.body === EARTH ? !(E.h > 55000 && apAlt > 110000 && peAlt < 90000) : !(apAlt > 12000 && peAlt < 6000)) return null;
+    const node = planCircularize(ship, true);
+    if (!node || node.dv.length() > dv) return null;
+    return {
+      label: `Circularize at apoapsis · ${Math.round(node.dv.length())} m/s`,
+      fn: () => { const n = planCircularize(ship, true); if (n) { C.node = n; this.engage(nodeExec(n)); } },
+    };
+  }
+
   hudExtras(dt) {
     const ship = this.ship, E = ship.env, craft = this.craft, C = this.controller;
     this._xt = (this._xt || 0) - dt;
@@ -1125,6 +1145,7 @@ class Game {
     x.flameout = ship.ctl.throttle > 0.1 && craft.engines.some((P) => P.eng.active && P.eng.thr > 0.2) && craft.engines.every((P) => !P.eng.active || P.eng.flame < 0.01) && !craft.engines.some((P) => P.eng.active && P.eng.starved);
     if (C.status) { this.hud.toast(C.status); C.status = ''; }
     x.apMsg = C.ap ? C.apStatus || '' : '';
+    x.assist = this.assist(ship, x.dv);
     if (C.ap && C.node && C.ap.name === 'Burn') {
       const left = (C.node.dvLeft || C.node.dv).length();
       x.apMsg = C.node.started ? `${Math.round(left)} m/s to go` : `burn in ${Math.round(C.node.tStart - ship.t)} s`;
@@ -1195,7 +1216,9 @@ class Game {
     const shipPos = ship.r;
     this.camera.near = this.camMode === 'cockpit' ? 0.1 : clamp(cam.dist * 0.01, 0.2, 5);
     this.camera.far = 1e10;
-    if (this.camMode === 'cockpit') {
+    if (this.camMode === 'flyby') {
+      this.flybyCamera(dt, camIn, up);
+    } else if (this.camMode === 'cockpit') {
       const root = craft.root;
       const eye = new THREE.Vector3(0, root.dia * 0.45, -root.len * 0.15).add(root.com);
       this.camI.copy(ship.bodyToWorld(eye, _v));
@@ -1233,6 +1256,41 @@ class Game {
       this.camera.lookAt(target.clone().sub(this.camI));
     }
     this.camera.updateProjectionMatrix();
+  }
+
+  // Fly-by: a camera left standing ahead of and beside the flight path while the ship passes, then moved on.
+  // Near the ground it's fixed to the ground; in space it drifts along at the ship's velocity.
+  flybyCamera(dt, camIn, up) {
+    const ship = this.ship, craft = this.craft, E = ship.env, body = E.body;
+    const nearGround = (body === EARTH && E.h < 60000) || (body === MOON && E.agl < 20000);
+    const V = Math.max(E.vSurf, 1);
+    const reach = clamp(V * 7, 60 + craft.size * 3, nearGround ? 4000 : 900);
+    let F = this.flyby;
+    const camNow = () => (F.ground ? this.eph.toI(F.body, F.p, new THREE.Vector3()) : F.p.clone().addScaledVector(F.v, ship.t - F.t));
+    if (!F || F.body !== body || F.ground !== nearGround || camNow().distanceTo(ship.r) > reach * 1.15) {
+      // a new spot: some seconds ahead along the path, off to one side, a little above
+      const vel = (nearGround ? E.vAir.clone() : ship.v.clone().sub(body === MOON ? this.eph.moonV : new THREE.Vector3()));
+      const dir = vel.lengthSq() > 1 ? vel.normalize() : new THREE.Vector3(0, 0, -1).applyQuaternion(ship.q);
+      const side = new THREE.Vector3().crossVectors(dir, up);
+      if (side.lengthSq() < 1e-6) side.set(1, 0, 0).applyQuaternion(ship.q);
+      side.normalize().multiplyScalar(((this._flySide = -(this._flySide || 1)) > 0 ? 1 : -1));
+      const ahead = Math.min(reach * 0.75, V * 4 + craft.size * 2);
+      const p = ship.r.clone().addScaledVector(dir, ahead).addScaledVector(side, 12 + craft.size * 1.5 + V * 0.12).addScaledVector(up, 3 + craft.size * 0.3);
+      F = this.flyby = nearGround
+        ? { ground: true, body, p: this.eph.toFixed(body, p, new THREE.Vector3()) }
+        : { ground: false, body, p, v: ship.v.clone(), t: ship.t };
+    }
+    this.camI.copy(camNow());
+    if (F.ground) {
+      // stay above the ground
+      const f = this.eph.toFixed(body, this.camI, _w), ll = toLLH(f, body.R);
+      const g = this.world.groundAt(body, ll.lat, ll.lon) + 2;
+      if (ll.h < g) this.camI.addScaledVector(up, g - ll.h);
+    }
+    this.camera.position.set(0, 0, 0);
+    this.camera.up.copy(up);
+    this.camera.lookAt(ship.r.clone().sub(this.camI));
+    this.camera.near = 0.5;
   }
 
   placeShip() {

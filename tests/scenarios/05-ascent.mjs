@@ -1,5 +1,5 @@
 // Spaceplane and rocket ascents from SFO reach a real orbit.
-export const meta = { name: 'ascent', slow: true };
+export const meta = { name: 'ascent', slow: true, fixtures: true };
 export default async function (t) {
   for (const [design, type, rw] of [['Selene', 'runway', '28R'], ['Starhopper', 'pad', '28R']]) {
     await t.eval(({ design, type, rw }) => __t.start(design, { type, airport: 'SFO', rw }), { design, type, rw });

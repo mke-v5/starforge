@@ -142,7 +142,11 @@ export class Sky {
     const sunEl = up.dot(sun);
     const air = Math.exp(-Math.max(0, h) / 8000);
     const bright = Math.max(0, Math.min(1, (sunEl + 0.12) / 0.3)) * Math.min(1, air * 3.5);
-    this.starMat.opacity = Math.max(0, 1 - bright * 1.6);
+    // in sunlight the sky only turns black enough for stars near space (fading in from 45 to 90 km); at night
+    // they're out from the ground up
+    const sunUp = Math.max(0, Math.min(1, (sunEl + 0.12) / 0.3));
+    const space = Math.min(1, Math.max(0, (h - 45000) / 45000));
+    this.starMat.opacity = Math.max(0, Math.min(1 - bright * 1.6, 1 - sunUp * (1 - space * space * (3 - 2 * space))));
     const d = 4e9;
     this.sun.position.copy(sun).multiplyScalar(d);
     const s = d * 0.06 * (1 - 0.5 * Math.min(1, air * 2));

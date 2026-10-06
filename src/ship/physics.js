@@ -391,6 +391,7 @@ export class Ship {
       this.applyWorld(_cf, pw, Fw, Tb, qInv);
     }
     // hull points
+    let deep = 0;
     for (const P of craft.parts) {
       if (!P.alive || P.gear) continue;
       for (const cp of P.contacts) {
@@ -401,9 +402,11 @@ export class Ship {
         contacts++;
         const tol = (P.def.crash || 8) * (this.settings.crashScale || 1) * (water ? 2 : 1);
         if (-vn > tol) { this.breakPart(P, water ? 'splash' : 'impact', -vn); break; }
+        if (!water) deep = Math.max(deep, depth);
         const k = m * (water ? 30 : 600) / Math.max(1, craft.parts.length * 0.4);
         const c = 2 * Math.sqrt(k * m / Math.max(1, craft.parts.length)) * 0.8;
-        let Fn = Math.max(0, k * depth - c * vn);
+        // the spring only answers the first 60 cm; deeper than that the ship is lifted out below
+        let Fn = Math.max(0, k * Math.min(depth, 0.6) - c * vn);
         const vt = _c.copy(vrel).addScaledVector(n, -vn);
         const vts = vt.length();
         const mu = water ? 0.15 : 0.55;
@@ -415,6 +418,14 @@ export class Ship {
         if (!water && vts > 5) P.temp += (ff * vts * dt) / P.C * 0.5;
         this.applyWorld(_cf, pw, Fw, Tb, qInv);
       }
+    }
+    // embedded in the ground without having hit it (spawned low, or finer terrain streamed in under a landed
+    // ship): step straight up out of it and stop sinking, rather than being catapulted by a squashed spring
+    if (deep > 1.2) {
+      const up = _d.copy(this.r).sub(this.bodyCenter(body, this.t, _b)).normalize();
+      this.r.addScaledVector(up, deep - 0.6);
+      const vr = E.vAir.dot(up);
+      if (vr < 0) this.v.addScaledVector(up, -vr);
     }
     this.contacts = contacts;
   }

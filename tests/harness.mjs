@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { installFixtures } from './fixtures.mjs';
 
 let _pw = null;
 export async function playwright() {
@@ -98,8 +99,9 @@ export class Run {
     this.browser = browser; this.base = base; this.opts = opts;
     this.errors = []; this.notes = []; this.fails = [];
   }
-  async open(viewport = { width: 1280, height: 720 }, extra = {}) {
+  async open(viewport = { width: 1280, height: 720 }, extra = {}, fixtures = false) {
     this.ctx = await this.browser.newContext({ viewport, ignoreHTTPSErrors: true, ...extra });
+    if (fixtures) await installFixtures(this.ctx);     // offline stand-ins for imagery and vector tiles
     const page = this.page = await this.ctx.newPage();
     page.on('console', (m) => {
       const t = m.text();

@@ -100,6 +100,7 @@ export class MapView {
 
   setFocus(k, reset = true) {
     this.focus = k;
+    $('m-attrib').hidden = k === 'moon';
     for (const b of $('m-focus').children) b.classList.toggle('on', b.dataset.k === k);
     if (reset) this.dist = k === 'earth' ? 4.2 * EARTH.R : k === 'moon' ? 6 * MOON.R : 3 * EARTH.R;
     if (k === 'ship' || k === 'station') this.dist = Math.max(2e5, Math.min(this.dist, 2e7));

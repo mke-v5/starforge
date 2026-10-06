@@ -14,10 +14,10 @@ const VERT = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_vertex>
 attribute float aH;
-uniform vec3 uCenter;
-varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH; varying vec3 vB;
+uniform vec3 uCenter; uniform vec3 uRel;
+varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH; varying vec3 vB; varying vec3 vD;
 void main(){
-  vUv = uv; vH = aH; vB = uCenter + position;
+  vUv = uv; vH = aH; vB = uCenter + position; vD = uRel + position;
   mat3 R = mat3(modelMatrix);
   vN = R * normal;
   vSN = R * normalize(uCenter + position);
@@ -33,8 +33,25 @@ const FRAG_EARTH = /* glsl */`
 uniform sampler2D map; uniform sampler2D nightMap;
 uniform vec3 uImg; uniform vec3 uNight; uniform float uHasNight;
 uniform vec3 uSun; uniform float uCamAlt; uniform float uFogK; uniform float uNightK; uniform float uDebug;
-uniform vec4 uCloud; uniform int uCloudOct;
-varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH; varying vec3 vB;
+uniform vec4 uCloud; uniform int uCloudOct; uniform float uDetail; uniform float uTime;
+varying vec2 vUv; varying vec3 vN; varying vec3 vSN; varying vec3 vW; varying float vH; varying vec3 vB; varying vec3 vD;
+// value noise on a lattice that repeats every P cells; vD is measured from an origin snapped to a 4,096 m grid,
+// so with periods that divide it the pattern stays put as the origin hops
+float hashP(vec3 p, float P){ p = mod(p, P); p = fract(p * vec3(0.1031, 0.1030, 0.0973)); p += dot(p, p.yzx + 33.33); return fract((p.x + p.y) * p.z); }
+float vnoiseP(vec3 x, float P){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hashP(i, P), hashP(i + vec3(1,0,0), P), f.x), mix(hashP(i + vec3(0,1,0), P), hashP(i + vec3(1,1,0), P), f.x), f.y),
+             mix(mix(hashP(i + vec3(0,0,1), P), hashP(i + vec3(1,0,1), P), f.x), mix(hashP(i + vec3(0,1,1), P), hashP(i + vec3(1,1,1), P), f.x), f.y), f.z);
+}
+// bump a normal by a height field h (metres) using screen-space derivatives
+vec3 bump(vec3 N, float h){
+  vec3 dpdx = dFdx(vW), dpdy = dFdy(vW);
+  float dhx = dFdx(h), dhy = dFdy(h);
+  vec3 r1 = cross(dpdy, N), r2 = cross(N, dpdx);
+  float det = dot(dpdx, r1);
+  vec3 g = sign(det) * (dhx * r1 + dhy * r2);
+  return normalize(abs(det) * N - g);
+}
 // 3-D simplex noise (Ian McEwan / Ashima Arts, MIT licence)
 vec3 mod289(vec3 x){ return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 mod289(vec4 x){ return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -109,6 +126,28 @@ void main(){
   #include <logdepthbuf_fragment>
   vec3 alb = texture2D(map, uImg.xy + vUv * uImg.z).rgb;
   vec3 N = normalize(vN), SN = normalize(vSN), V = normalize(-vW);
+  // close to the ground the 10 m imagery gets fine detail: soil and grass texture at 64/16/4 m, a little relief
+  // for the light to catch, and on water small wind ripples that sparkle in the sun
+  float dist = length(vW);
+  float wD = uDetail * (1.0 - smoothstep(1500.0, 7000.0, dist));
+  if (wD > 0.002) {
+    if (vH > -0.5) {
+      float o1 = vnoiseP(vD / 64.0, 64.0), o2 = vnoiseP(vD / 16.0, 256.0);
+      float f3 = 1.0 - smoothstep(500.0, 1600.0, dist);
+      float o3 = f3 > 0.0 ? vnoiseP(vD / 4.0, 1024.0) : 0.5;
+      float n = o1 * 0.5 + o2 * 0.32 + (o3 - 0.5) * 0.18 * f3 + 0.09;
+      float lum = dot(alb, vec3(0.3, 0.55, 0.15));
+      // keep bright man-made surfaces (concrete, roofs) cleaner than fields and forest
+      float soft = 1.0 - 0.6 * smoothstep(0.22, 0.4, lum);
+      alb *= 1.0 + (n - 0.5) * 0.5 * wD * soft;
+      alb = mix(alb, alb * vec3(0.94, 1.05, 0.92), (o2 - 0.5) * wD * soft);   // patches of greener and browner ground
+      N = mix(N, bump(N, (o1 * 3.0 + o2 * 1.2 + o3 * 0.35 * f3) * soft), wD);
+    } else {
+      vec3 q = vD + vec3(uTime * 0.6, 0.0, uTime * 0.4);
+      float r = vnoiseP(q / 7.0, 512.0) * 0.6 + vnoiseP(q / 2.3 - vec3(0.0, 0.0, uTime * 0.9), 1024.0) * 0.4 * (1.0 - smoothstep(300.0, 1200.0, dist));
+      N = normalize(mix(N, bump(N, r * 0.35), wD));
+    }
+  }
   float sd = dot(SN, uSun);
   float ndl = max(dot(N, uSun), 0.0);
   float lit = mix(max(sd, 0.0), ndl, 0.55);
@@ -237,6 +276,9 @@ export class Planet {
     this.loader = opts.loader;
     this.kind = opts.kind;            // 'earth' | 'moon'
     this.maxZ = opts.maxZ;
+    this.imgMaxZ = opts.imgMaxZ ?? 13;       // deepest imagery level to ask for (falls back a level if missing)
+    this.imgMiss = 0; this.imgHit = 0;
+    this.dOrig = new THREE.Vector3();        // origin of the close-up detail pattern, snapped near the camera
     this.maxRelief = opts.maxRelief;
     this.shared = opts.shared;        // shared uniform objects
     this.flatten = null;              // (tile, lat, lon, h, cell) -> h   (runway flattening)
@@ -313,12 +355,13 @@ export class Planet {
     const s = this.shared;
     const u = {
       map: { value: tex }, uImg: { value: new THREE.Vector3(...win) }, uCenter: { value: center.clone() },
-      uSun: s.uSun,
+      uRel: { value: center.clone().sub(this.dOrig) }, uSun: s.uSun,
     };
     if (this.kind === 'earth') {
       Object.assign(u, {
         nightMap: { value: ntex || this.whiteTex }, uNight: { value: new THREE.Vector3(...(nwin || [0, 0, 1])) }, uHasNight: { value: ntex ? 1 : 0 },
         uCamAlt: s.uCamAlt, uFogK: s.uFogK, uNightK: s.uNightK, uDebug: s.uDebug, uCloud: s.uCloud, uCloudOct: s.uCloudOct,
+        uDetail: s.uDetail, uTime: s.uTime,
       });
     } else u.uEarthshine = s.uEarthshine;
     return new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: this.kind === 'earth' ? FRAG_EARTH : FRAG_MOON });
@@ -360,6 +403,14 @@ export class Planet {
     this.frame++;
     this.camFixed.copy(camFixed);
     this.frustum.setFromProjectionMatrix(viewProjFixed);
+    if (this.kind === 'earth') {
+      const G = 4096;
+      const ox = Math.round(camFixed.x / G) * G, oy = Math.round(camFixed.y / G) * G, oz = Math.round(camFixed.z / G) * G;
+      if (ox !== this.dOrig.x || oy !== this.dOrig.y || oz !== this.dOrig.z) {
+        this.dOrig.set(ox, oy, oz);
+        for (const t of this.tiles.values()) if (t.mesh) t.mesh.material.uniforms.uRel.value.copy(t.center).sub(this.dOrig);
+      }
+    }
     const camR = camFixed.length();
     _u.copy(camFixed).normalize();
     const camUnit = _u.clone();
@@ -535,13 +586,24 @@ export class Planet {
     const dist = _c.copy(t.center).sub(camPos).length();
     const prio = dist / 1000 + t.z * 2 + bias / 1000;
     if (this.kind === 'earth') {
-      const iz = Math.min(t.z, 13), id = t.z - iz;
+      let iz = Math.min(t.z, this.imgMaxZ), id = t.z - iz;
       const dz = Math.min(t.z, 12), dd = t.z - dz;
       const reqs = [['img', iz, t.x >> id, t.y >> id, prio], ['dem', dz, t.x >> dd, t.y >> dd, prio]];
       t._req = reqs;
-      Promise.all(reqs.map((r) => this.loader.get(...r))).then(([img, dem]) => {
+      Promise.all(reqs.map((r) => this.loader.get(...r))).then(async ([img, dem]) => {
         if (t.state !== 'loading') return;
         if (img === undefined || dem === undefined) { t.state = 'idle'; return; }     // dropped as stale
+        // the finest imagery level isn't everywhere: use the level above (and stop asking if it never comes)
+        if (iz > 13) {
+          if (img) this.imgHit++;
+          else {
+            if (++this.imgMiss > 12 && !this.imgHit) this.imgMaxZ = 13;
+            iz = 13; id = t.z - iz;
+            img = await this.loader.get('img', iz, t.x >> id, t.y >> id, prio);
+            if (t.state !== 'loading') return;
+            if (img === undefined) { t.state = 'idle'; return; }
+          }
+        }
         if (!img) { t.tries++; t.state = t.tries > 2 ? 'failed' : 'idle'; return; }
         try { this.buildEarth(t, img, dem, id, dd); t.state = 'ready'; } catch (e) { console.error('tile build', t.key, e); t.state = 'failed'; }
         t._req = null;

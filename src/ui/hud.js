@@ -336,6 +336,16 @@ export class Hud {
         apb._txt = null;
       }
       if (apb._txt !== txt) { apb._txt = txt; apb.firstChild.textContent = txt; }
+    } else if (extra.assist) {
+      // a suggestion while flying by hand
+      apb.hidden = false;
+      if (apb._has !== 'assist' || apb._txt !== extra.assist.label) {
+        apb._has = 'assist'; apb._txt = extra.assist.label;
+        apb.innerHTML = '<span class="dim">Suggestion</span><button id="ap-assist"></button>';
+        $('ap-assist').textContent = extra.assist.label;
+      }
+      $('ap-assist').onclick = () => { if (this._assist) this._assist.fn(); };
+      this._assist = extra.assist;
     } else { apb.hidden = true; apb._has = undefined; }
     // info panel
     this.updateInfo(ship, ctl, extra);
@@ -365,6 +375,9 @@ export class Hud {
     if (obh) { if (ob._h !== obh) { ob._h = obh; ob.innerHTML = obh; } ob.hidden = false; } else { ob.hidden = true; ob._h = ''; }
     T.nav.classList.toggle('on', !!extra.dest);
     T.nav.hidden = E.body !== EARTH && !extra.dest;
+    // imagery credit while the Earth's map tiles are in view
+    const att = E.body === EARTH && E.h < 3e6;
+    if (this._att !== att) { this._att = att; document.getElementById('h-attrib').hidden = !att; }
     // warnings
     const w = [];
     if (extra.stall) w.push(['STALL', '']);

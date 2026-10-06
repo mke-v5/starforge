@@ -1,5 +1,5 @@
 // Test runner: `node tests/run.mjs [name-filter …] [--fast] [--shots] [--verbose]`
-// Each file in tests/scenarios exports `meta` ({ name, slow?, viewport?, context?, allowErrors? }) and a default
+// Each file in tests/scenarios exports `meta` ({ name, slow?, viewport?, context?, allowErrors?, fixtures? }) and a default
 // async function (t) that drives the game through t.page / t.eval and records checks with t.check(cond, msg).
 // A scenario fails on any failed check, an exception, or a console error.
 
@@ -37,7 +37,7 @@ for (const { meta, fn } of scenarios) {
   let err = null;
   process.stdout.write(`▶ ${meta.name} … `);
   try {
-    await t.open(meta.viewport, meta.context);
+    await t.open(meta.viewport, meta.context, meta.fixtures);
     await Promise.race([fn(t), new Promise((_, rej) => setTimeout(() => rej(new Error('scenario timeout')), (meta.timeout || 600) * 1000))]);
   } catch (e) { err = e; }
   if (err) { try { await t.shot(meta.name + '-error'); } catch (e2) { /* ignore */ } }

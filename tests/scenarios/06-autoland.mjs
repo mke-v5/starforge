@@ -1,5 +1,5 @@
 // The Kestrel from the air over San Francisco auto-lands on the nearest big runway.
-export const meta = { name: 'autoland' };
+export const meta = { name: 'autoland', fixtures: true };
 export default async function (t) {
   await t.eval(() => __t.start('Kestrel', { type: 'air', lat: 37.78, lon: -122.48, alt: 3000, hdg: 90, speed: 200 }));
   await t.eval(() => __t.settle(6, { step: false }));

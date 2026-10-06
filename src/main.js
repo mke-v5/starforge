@@ -1,6 +1,6 @@
 // Starforge — game orchestration: screens, flight loop, camera, events.
 import * as THREE from 'three';
-import { EARTH, MOON, D2R, R2D, clamp, smoothstep, llh, enu, toLLH, gcDist } from './core/geo.js';
+import { EARTH, MOON, D2R, R2D, clamp, smoothstep, llh, enu, toLLH, gcDist, fmtTime } from './core/geo.js';
 import { Ephemeris, nowSimTime, gravity, moonPos, moonVel } from './core/astro.js';
 import { loadSettings, load, save } from './core/store.js';
 import { Progress, MILESTONES } from './core/progress.js';
@@ -21,6 +21,8 @@ import { HELP_HTML } from './ui/help.js';
 import { Tutorial, flightSchool } from './ui/tutorial.js';
 import { Station, STATION, stationKepler } from './world/station.js';
 import { rendezvousAp, proxAp, departAp, choosePort } from './ship/rendezvous.js';
+import { Places } from './world/places.js';
+import { navInfo, headingAp, flyToAp, runwayFor, fmtDist } from './ship/navigate.js';
 
 const $ = (id) => document.getElementById(id);
 const WARPS = [1, 2, 4, 10, 50, 100, 1000, 10000, 100000];
@@ -69,6 +71,8 @@ class Game {
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.hud = new Hud(this);
+    this.places = new Places(this.world.airports);
+    this.dest = null;                 // where the pilot wants to go: { kind, name, code?, sub, lat, lon, airport? }
     this.launchScreen = new LaunchScreen(this);
     this.mapView = new MapView(this);
     this.bindUi();
@@ -110,6 +114,18 @@ class Game {
     }
     fill.style.width = '100%';
     this.toTitle();
+    this.checkShareLink();
+    addEventListener('hashchange', () => this.checkShareLink());
+  }
+
+  // a shared ship link (#ship=SF1.…): bring the ship into the hangar
+  async checkShareLink() {
+    const m = location.hash.match(/^#ship=([A-Za-z0-9._-]+)/);
+    if (!m) return;
+    history.replaceState(null, '', location.pathname + location.search);
+    if (this.ship) { this.pendingShip = m[1]; this.hud.toast('A shared ship is waiting — open the hangar to get it'); return; }
+    this.pendingShip = m[1];
+    await this.openHangar();
   }
 
   toTitle() {
@@ -193,6 +209,7 @@ class Game {
     }
     this.show('hangar');
     this.builder.open(this.design);
+    if (this.pendingShip) { const code = this.pendingShip; this.pendingShip = null; await this.builder.importCode(code); }
   }
 
   // ---------------- flight lifecycle ----------------
@@ -399,6 +416,8 @@ class Game {
       flightTime: this.flightTime, where: this.whereText(),
       homeTo: C.ap && C.ap.home ? C.ap.home : null,
       rdvTo: !!(C.ap && C.ap.rdvStation),
+      dest: this.destLite(this.dest),
+      flyTo: !!(C.ap && C.ap.nav && C.ap.dest),
       station: { r: v3(this.station.r), v: v3(this.station.v), t: this.station.t },
       docked: ship.docked ? { port: ship.docked.port, part: ship.docked.part, qRel: ship.docked.qRel.toArray(), pRel: v3(ship.docked.pRel) } : null,
     };
@@ -486,6 +505,11 @@ class Game {
     if (s.homeTo && (ship.env.body === MOON || ship.env.h > EARTH.atmoTop + 5000)) {
       const a = findAp(s.homeTo);
       if (a) setTimeout(() => { if (this.ship === ship && !this.controller.ap) { this.mapView.flyHomeAll(a); this.hud.toast(`Autopilot resumed: flying you home to ${a.iata || a.ident}`); } }, 1500);
+    }
+    // a destination carries over, and so does a fly-to in progress (once airborne)
+    if (s.dest) this.setDest(this.destFrom(s.dest), true);
+    if (s.flyTo && this.dest && ship.env.body === EARTH && ship.contacts === 0 && ship.env.rho > 0.02) {
+      setTimeout(() => { if (this.ship === ship && !this.controller.ap) { this.flyTo(this.dest); } }, 1500);
     }
     // so does a trip to the station (from orbit; an ascent in progress is left to the pilot)
     if (s.rdvTo && !ship.docked && ship.env.body === EARTH && ship.env.h > EARTH.atmoTop + 5000) {
@@ -590,6 +614,7 @@ class Game {
       case 'info': $('h-info').hidden = !$('h-info').hidden; break;
       case 'dock': this.dockAction(); break;
       case 'refuel': this.refuel(); break;
+      case 'nav': this.navAction(); break;
     }
   }
   // dock with the station (autopilot) or undock and back away
@@ -674,6 +699,11 @@ class Game {
         opts.push([grounded ? `Fly to ${STATION.name} (launch window, ascent, rendezvous${this.craft.docks.length ? ', dock' : ''})` : `Rendezvous${this.craft.docks.length ? ' and dock' : ''} with ${STATION.name}`, () => this.engage(rendezvousAp(ship, st))]);
       }
     }
+    // flying somewhere on the planet
+    if (ship.env.body === EARTH && (ship.env.rho > 0.02 || ship.contacts > 0) && this.canCruise()) {
+      if (this.dest) opts.push([`Fly me to ${this.dest.name} (${fmtDist(navInfo(ship, this.dest).d)})`, () => this.flyTo(this.dest)]);
+      opts.push(['Fly to a city or airport…', () => this.pickDest((p) => this.flyTo(p))]);
+    }
     if (ship.env.body === EARTH && ship.env.rho > 0.05) opts.push(['Cruise: hold altitude & heading', () => this.engage(cruiseAp(ship))]);
     { const E = ship.env, rw = E.body === EARTH && E.h < 25000 && ship.contacts === 0 && this.craft.wings.length ? this.landingRunway() : null;
       if (rw) opts.push([`Land at ${rw.name} (${this.hud.units.dist(rw.d)})`, () => this.engage(landRunwayAp(this.world.airports, rw.rw, rw.name, this.terrainFn()))]); }
@@ -711,6 +741,85 @@ class Game {
     }
     return best;
   }
+  // ---------------- destination ("fly here") ----------------
+  setDest(p, quiet = false) {
+    this.dest = p || null;
+    if (!quiet) this.hud.toast(p ? `Destination: ${p.name}` : 'Destination cleared');
+    if (this.mapView) { this.mapView.planDirty = true; if (this.ship) this.mapView.buildDest(this.ship); }
+    if (this.launchScreen) this.launchScreen.renderDest();
+  }
+  destLite(p) { return p ? { kind: p.kind, name: p.name, code: p.code, sub: p.sub, lat: p.lat, lon: p.lon, ap: p.airport ? p.airport.ident : null } : null; }
+  destFrom(o) {
+    if (!o) return null;
+    const ap = o.ap ? this.world.airports.airports.find((a) => a.ident === o.ap) : null;
+    return { kind: o.kind, name: o.name, code: o.code, sub: o.sub, lat: o.lat, lon: o.lon, airport: ap || undefined };
+  }
+  // search airports and cities; onPick(place)
+  pickDest(onPick = (p) => this.setDest(p), title = 'Fly to…') {
+    const $b = $('d-btns');
+    $('d-title').textContent = title;
+    $('d-body').innerHTML = '<p class="dim small">Search a city or an airport. The HUD shows its distance and time, and the autopilot can fly you there.</p><input id="d-q" class="field" type="search" placeholder="City or airport (e.g. Paris, LHR, Denver)" autocomplete="off" spellcheck="false" style="width:100%;margin:6px 0 4px">';
+    const A = this.world.airports;
+    const list = (q) => {
+      $b.innerHTML = ''; $b.style.flexDirection = 'column';
+      let res;
+      if (q) res = this.places.search(q, 8);
+      else {
+        res = [];
+        const home = this.site && this.site.airport;
+        if (home) res.push(this.places.fromAirport(home));
+        for (const c of ['LHR', 'JFK', 'HND', 'SYD', 'DXB', 'GIG']) { const a = A.search(c, 1)[0]; if (a && a !== home) res.push(this.places.fromAirport(a)); }
+      }
+      const E = this.ship && this.ship.env;
+      for (const p of res) {
+        const b = document.createElement('button'); b.className = 'btn wide';
+        const d = E && E.body === EARTH ? ` · ${fmtDist(gcDist(E.lat, E.lon, p.lat, p.lon))}` : '';
+        b.textContent = `${p.name} · ${p.sub}${d}`;
+        b.onclick = () => { this.modal('dialog', false); onPick(p); };
+        $b.appendChild(b);
+      }
+      if (this.dest && !q) {
+        const x = document.createElement('button'); x.className = 'btn wide'; x.textContent = `Clear destination (${this.dest.name})`;
+        x.onclick = () => { this.modal('dialog', false); this.setDest(null); };
+        $b.appendChild(x);
+      }
+      const c = document.createElement('button'); c.className = 'btn ghost wide'; c.textContent = 'Cancel'; c.onclick = () => this.modal('dialog', false); $b.appendChild(c);
+    };
+    list('');
+    this.modal('dialog');
+    const q = $('d-q');
+    q.oninput = () => list(q.value);
+    setTimeout(() => q.focus(), 50);
+  }
+  // can this craft fly itself somewhere in the air? (wings and air-breathing engines)
+  canCruise() {
+    const c = this.craft;
+    if (!c) return false;
+    const S = c.wings.reduce((a, P) => a + (P.alive !== false ? P.wing.area : 0), 0);
+    return S > c.mass / 1500 && c.engines.some((P) => P.alive !== false && (engineClass(P) === 'jets' || P.eng.e.type === 'hybrid'));
+  }
+  flyTo(p) {
+    if (p !== this.dest) this.setDest(p, true);
+    const ship = this.ship;
+    if (!this.canCruise()) { this.hud.toast('Fly-to needs wings and jet engines', 'bad'); return; }
+    this.engage(flyToAp(this.world.airports, p, this.terrainFn()));
+    const n = navInfo(ship, p), rw = runwayFor(this.world.airports, p);
+    this.hud.toast(`${rw ? `Flying to ${p.name}, landing at ${rw.name}` : `Flying to ${p.name} (no runway there)`}${n && isFinite(n.d) ? ' · ' + fmtDist(n.d) : ''}`);
+  }
+  navAction() {
+    const ship = this.ship, E = ship && ship.env;
+    if (!ship || E.body !== EARTH) { this.pickDest(); return; }
+    const opts = [];
+    if (this.dest) {
+      const n = navInfo(ship, this.dest);
+      if (this.canCruise() && (E.rho > 0.02 || ship.contacts > 0)) opts.push([`Fly me to ${this.dest.name} (${fmtDist(n.d)})`, () => this.flyTo(this.dest)]);
+      if (E.rho > 0.02 && ship.contacts === 0) opts.push([`Hold a heading toward ${this.dest.name}`, () => this.engage(headingAp(this.dest))]);
+      opts.push(['Change destination…', () => this.pickDest()]);
+      opts.push([`Clear destination`, () => this.setDest(null)]);
+      this.dialog(this.dest.name, `<p class="dim small">${this.dest.sub} · ${fmtDist(n.d)} away${isFinite(n.eta) ? ' · ' + fmtTime(n.eta) + ' at this speed' : ''}</p>`, opts);
+    } else this.pickDest();
+  }
+
   dialog(title, body, opts) {
     $('d-title').textContent = title; $('d-body').innerHTML = body;
     const el = $('d-btns'); el.innerHTML = ''; el.style.flexDirection = 'column';
@@ -918,6 +1027,7 @@ class Game {
       case 'e': break;
       case 'p': this.action('auto'); break;
       case 'y': this.action('dock'); break;
+      case '9': this.action('nav'); break;
       case 'o': this.action('info'); break;
       case 'v': this.action('engines'); break;
       case 'f': this.action('mode'); break;
@@ -950,9 +1060,9 @@ class Game {
           this.effects.addDebris(mesh, pos, ship.v, q.multiply(qm));
         }
         this.audio.boom(clamp(P.def.mass / 2000, 0.5, 2));
-        if (!ship.dead) this.hud.toast(`${e.why === 'overheat' ? 'Burned up' : 'Lost'}: ${P.def.name}`, 'bad');
+        if (!ship.dead) this.hud.toast(`${e.why === 'overheat' ? 'Burned up' : e.why === 'overstress' ? 'Overstressed — snapped off' : 'Lost'}: ${P.def.name}`, 'bad');
       } else if (e.type === 'destroyed') {
-        const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.', collision: `Crashed into ${STATION.name}.` }[e.why] || 'Destroyed.';
+        const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.', overstress: 'Pulled too hard — the airframe broke up.', collision: `Crashed into ${STATION.name}.` }[e.why] || 'Destroyed.';
         $('c-why').textContent = why + ` (${Math.round(ship.env.vSurf)} m/s)`;
         this.clearSavedFlight();
         setTimeout(() => { if (this.ship === ship) { this.modal('crash'); } }, 2600);
@@ -1006,12 +1116,13 @@ class Game {
     const g = E.body.mu / Math.pow(E.body.R + E.h, 2);
     x.twr = T / (craft.mass * g);
     const airborne = ship.contacts === 0;
+    x.stress = craft.wings.reduce((m, P) => Math.max(m, P.alive !== false ? P.wing.load : 0), 0);
     x.stall = airborne && E.q > 50 && E.vSurf > 20 && E.mach < 2.5 && craft.wings.some((P) => P.wing.stalled && P.wing.area > 4);
     x.pullUp = airborne && E.vVert < -25 && E.agl < -E.vVert * 7 && E.agl < 1500;
     x.gearUp = airborne && !ship.ctl.gear && E.agl < 250 && E.vVert < -1 && craft.gears.length > 0;
     let fuelFrac = 1; for (const k of ['LF', 'OX', 'FU']) { const cap = craft.capacity(k); if (cap > 0) fuelFrac = Math.min(fuelFrac, craft.amount(k) / cap); }
     x.lowFuel = fuelFrac < 0.1;
-    x.flameout = ship.ctl.throttle > 0.1 && craft.engines.some((P) => P.eng.active && P.eng.thr > 0.2) && craft.engines.every((P) => !P.eng.active || P.eng.flame < 0.01);
+    x.flameout = ship.ctl.throttle > 0.1 && craft.engines.some((P) => P.eng.active && P.eng.thr > 0.2) && craft.engines.every((P) => !P.eng.active || P.eng.flame < 0.01) && !craft.engines.some((P) => P.eng.active && P.eng.starved);
     if (C.status) { this.hud.toast(C.status); C.status = ''; }
     x.apMsg = C.ap ? C.apStatus || '' : '';
     if (C.ap && C.node && C.ap.name === 'Burn') {
@@ -1027,6 +1138,9 @@ class Game {
         if (d < 1000 && rv.length() < 5 && this.site && !['docked', 'stationNear'].includes(this.site.type)) this.progress.unlock('rendezvous');
       } else x.station = ship.docked ? { d: 0, vrel: 0, closing: 0, docked: true } : null;
     }
+    x.dest = this.dest;
+    x.nav = this.dest && E.body === EARTH ? navInfo(ship, this.dest) : null;
+    if (x.nav) x.nav.short = isFinite(x.endurance) && x.nav.eta > x.endurance * 1.05 && ship.contacts === 0 && E.rho > 0.02 && !craft.engines.some((P) => P.eng.mode === 'rocket' && P.eng.flame > 0);
     if (E.body === EARTH && E.agl < 20000) {
       const n = this.world.airports.nearestRunway(E.lat, E.lon, 80000);
       x.nearest = n ? { name: n.rw.ap.iata || n.rw.ap.ident, d: n.d } : null;
@@ -1131,7 +1245,7 @@ class Game {
 
   render(dt) {
     this.renderer.render(this.scene, this.camera);
-    if (this.ship && this.state === 'hud' && !this.mapOpen) { this.hud.updateTarget(this.camera, this.camI, this.ship); this.hud.renderNavball(this.renderer, this.ship, this.controller); }
+    if (this.ship && this.state === 'hud' && !this.mapOpen) { this.hud.updateTarget(this.camera, this.camI, this.ship); this.hud.updateDest(this.camera, this.camI, this.ship, this.dest, this.eph); this.hud.renderNavball(this.renderer, this.ship, this.controller, this.dest); }
   }
 }
 

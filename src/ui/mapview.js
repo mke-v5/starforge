@@ -1,6 +1,6 @@
 // Map view: orbit camera around Earth/Moon/ship, predicted trajectories, apsis labels and burn planning.
 import * as THREE from 'three';
-import { EARTH, MOON, clamp, fmtTime, D2R } from '../core/geo.js';
+import { EARTH, MOON, clamp, fmtTime, D2R, llh, toLLH, gcDist, gcBearing, gcDest } from '../core/geo.js';
 import { moonPos, moonVel } from '../core/astro.js';
 import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, planCorrection, planDeorbitTo, planLandingTo, planMoonLandingTo, landingModel, burnTime, deltaV } from '../ship/orbit.js';
 import { nodeExec, landAp, ascentAp, reentryAp, coastToAp, landRunwayAp, sequenceAp, flyHomeAp, planBurnAp } from '../ship/control.js';
@@ -43,6 +43,7 @@ export class MapView {
     this.lineEarthAfter = mk(0xffb347, 0.55);   // after leaving the Moon's sphere of influence
     this.lineNodeAfter = mk(0x5aa8ff, 0.5);
     this.lineStation = mk(0x73e2a7, 0.75);
+    this.lineDest = mk(0xffb347, 0.85);
     // ship marker
     const c = document.createElement('canvas'); c.width = c.height = 64;
     const x = c.getContext('2d'); x.fillStyle = '#7fd4ff'; x.beginPath(); x.moveTo(32, 6); x.lineTo(54, 56); x.lineTo(32, 44); x.lineTo(10, 56); x.closePath(); x.fill();
@@ -54,6 +55,22 @@ export class MapView {
     this.stMark = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c2), depthTest: false, sizeAttenuation: false }));
     this.stMark.scale.set(0.028, 0.028, 1); this.stMark.renderOrder = 59; this.group.add(this.stMark);
     this.ca = null; this.stPts = null;
+    // the destination: an amber pin and the great-circle route to it along the ground
+    const c3 = document.createElement('canvas'); c3.width = c3.height = 64;
+    const x3 = c3.getContext('2d'); x3.fillStyle = '#ffb347'; x3.beginPath(); x3.arc(32, 22, 14, 0, Math.PI * 2); x3.fill(); x3.beginPath(); x3.moveTo(20, 30); x3.lineTo(32, 60); x3.lineTo(44, 30); x3.fill(); x3.fillStyle = '#1b1206'; x3.beginPath(); x3.arc(32, 22, 5, 0, Math.PI * 2); x3.fill();
+    this.dstMark = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c3), depthTest: false, sizeAttenuation: false }));
+    this.dstMark.center.set(0.5, 0.05);
+    this.dstMark.scale.set(0.034, 0.034, 1); this.dstMark.renderOrder = 61; this.dstMark.visible = false; this.group.add(this.dstMark);
+    this.destPtsF = null;
+    // tap the globe (without dragging) to choose a destination there
+    const cv = game.canvas;
+    cv.addEventListener('pointerdown', (e) => { if (game.mapOpen) this._tap = { x: e.clientX, y: e.clientY, t: performance.now(), n: (this._tap && performance.now() - this._tap.t < 400 ? 2 : 1) }; });
+    cv.addEventListener('pointerup', (e) => {
+      const tp = this._tap; this._tap = null;
+      if (!tp || !game.mapOpen || tp.n > 1) return;
+      if (Math.hypot(e.clientX - tp.x, e.clientY - tp.y) > 8 || performance.now() - tp.t > 450) return;
+      this.tapAt(e.clientX, e.clientY);
+    });
     this.labels = [];
     this.focus = 'ship';
     this.yaw = 0.6; this.pitch = 0.5; this.dist = 2e7;
@@ -124,6 +141,7 @@ export class MapView {
       } else this.predNode = null;
       if (!this.moonOrbit || Math.abs(this.moonOrbit.t - ship.t) > 86400) this.buildMoonOrbit(ship.t);
       this.buildStation(ship);
+      this.buildDest(ship);
       this.renderInfo();
     }
     // draw relative to the camera
@@ -157,6 +175,14 @@ export class MapView {
     if (this.moonOrbit) setLine(this.lineMoonOrbit, this.moonOrbit.pts, 3, new THREE.Vector3());
     if (this.stPts) setLine(this.lineStation, this.stPts, 3, new THREE.Vector3()); else this.lineStation.visible = false;
     this.stMark.position.copy(this.game.station.r).sub(this.camI);
+    if (this.destPtsF && this.game.dest) {
+      const q = this.game.eph.earthQ, a = this.lineDest.geometry.attributes.position.array, P = this.destPtsF, v = new THREE.Vector3();
+      const n = Math.min(P.length / 3, a.length / 3);
+      for (let i = 0; i < n; i++) { v.set(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]).applyQuaternion(q).sub(this.camI); a[i * 3] = v.x; a[i * 3 + 1] = v.y; a[i * 3 + 2] = v.z; }
+      this.lineDest.geometry.attributes.position.needsUpdate = true; this.lineDest.geometry.setDrawRange(0, n); this.lineDest.visible = n > 1;
+      const d = this.game.dest;
+      this.dstMark.position.copy(llh(d.lat, d.lon, 2000, EARTH.R, v)).applyQuaternion(q).sub(this.camI); this.dstMark.visible = true;
+    } else { this.lineDest.visible = false; this.dstMark.visible = false; }
     this.shipMark.position.copy(ship.r).sub(this.camI);
     this.updateLabels(camera, moonNow);
     return this.camI;
@@ -172,6 +198,34 @@ export class MapView {
     this.stPts = pts;
     const el = elements(ship.r, ship.v, EARTH.mu);
     this.ca = ship.env.body === EARTH && !ship.docked && el.e < 1 && el.pe > EARTH.R + 60000 ? closestApproach(ship, st) : null;
+  }
+
+  // the ground route from the ship (or its sub-point) to the destination, in Earth-fixed coordinates
+  buildDest(ship) {
+    const d = this.game.dest, E = ship.env;
+    if (!d) { this.destPtsF = null; return; }
+    const lat0 = E.body === EARTH ? E.lat : d.lat, lon0 = E.body === EARTH ? E.lon : d.lon;
+    const D = gcDist(lat0, lon0, d.lat, d.lon), b = gcBearing(lat0, lon0, d.lat, d.lon);
+    const pts = [], v = new THREE.Vector3(), N = Math.max(2, Math.min(180, Math.ceil(D / 50000)));
+    for (let i = 0; i <= N; i++) { const p = gcDest(lat0, lon0, b, (D * i) / N); llh(p.lat, p.lon, 3000, EARTH.R, v); pts.push(v.x, v.y, v.z); }
+    this.destPtsF = pts;
+  }
+  // a tap on the globe: the nearest airport or city there becomes the destination
+  tapAt(x, y) {
+    const g = this.game, cam = g.camera;
+    cam.updateMatrixWorld(true);
+    const ndc = new THREE.Vector3((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1, 0.5);
+    const dir = ndc.unproject(cam).sub(cam.position).normalize();
+    const oc = this.camI.clone();                       // ray origin relative to the Earth's centre
+    const b = oc.dot(dir), c = oc.lengthSq() - EARTH.R * EARTH.R, disc = b * b - c;
+    if (disc < 0) return;
+    const tHit = -b - Math.sqrt(disc);
+    if (tHit < 0) return;
+    const pI = oc.addScaledVector(dir, tHit);
+    const ll = toLLH(g.eph.toFixed(EARTH, pI, new THREE.Vector3()), EARTH.R);
+    const p = g.places.near(ll.lat, ll.lon);
+    g.setDest(p);
+    this.renderPlan();
   }
 
   buildMoonOrbit(t) {
@@ -220,6 +274,7 @@ export class MapView {
     }
     if (P && P.soiIn && !P.startInSoi) add(moonPos(P.soiIn, new THREE.Vector3()), 'Moon at encounter', 'moon');
     if (P && P.impact) add(P.impact.body === EARTH ? P.impact.r : moonNow.clone().add(P.impact.r), P.impact.body === EARTH ? 'Impact/Reentry' : 'Lunar impact', 'moon');
+    if (this.dstMark.visible && this.game.dest) add(this.dstMark.position.clone().add(this.camI), `${this.game.dest.code || this.game.dest.name}`, '');
     if (this.predNode && this.predNode.start) add(this.predNode.start, 'Burn', 'node');
   }
 
@@ -335,8 +390,23 @@ export class MapView {
     const p = $('m-plan');
     const btns = this.planButtons();
     this._planSig = btns.map((b) => b[0]).join('|');
-    let h = '<div class="dim small">Plan a burn — the autopilot can fly it for you.</div>';
+    const g = this.game, d = g.dest, E = g.ship.env;
+    let h = '<div class="dim small">Plan a burn — the autopilot can fly it for you. Tap the globe to pick a destination.</div>';
+    if (d) h += `<div class="small" style="color:var(--amber);margin:2px 0">▸ ${d.name} <span class="dim">${d.sub}${E.body === EARTH ? ' · ' + Math.round(gcDist(E.lat, E.lon, d.lat, d.lon) / 1000).toLocaleString('en-US') + ' km' : ''}</span></div>`;
     p.innerHTML = h;
+    {
+      const row = document.createElement('div'); row.style.cssText = 'display:grid;grid-template-columns:1fr auto;gap:6px';
+      const b = document.createElement('button'); b.className = 'btn sm'; b.textContent = d ? 'Change destination…' : 'Set destination…';
+      b.addEventListener('click', () => { g.audio.click(); g.pickDest((pl) => { g.setDest(pl); this.renderPlan(); }); });
+      row.appendChild(b);
+      if (d) { const x = document.createElement('button'); x.className = 'btn sm'; x.textContent = '✕'; x.title = 'Clear destination'; x.addEventListener('click', () => { g.setDest(null); this.renderPlan(); }); row.appendChild(x); }
+      p.appendChild(row);
+    }
+    if (d && E.body === EARTH && (E.rho > 0.02 || g.ship.contacts > 0) && g.canCruise()) {
+      const b = document.createElement('button'); b.className = 'btn sm wide primary'; b.textContent = `Autopilot: fly me to ${d.code || d.name}`;
+      b.addEventListener('click', () => { g.audio.click(); g.flyTo(d); g.toggleMap(); });
+      p.appendChild(b);
+    }
     for (const [label, fn] of btns) {
       const b = document.createElement('button'); b.className = 'btn sm wide'; b.textContent = label;
       b.addEventListener('click', () => { this.game.audio.click(); fn(); });
@@ -434,7 +504,8 @@ export class MapView {
       $b.innerHTML = '';
       $b.style.flexDirection = 'column';
       const hm = this.homeAirport();
-      const res = q ? A.search(q, 6) : [...new Set([...(hm ? [hm] : []), ...['SFO', 'LHR', 'HND', 'JFK', 'CDG'].map((c) => A.search(c, 1)[0]).filter(Boolean)])];
+      const da = g.dest ? (g.dest.airport || (() => { const n = A.nearest(g.dest.lat, g.dest.lon, 1, 1)[0]; return n && n.d < 100000 ? n.a : null; })()) : null;
+      const res = q ? A.search(q, 6) : [...new Set([...(da ? [da] : []), ...(hm ? [hm] : []), ...['SFO', 'LHR', 'HND', 'JFK', 'CDG'].map((c) => A.search(c, 1)[0]).filter(Boolean)])];
       for (const a of res) {
         if (!a.runways.some((rw) => rw.len > 1500)) continue;
         const b = document.createElement('button'); b.className = 'btn wide';

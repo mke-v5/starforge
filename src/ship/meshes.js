@@ -416,6 +416,103 @@ const B = {
     }
     return g;
   },
+  armored(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    const pts = [V2(0.0001, -L / 2), V2(r, -L / 2), V2(r, -L / 2 + 0.5), V2(r * 0.62, L / 2 - 0.15), V2(r * 0.5, L / 2), V2(0.0001, L / 2)];
+    g.add(lathe(pts, M.dark, 8));                          // faceted armour
+    for (const y of [-L / 2 + 0.25, 0]) { const b = ring(r * (y < 0 ? 1 : 0.84), y, 0.22, M.accent); g.add(b); }
+    for (const a of [-0.45, 0.45]) {
+      const w = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.22, 0.08), M.glass);
+      w.position.set(Math.sin(a) * r * 0.74, L * 0.12, Math.cos(a) * r * 0.74); w.rotation.set(-0.35, a, 0); g.add(w);
+    }
+    return g;
+  },
+  xenon(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    for (const y of [-L / 2, L / 2]) { const f = cylY(r, r, 0.12, M.dark, 24); f.position.y = y * 0.94; g.add(f); }
+    for (const y of [-L / 4, L / 4]) { const sp = new THREE.Mesh(new THREE.SphereGeometry(r * 0.82, 24, 16), M.metal); sp.position.y = y; g.add(sp); }
+    for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + Math.PI / 4; const t = new THREE.Mesh(new THREE.BoxGeometry(0.08, L, 0.08), M.accent); t.position.set(Math.sin(a) * r * 0.92, 0, Math.cos(a) * r * 0.92); g.add(t); }
+    return g;
+  },
+  liftbody(def, M) {
+    // a round core blending into wide flat chines: the hull itself is the wing
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    const core = cylY(r, r, L, M.hull, 40); tubeUV(core, L, r); g.add(core);
+    const shape = new THREE.Shape();
+    const wR = def.wing.root, wT = def.wing.tip, sp = def.wing.span + r;
+    shape.moveTo(0, L / 2 - 0.2); shape.lineTo(sp, L / 2 - (wR - wT) - 0.4); shape.lineTo(sp, -L / 2 + 0.3); shape.lineTo(0, -L / 2);
+    for (const side of [1, -1]) {
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.22, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.12, bevelSegments: 2 });
+      const m = new THREE.Mesh(geo, M.hull); m.position.z = -0.11 - r * 0.25; m.scale.x = side; g.add(m);
+      const tiles = new THREE.Mesh(new THREE.PlaneGeometry(sp, L * 0.92), M.black); tiles.position.set(side * sp / 2, 0, -0.11 - r * 0.25 - 0.13); tiles.rotation.y = Math.PI; g.add(tiles);
+    }
+    g.add(ring(r, L / 2 - 0.1, 0.14, M.accent));
+    return g;
+  },
+  afterburner(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    g.add(lathe([V2(r, L / 2), V2(r, -L * 0.05), V2(r * 0.9, -L / 2 + 0.6), V2(r * 0.84, -L / 2)], M.dark, 32));
+    // long variable nozzle with petals
+    const noz = lathe([V2(r * 0.84, -L / 2 + 0.5), V2(r * 0.76, -L / 2 - 0.45)], M.metal.clone(), 18); noz.material.side = THREE.DoubleSide; g.add(noz);
+    for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; const pet = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.02), M.dark); pet.position.set(Math.sin(a) * r * 0.79, -L / 2 - 0.2, Math.cos(a) * r * 0.79); pet.rotation.y = a; g.add(pet); }
+    const hot = cylY(r * 0.62, r * 0.62, 0.05, M.glow.clone(), 24); hot.position.y = -L / 2 - 0.1; hot.userData.glow = true; g.add(hot);
+    g.add(ring(r, L / 2 - 0.1, 0.18, M.accent));
+    g.add(ring(r, -L * 0.05, 0.1, M.accent));
+    return g;
+  },
+  ion(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    const body = cylY(r * 0.7, r * 0.9, L * 0.6, M.dark, 32); body.position.y = L * 0.2; g.add(body);
+    const grid = cylY(r, r, 0.08, M.metal, 40); grid.position.y = -L * 0.12; g.add(grid);
+    const glow = new THREE.Mesh(new THREE.CircleGeometry(r * 0.92, 40), new THREE.MeshBasicMaterial({ color: 0x5fd8ff, side: THREE.DoubleSide }));
+    glow.rotation.x = Math.PI / 2; glow.position.y = -L * 0.17; glow.userData.glow = true; g.add(glow);
+    const lip = cylY(r * 1.02, r * 0.98, L * 0.3, M.hull, 40, true); lip.material = M.hull; lip.position.y = -L * 0.3; g.add(lip);
+    for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2; const c = cylY(0.05, 0.05, L * 0.55, M.accent, 8); c.position.set(Math.sin(a) * r * 0.82, L * 0.2, Math.cos(a) * r * 0.82); g.add(c); }
+    return g;
+  },
+  skid(def, M) {
+    const G = def.gear, g = new THREE.Group();
+    const strut = new THREE.Group(); strut.userData.gearStrut = true;
+    for (const y of [-0.9, 0.9]) { const s = cylY(0.06, 0.06, G.len, M.metal, 8); s.rotation.z = Math.PI / 2; s.position.set(G.len / 2, y, 0); strut.add(s); }
+    const bar = cylY(0.09, 0.09, 3.0, M.dark, 12); bar.position.x = G.len; strut.add(bar);
+    for (const y of [-1.5, 1.5]) { const tip = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), M.dark); tip.position.set(G.len - (y > 0 ? 0.08 : 0), y, 0); strut.add(tip); }
+    g.add(strut);
+    return g;
+  },
+  needle(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    const pts = [];
+    for (let i = 0; i <= 20; i++) { const t = i / 20; pts.push(V2(Math.max(0.0001, r * Math.pow(1 - t, 1.6)), -L / 2 + t * L)); }
+    g.add(lathe(pts, M.hull, 32));
+    const probe = cylY(0.025, 0.04, 1.2, M.metal, 8); probe.position.y = L / 2 + 0.5; g.add(probe);
+    g.add(ring(r, -L / 2 + 0.06, 0.1, M.accent));
+    return g;
+  },
+  blunt(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    const pts = [];
+    for (let i = 0; i <= 14; i++) { const a = (i / 14) * Math.PI / 2; pts.push(V2(Math.max(0.0001, r * Math.cos(a)), -L / 2 + L * Math.sin(a))); }
+    g.add(lathe(pts, M.black, 40));
+    g.add(ring(r, -L / 2 + 0.05, 0.1, M.accent));
+    return g;
+  },
+  reactor(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    g.add(cylY(r * 0.8, r * 0.8, L, M.dark, 28));
+    for (let i = 0; i < 10; i++) { const a = (i / 10) * Math.PI * 2; const fin = new THREE.Mesh(new THREE.BoxGeometry(0.04, L * 0.8, r * 0.36), M.metal); fin.position.set(Math.sin(a) * r * 0.86, 0, Math.cos(a) * r * 0.86); fin.rotation.y = a; g.add(fin); }
+    for (const y of [-L / 2 + 0.1, L / 2 - 0.1]) g.add(ring(r, y, 0.18, M.accent));
+    const band = cylY(r * 0.81, r * 0.81, 0.12, new THREE.MeshStandardMaterial({ color: 0x103040, emissive: 0x2fb8ff, emissiveIntensity: 1.2 }), 28); band.userData.glow = true; g.add(band);
+    const sign = new THREE.Mesh(new THREE.CircleGeometry(0.16, 3), new THREE.MeshBasicMaterial({ color: 0xffd400 })); sign.position.set(0, L * 0.3, r * 0.81 + 0.01); g.add(sign);
+    return g;
+  },
+  fusioncore(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    g.add(cylY(r * 0.55, r * 0.55, L, M.dark, 32));
+    const t = new THREE.Mesh(new THREE.TorusGeometry(r * 0.72, r * 0.24, 16, 48), M.fusion.clone()); t.rotation.x = Math.PI / 2; t.userData.glow = true; g.add(t);
+    for (const y of [-L / 2 + 0.1, L / 2 - 0.1]) { g.add(ring(r, y, 0.16, M.accent)); const d = cylY(r, r, 0.08, M.hull, 40); d.position.y = y; g.add(d); }
+    for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; const s = new THREE.Mesh(new THREE.BoxGeometry(0.1, L, 0.1), M.metal); s.position.set(Math.sin(a) * r * 0.95, 0, Math.cos(a) * r * 0.95); g.add(s); }
+    return g;
+  },
   strobe(def, M) {
     const g = new THREE.Group();
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3b3b })); s.position.x = 0.08; s.userData.strobe = true; g.add(s);

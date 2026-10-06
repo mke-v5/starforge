@@ -13,6 +13,8 @@ export const RES = {
   FU: { name: 'Fusion pellets', color: '#c58bff', unit: 'kg' },
   EC: { name: 'Charge', color: '#9cf28a', unit: 'kWh' },
   GAS: { name: 'RCS gas', color: '#d8e2ec', unit: 'kg' },
+  XE: { name: 'Xenon', color: '#7ff0e8', unit: 'kg' },
+  ABL: { name: 'Ablator', color: '#a0785a', unit: 'kg' },
 };
 export const CATS = [
   { id: 'cockpit', name: 'Cockpits' },
@@ -53,6 +55,10 @@ export const PARTS = [
     size: 'L', len: 6.5, mass: 7000, maxT: 1800, cd: 0.16, torque: 120000, ec: 150, crash: 10,
     nodes: stack(6.5, 'L', false, true), surface: true, mesh: 'cockpitHeavy' },
 
+  { id: 'ck-bastion', cat: 'cockpit', name: 'Bastion armored pod', desc: 'Heavily armored crew pod. Shrugs off hard landings (25 m/s) and 2,600 K of heat — the cockpit that comes home.',
+    size: 'M', len: 3.2, mass: 4800, maxT: 2600, cd: 0.4, torque: 30000, ec: 60, crash: 25,
+    nodes: stack(3.2, 'M', true, true, 'S', 'M'), surface: true, mesh: 'armored' },
+
   // ---------------- fuselage & tanks ----------------
   { id: 'fs-s2', cat: 'fuselage', name: 'S fuselage 2 m', desc: 'Short 1.25 m fuel section.', size: 'S', len: 2, mass: 160, maxT: 1400, res: jetTank(1.25, 2), nodes: stack(2, 'S'), surface: true, mesh: 'tube' },
   { id: 'fs-s4', cat: 'fuselage', name: 'S fuselage 4 m', desc: 'Long 1.25 m fuel section.', size: 'S', len: 4, mass: 300, maxT: 1400, res: jetTank(1.25, 4), nodes: stack(4, 'S'), surface: true, mesh: 'tube' },
@@ -65,6 +71,9 @@ export const PARTS = [
   { id: 'fu-m3', cat: 'fuselage', name: 'Fusion pellet magazine', desc: 'Deuterium–helium-3 pellets for fusion drives. Tiny mass, enormous energy.', size: 'M', len: 3, mass: 900, maxT: 1500, res: { FU: 2000 }, nodes: stack(3, 'M'), surface: true, mesh: 'fusionTank' },
   { id: 'cb-m4', cat: 'fuselage', name: 'M cargo bay', desc: 'Empty structural section with a cargo door.', size: 'M', len: 4, mass: 700, maxT: 1500, nodes: stack(4, 'M'), surface: true, mesh: 'cargo' },
   { id: 'rt-l8', cat: 'fuselage', name: 'L rocket tank', desc: 'Huge 3.75 m fuel + oxidizer tank.', size: 'L', len: 8, mass: 3200, maxT: 1400, res: rocketTank(3.75, 8), nodes: stack(8, 'L'), surface: true, mesh: 'tank' },
+  { id: 'xe-s2', cat: 'fuselage', name: 'Xenon tank', desc: 'Pressurised xenon for ion drives. A little goes a very long way.', size: 'S', len: 2, mass: 220, maxT: 1400, res: { XE: 1200 }, nodes: stack(2, 'S'), surface: true, mesh: 'xenon' },
+  { id: 'lb-m6', cat: 'fuselage', name: 'Lifting body', desc: 'Flattened 2.5 m fuselage that generates its own lift — wingless spaceplanes glide home on it. Carries jet fuel.', size: 'M', len: 6, mass: 1900, maxT: 1900, res: jetTank(2.5, 5),
+    wing: { root: 6, tip: 3.6, span: 1.9, sweep: 0.5, thick: 1.6, ctrl: 0, body: true }, nodes: stack(6, 'M'), surface: true, mesh: 'liftbody', heatTiles: true },
   { id: 'fs-l6', cat: 'fuselage', name: 'L fuselage 6 m', desc: 'Wide 3.75 m fuel section.', size: 'L', len: 6, mass: 2600, maxT: 1500, res: jetTank(3.75, 6), nodes: stack(6, 'L'), surface: true, mesh: 'tube' },
 
   // ---------------- engines ----------------
@@ -99,6 +108,12 @@ export const PARTS = [
   { id: 'en-helios-l', cat: 'engine', name: 'Helios Heavy fusion drive', desc: '3.75 m fusion torch with 1.2 MN — enough to lift a starship straight off the pad. Needs serious radiators.',
     size: 'L', len: 7.0, mass: 15000, maxT: 2600, crash: 6, nodes: stack(7, 'L', true, false), surface: true, mesh: 'fusion',
     engine: { type: 'rocket', thrust: 1200000, ispVac: 9000, ispSL: 3200, fuel: { FU: 1 }, spool: 2.5, gimbal: 4, heat: 2.8e8, fusion: true } },
+  { id: 'en-raptor', cat: 'engine', name: 'Raptor afterburning turbojet', desc: 'Fighter engine with an afterburner: push the throttle past 90 % for 60 % more thrust at a quarter of the efficiency. Mach 2.8.',
+    size: 'S', len: 3.8, mass: 1500, maxT: 1800, crash: 8, nodes: stack(3.8, 'S', true, false), surface: true, mesh: 'afterburner',
+    engine: { type: 'jet', thrust: 80000, isp: 5000, fuel: { LF: 1 }, maxMach: 2.8, ceiling: 21000, spool: 2.0, gimbal: 0, heat: 40000, ab: { thrust: 1.6, isp: 0.25 } } },
+  { id: 'en-ion', cat: 'engine', name: 'Ion drive', desc: 'Gridded ion thruster: tiny push, superb efficiency (Isp 6,000 s). Burns xenon and 1.5 MW of electricity — bring a reactor.',
+    size: 'S', len: 1.6, mass: 700, maxT: 1600, crash: 6, nodes: stack(1.6, 'S', true, false), surface: true, mesh: 'ion',
+    engine: { type: 'rocket', thrust: 12000, ispVac: 6000, ispSL: 300, fuel: { XE: 1 }, spool: 1.0, gimbal: 0, heat: 2e5, power: 1500 } },
   { id: 'en-plasma', cat: 'engine', name: 'Plasma lift thruster', desc: 'Belly-mounted fusion-plasma thruster for hovering and vertical landings anywhere — even on the airless Moon. Mount it under the hull.',
     size: 'S', len: 0.9, mass: 900, maxT: 2200, crash: 7, nodes: [], surface: true, mesh: 'plasma', thrustAxis: [-1, 0, 0], com: [0.35, 0, 0], nozzle: [0.8, 0, 0],
     engine: { type: 'rocket', thrust: 160000, ispVac: 2200, ispSL: 1300, fuel: { FU: 1 }, spool: 0.5, gimbal: 6, heat: 8e6, fusion: true, lift: true } },
@@ -147,12 +162,16 @@ export const PARTS = [
   { id: 'gr-leg', cat: 'gear', name: 'Landing leg', desc: 'Shock-absorbing leg for vertical landings on the Moon.', mass: 180, maxT: 1500, crash: 10,
     gear: { len: 2.0, wheel: 0, k: 220000, c: 26000, load: 25000, leg: true }, nodes: [], surface: true, mesh: 'leg' },
 
+  { id: 'gr-skid', cat: 'gear', name: 'Landing skid', desc: 'Fixed skid for VTOLs and landers: no wheels, lots of grip, very tough. Mount in pairs under the hull.', mass: 110, maxT: 1700, crash: 12,
+    gear: { len: 0.7, wheel: 0, k: 260000, c: 30000, load: 40000, leg: true, skid: true }, nodes: [], surface: true, mesh: 'skid' },
   { id: 'gr-leg-l', cat: 'gear', name: 'Starship leg', desc: 'Long telescoping leg for big vertical landers. Mount on the engine, angled down and out.', mass: 650, maxT: 1700, crash: 11,
     gear: { len: 5.0, wheel: 0, k: 900000, c: 110000, load: 60000, leg: true, stroke: 0.7 }, nodes: [], surface: true, mesh: 'leg' },
 
   // ---------------- nose & adapters ----------------
   { id: 'ae-nose-s', cat: 'aero', name: 'S nose cone', desc: 'Pointy aerodynamic cap.', size: 'S', len: 2.4, mass: 90, maxT: 2000, cd: 0.08, nodes: stack(2.4, 'S', false, true), surface: true, mesh: 'cone' },
   { id: 'ae-nose-m', cat: 'aero', name: 'M nose cone', desc: 'Ogive nose for 2.5 m.', size: 'M', len: 4, mass: 300, maxT: 2000, cd: 0.08, nodes: stack(4, 'M', false, true), surface: true, mesh: 'cone' },
+  { id: 'ae-needle-s', cat: 'aero', name: 'Needle nose', desc: 'Long, sharp 1.25 m nose for supersonic jets — the least drag there is.', size: 'S', len: 4.2, mass: 130, maxT: 1900, cd: 0.05, nodes: stack(4.2, 'S', false, true), surface: true, mesh: 'needle' },
+  { id: 'ae-blunt-m', cat: 'aero', name: 'Blunt nose cap', desc: 'Rounded 2.5 m cap. Draggy, but it spreads reentry heat over a wide nose and takes 2,400 K.', size: 'M', len: 1.4, mass: 380, maxT: 2400, cd: 0.45, nodes: stack(1.4, 'M', false, true), surface: true, mesh: 'blunt' },
   { id: 'ae-tail-m', cat: 'aero', name: 'M tail cone', desc: 'Tapered tail fairing.', size: 'M', len: 3, mass: 250, maxT: 1600, nodes: stack(3, 'M', true, true, 'M', 'S'), surface: true, mesh: 'adapter' },
   { id: 'ae-ad-sm', cat: 'aero', name: 'Adapter S→M', desc: 'Joins 1.25 m and 2.5 m parts.', size: 'M', len: 1.6, mass: 180, maxT: 1500, res: { LF: 300 }, nodes: stack(1.6, 'M', true, true, 'S', 'M'), surface: true, mesh: 'adapter' },
   { id: 'ae-ad-ml', cat: 'aero', name: 'Adapter M→L', desc: 'Joins 2.5 m and 3.75 m parts.', size: 'L', len: 2, mass: 400, maxT: 1500, res: { LF: 1200 }, nodes: stack(2, 'L', true, true, 'M', 'L'), surface: true, mesh: 'adapter' },
@@ -160,14 +179,18 @@ export const PARTS = [
     nodes: stack(1.6, 'S', false, true), surface: true, mesh: 'intake' },
 
   // ---------------- utility ----------------
-  { id: 'ut-shield-m', cat: 'utility', name: 'Heat shield M', desc: 'Ablative shield. Survives 3,300 K reentry heat.', size: 'M', len: 0.4, mass: 650, maxT: 3300, cd: 0.6, shield: true,
+  { id: 'ut-shield-m', cat: 'utility', name: 'Heat shield M', desc: 'Ablative shield. Survives 3,300 K reentry heat while its ablator lasts (it burns away with every hot reentry; the station tops it up).', size: 'M', len: 0.4, mass: 250, maxT: 3300, cd: 0.6, shield: true, res: { ABL: 400 },
     nodes: stack(0.4, 'M'), surface: true, mesh: 'shield' },
-  { id: 'ut-shield-s', cat: 'utility', name: 'Heat shield S', desc: 'Small ablative shield.', size: 'S', len: 0.3, mass: 180, maxT: 3300, cd: 0.6, shield: true,
+  { id: 'ut-shield-s', cat: 'utility', name: 'Heat shield S', desc: 'Small ablative shield (its ablator burns away with use).', size: 'S', len: 0.3, mass: 70, maxT: 3300, cd: 0.6, shield: true, res: { ABL: 110 },
     nodes: stack(0.3, 'S'), surface: true, mesh: 'shield' },
   { id: 'ut-radiator', cat: 'utility', name: 'Radiator panel', desc: 'Dumps engine heat into space. Essential for fusion drives.', mass: 120, maxT: 1800, crash: 6,
     radiator: 5e7, nodes: [], surface: true, mesh: 'radiator', com: [2.1, 0, 0] },
   { id: 'ut-solar', cat: 'utility', name: 'Solar wing', desc: 'Charges the batteries in sunlight.', mass: 80, maxT: 1200, crash: 5,
     solar: 6, nodes: [], surface: true, mesh: 'solar', com: [2.7, 0, 0] },
+  { id: 'ut-reactor', cat: 'utility', name: 'Fission reactor', desc: 'Compact reactor: a steady 1.6 MW of electricity for ion drives, years of fuel. Runs hot — add a radiator.', size: 'S', len: 2.2, mass: 2400, maxT: 1800, crash: 6,
+    reactor: { power: 1600, heat: 3.5e6 }, ecStore: 50, nodes: stack(2.2, 'S'), surface: true, mesh: 'reactor' },
+  { id: 'ut-fusioncore', cat: 'utility', name: 'Fusion power core', desc: 'Burns a trickle of fusion pellets for 8 MW of electricity. Needs radiators.', size: 'M', len: 2.4, mass: 4200, maxT: 2000, crash: 6,
+    reactor: { power: 8000, heat: 1.6e7, fuel: { FU: 0.4 } }, ecStore: 200, nodes: stack(2.4, 'M'), surface: true, mesh: 'fusioncore' },
   { id: 'ut-battery', cat: 'utility', name: 'Battery pack', desc: 'Stores 200 kWh of charge.', size: 'S', len: 0.6, mass: 300, maxT: 1500, ecStore: 200, nodes: stack(0.6, 'S'), surface: true, mesh: 'battery' },
   { id: 'ut-light', cat: 'utility', name: 'Landing light', desc: 'Bright floodlight for night landings.', mass: 15, maxT: 1500, light: true, nodes: [], surface: true, mesh: 'lamp' },
   { id: 'ut-strobe', cat: 'utility', name: 'Nav strobe', desc: 'Blinking position light.', mass: 5, maxT: 1500, strobe: true, nodes: [], surface: true, mesh: 'strobe' },
@@ -188,6 +211,9 @@ function deriveWing(w) {
   const leY = -Math.tan(w.sweep) * yMac;             // leading edge offset at MAC (chord axis = +Y forward)
   w.ac = [yMac, leY - 0.25 * mac + w.root * 0.5, 0];  // in part coords: x = spanwise, y = chordwise
   w.mac = mac;
+  // structural limit: the root carries the bending moment of the lift acting at the MAC station; a deep,
+  // broad root resists it (section ~ chord × thickness²), a long slender span doesn't. N per m² of wing.
+  w.sigma = Math.min(150000, Math.max(20000, 3.5e6 * w.thick * w.thick * w.root / Math.max(0.3, yMac) / w.area));
 }
 
 // limits for reshaping a wing in the hangar (metres; sweep in radians)
@@ -196,7 +222,7 @@ export const WING_LIMITS = { span: [0.5, 18], root: [0.3, 16], tip: [0.05, 16], 
 // with the area, a little more for long slender spans.
 const _variants = new Map();
 export function variantDef(def, o) {
-  if (!def.wing || !o) return def;
+  if (!def.wing || !o || def.wing.body) return def;
   const L = WING_LIMITS, c = (v, k, d) => Math.min(L[k][1], Math.max(L[k][0], Number.isFinite(v) ? v : d));
   const w0 = def.wing;
   const span = c(o.span, 'span', w0.span), root = c(o.root, 'root', w0.root), tip = Math.min(root * 1.5, c(o.tip, 'tip', w0.tip)), sweep = c(o.sweep, 'sweep', w0.sweep);
@@ -214,7 +240,7 @@ export function variantDef(def, o) {
 
 // derived properties
 for (const p of PARTS) {
-  if (p.wing) deriveWing(p.wing);
+  if (p.wing) { deriveWing(p.wing); if (p.wing.body) { p.wing.ac[0] = 0; p.wing.ac[1] = 0; p.wing.ar = (2 * p.wing.span) ** 2 / p.wing.area; } }
   if (p.engine) {
     const e = p.engine;
     if (e.type === 'rocket') e.isp = e.ispVac;

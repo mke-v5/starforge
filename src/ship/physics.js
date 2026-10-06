@@ -160,9 +160,17 @@ export class Ship {
     if (this.heatOn) {
       const vb = this.dirToBody(this.env.vAir, _d);
       let engHeat = 0; for (const P of craft.engines) engHeat += P.eng.e.heat * P.eng.thr * (P.eng.flame > 0 ? 1 : 0);
-      craft.radLoad = craft.radCap ? engHeat / craft.radCap : 0;
+      craft.radLoad = craft.radCap ? (engHeat + craft.reactorHeat()) / craft.radCap : 0;
       const hot = craft.heat(total, vb, this.env, engHeat, this.settings.heatScale, this.env.inSun);
       for (const P of hot) this.breakPart(P, 'overheat');
+    }
+    // airframe stress: a wing pushed past its limit for long, or far past it at once, breaks off
+    if (this.settings.stress !== '0') for (const P of craft.wings) {
+      if (!P.alive) continue;
+      const W = P.wing, L = W.peak;
+      W.peak = 0;
+      W.over = L > 1 ? W.over + total * (L - 1) * 4 : Math.max(0, W.over - total);
+      if (L > 1.5 || W.over > 1) this.breakPart(P, 'overstress', this.env.vSurf);
     }
     // g-force from the change in velocity minus gravity
     gravity(this.r, this.bodyCenter(MOON, this.t, _b), _a);
@@ -174,6 +182,22 @@ export class Ship {
     // electricity
     if (craft.solar && this.env.inSun) craft.ec = Math.min(craft.ecCap, craft.ec + craft.solar * total / 3600 * 10);
     if (this.thrustNow > 0) craft.ec = Math.min(craft.ecCap, craft.ec + total / 3600 * 50);
+    this.runReactors(total);
+  }
+
+  // reactors keep the batteries topped up (a fusion core burns a trickle of pellets while it works)
+  runReactors(dt) {
+    const craft = this.craft;
+    for (const P of craft.reactors) {
+      const R = P.def.reactor;
+      P.reactorOn = false;
+      if (!P.alive || craft.ec >= craft.ecCap - 1e-6) continue;
+      let f = Math.min(1, (craft.ecCap - craft.ec) / (R.power * dt / 3600));
+      if (R.fuel) for (const k in R.fuel) { const want = R.fuel[k] * f * dt / 3600; if (want > 0) f *= craft.draw(k, want) / want; }
+      if (f <= 0) continue;
+      craft.ec = Math.min(craft.ecCap, craft.ec + R.power * f * dt / 3600);
+      P.reactorOn = true;
+    }
   }
 
   substep(dt) {
@@ -196,21 +220,35 @@ export class Ship {
         }
       }
       const cmd = eng.active ? ctl.throttle : 0;
+      eng.ab = 0;
       const rate = 1 / Math.max(0.05, e.spool);
       eng.thr += clamp(cmd - eng.thr, -rate * dt, rate * dt);
       if (eng.thr < 1e-4) { eng.flame = 0; eng.thrust = 0; continue; }
-      const [Tmax, isp] = craft.engineOutput(P, E);
+      let [Tmax, isp] = craft.engineOutput(P, E);
+      // afterburner: the last tenth of the throttle lights it — much more thrust, far thirstier
+      if (e.ab && (eng.mode === 'jet' || eng.mode === 'air') && eng.thr > 0.9) {
+        eng.ab = (eng.thr - 0.9) / 0.1;
+        Tmax *= 1 + (e.ab.thrust - 1) * eng.ab; isp *= 1 - (1 - e.ab.isp) * eng.ab;
+      }
       let T = Tmax * eng.thr * (eng.bal ?? 1);
       if (T <= 0 || isp <= 0) { eng.flame = 0; eng.thrust = 0; continue; }
       const mdot = T / (isp * G0);
       const mix = craft.fuelMix(P);
-      let frac = 1;
+      let frac = 1, pf = 1;
+      // electric drives run on charge as well as propellant
+      if (e.power) {
+        const need = e.power * eng.thr * (eng.bal ?? 1) * dt / 3600;
+        const got = Math.min(need, Math.max(0, craft.ec));
+        craft.ec -= got;
+        pf = need > 0 ? got / need : 1;
+        eng.starved = pf < 0.5;
+      }
       for (const k in mix) {
-        const want = mdot * mix[k] * dt;
+        const want = mdot * mix[k] * dt * pf;
         const got = craft.draw(k, want);
         if (want > 0) frac = Math.min(frac, got / want);
       }
-      T *= frac;
+      T *= frac * pf;
       eng.thrust = T;
       eng.flame = T / Math.max(1, (e.type === 'hybrid' && eng.mode === 'rocket' ? e.rocket.thrust : e.thrust));
       if (T <= 0) continue;
@@ -472,6 +510,7 @@ export class Ship {
     for (const G of this.craft.gears) { G.gear.contact = true; G.gear.deployed = 1; }
     this.gForce = 1;
     this.craft.recompute();
+    this.runReactors(dt);
     // wake up on throttle, stick input or brake release on wheels
     const c = this.ctl;
     const wheels = this.craft.gears.length && !this.craft.gears.every((Q) => Q.def.gear.leg);
@@ -501,6 +540,7 @@ export class Ship {
     if (this.heatOn) this.craft.heat(Math.min(dt, 60), _d.set(0, 0, 0), this.env, 0, this.settings.heatScale, this.env.inSun);
     if (this.craft.solar && this.env.inSun) this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + this.craft.solar * dt / 3600 * 10);
     this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + dt / 3600 * 20);   // station power
+    this.runReactors(dt);
   }
 
   // ---- time-warp "on rails": gravity only, RK4 ----
@@ -537,6 +577,7 @@ export class Ship {
       this.craft.heat(Math.min(dt, 60), vb, this.env, 0, this.settings.heatScale, this.env.inSun);
     }
     if (this.craft.solar && this.env.inSun) this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + this.craft.solar * dt / 3600 * 10);
+    this.runReactors(dt);
   }
 }
 

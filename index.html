@@ -58,6 +58,7 @@
     </div>
     <div id="l-list" class="list"></div>
     <div id="l-sel" class="sel dim">Pick an airport above.</div>
+    <div class="dest-row"><span id="l-dest" class="dim small"></span><button class="btn sm" id="l-destb">Set destination</button></div>
     <button class="btn primary wide" id="l-go" disabled>Launch</button>
   </div>
 </div>
@@ -110,6 +111,7 @@
   </div>
   <div id="h-orbit" class="orbitbar" hidden></div>
   <div id="h-tgt" class="tgtmark" hidden><i></i><span></span></div>
+  <div id="h-dest" class="dstmark" hidden><i></i><span></span></div>
   <div id="h-warn" class="warnings"></div>
   <div id="h-ap" class="apbar" hidden></div>
   <div id="tut" class="tut" hidden></div>
@@ -177,6 +179,7 @@
     <div class="set-row"><label>Graphics</label><div class="seg" data-set="quality"><button data-v="low">Low</button><button data-v="medium">Medium</button><button data-v="high">High</button></div></div>
     <div class="set-row"><label>Units</label><div class="seg" data-set="units"><button data-v="metric">Metric</button><button data-v="imperial">Imperial</button></div></div>
     <div class="set-row"><label>Reentry heat</label><div class="seg" data-set="heat"><button data-v="0.6">Gentle</button><button data-v="1">Real</button></div></div>
+    <div class="set-row"><label>Airframe limits</label><div class="seg" data-set="stress"><button data-v="1">Real</button><button data-v="0">Off</button></div></div>
     <div class="set-row"><label>Invert pitch</label><div class="seg" data-set="invert"><button data-v="0">Off</button><button data-v="1">On</button></div></div>
     <div class="set-row"><label>Sound</label><div class="seg" data-set="sound"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
     <div class="set-row"><label>Buildings</label><div class="seg" data-set="buildings"><button data-v="1">On</button><button data-v="0">Off</button></div></div>

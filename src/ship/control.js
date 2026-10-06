@@ -8,6 +8,7 @@ import { atmosphere } from '../core/atmo.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
+const _ra = new THREE.Vector3(), _rb = new THREE.Vector3(), _rc = new THREE.Vector3(), _rd = new THREE.Vector3();
 const _err = new THREE.Vector3(), _treq = new THREE.Vector3(), _ga = new THREE.Vector3(), _gb = new THREE.Vector3(), _gc = new THREE.Vector3();
 const NOSE = new THREE.Vector3(0, 0, -1), UPB = new THREE.Vector3(0, 1, 0);
 
@@ -147,7 +148,9 @@ export class Controller {
         if (alpha > 0.22 && this.gammaHold > -0.05) this.gammaHold -= dt * 0.1 * clamp((alpha - 0.22) / 0.06, 0, 1);
         nCmd = level + clamp((this.gammaHold - gamma) * V / g * 0.7, -1.5, 2);
       }
-      nCmd = clamp(nCmd, -2.5, 7.5);
+      // g protection: stay inside what the pilot and the wings can take
+      const gl = craft.gLimit * 0.82;
+      nCmd = clamp(nCmd, -Math.min(2.5, gl * 0.4), Math.min(7.5, gl));
       let q = (nCmd - Math.cos(gamma) * Math.cos(bank)) * g / V;
       // stall / g protection
       if (alpha > 0.30 && q > 0) q *= clamp((0.42 - alpha) / 0.12, 0, 1);
@@ -297,10 +300,7 @@ export class Controller {
       _gb.crossVectors(_ga, _gc.copy(P.eng.gx).multiplyScalar(T)); a.x += Math.abs(_gb.x); a.y += Math.abs(_gb.y); a.z += Math.abs(_gb.z);
       _gb.crossVectors(_ga, _gc.copy(P.eng.gz).multiplyScalar(T)); a.x += Math.abs(_gb.x); a.y += Math.abs(_gb.y); a.z += Math.abs(_gb.z);
     }
-    if (ship.ctl.rcs && ship.env.rho < 0.05) for (const P of craft.rcsList) {
-      const l = P.rcs.pos.distanceTo(craft.com) * P.def.rcs.thrust * 2;
-      a.x += l; a.y += l; a.z += l;
-    }
+    if (ship.ctl.rcs && ship.env.rho < 0.05) a.add(rcsAuthority(craft, _ra));
     return a.addScalar(1);
   }
 
@@ -344,10 +344,12 @@ export class Controller {
       const g2 = (gx > 1e-9 ? rem.x * t2.x / gx : 0) + (gy > 1e-9 ? rem.y * t2.y / gy : 0) + (gz > 1e-9 ? rem.z * t2.z / gz : 0);
       P.eng.g1 = clamp(g1, -1, 1); P.eng.g2 = clamp(g2, -1, 1);
     }
-    // 4. RCS gets the rest (as a direction)
-    const rl = rem.length();
+    // 4. RCS gets the rest, as a fraction of what the thrusters can give about each axis
     ship.rcsT = ship.rcsT || new THREE.Vector3();
-    if (rl > 1) ship.rcsT.copy(rem).divideScalar(Math.max(rl, craft.mass * 20)); else ship.rcsT.set(0, 0, 0);
+    if (rem.length() > 1 && craft.rcsList.length) {
+      const ra = rcsAuthority(craft, _ra);
+      ship.rcsT.set(clamp(rem.x / Math.max(1, ra.x), -1, 1), clamp(rem.y / Math.max(1, ra.y), -1, 1), clamp(rem.z / Math.max(1, ra.z), -1, 1));
+    } else ship.rcsT.set(0, 0, 0);
   }
 
   // during time warp: snap attitude to the SAS/AP direction
@@ -499,18 +501,36 @@ function maxAccel(ship) {
 
 const _Y = new THREE.Vector3(0, 1, 0);
 
+// Torque the RCS thrusters give about each body axis at a full command along that axis (the thrusters fire in
+// proportion to how well their lever lines up with the command, as in Ship.rcs)
+function rcsAuthority(craft, out) {
+  out.set(0, 0, 0);
+  for (const P of craft.rcsList) {
+    if (P.alive === false) continue;
+    _rb.copy(P.rcs.pos).sub(craft.com);
+    for (const d of P.rcs.dirs) {
+      _rc.crossVectors(_rb, _rd.copy(d).negate());
+      const cl = _rc.length();
+      if (cl < 1e-3) continue;
+      const k = P.def.rcs.thrust / cl;
+      out.x += k * _rc.x * _rc.x * (_rc.x > 0 ? 1 : 0); out.y += k * _rc.y * _rc.y * (_rc.y > 0 ? 1 : 0); out.z += k * _rc.z * _rc.z * (_rc.z > 0 ? 1 : 0);
+    }
+  }
+  return out;
+}
+
 // Powered landing for rockets, VTOLs and lunar landers. From orbit: deorbit burn, coast, a braking burn timed
 // so the craft comes to rest just above the ground, then a gentle vertical touchdown. On Earth it falls
 // engines-first and lets the air do most of the braking. With a target ({ lat, lon, elev, name }, Earth) it
 // trims the fall with small correction burns on the way in and hovers across to the exact spot at the end.
 export const SWAP_H = 650;
 export function landAp(target = null) {
-  let phase = null, lastWake = -1e9, hasMain = false, hasLift = false, model = null, sub = null, corr = 0, trimT = 0, trimLeft = 0, giveUp = false;
+  let phase = null, lastWake = -1e9, hasMain = false, hasLift = false, liftUp = 0, model = null, sub = null, corr = 0, trimT = 0, trimLeft = 0, giveUp = false;
   const onMoon = !!target && target.body === 'moon';
   const aimAt = (t, hAbove) => onMoon
     ? moonToI(llh(target.lat, target.lon, (target.elev || 0) + hAbove, MOON.R, new THREE.Vector3()), t)
     : llh(target.lat, target.lon, (target.elev || 0) + hAbove, EARTH.R, new THREE.Vector3()).applyAxisAngle(_Y, earthAngle(t));
-  let coastStart = null;
+  let coastStart = null, brakeAt = null;
   const ap = {
     name: 'Auto-land',
     wakeAt: null,
@@ -544,6 +564,7 @@ export function landAp(target = null) {
       const brakeEng = hasMain && (vac || !hasLift) ? 'main' : hasLift ? 'lift' : 'all';
       const finalEng = hasLift ? 'lift' : hasMain ? 'main' : 'all';
       const swap = brakeEng !== finalEng;
+      const rollRef = swap && liftUp ? up.clone().multiplyScalar(liftUp) : undefined;
       // where the braking burn should bring us to rest (higher when the craft must then turn over onto hover thrusters,
       // falling while it turns)
       const hTarget = (swap ? SWAP_H : 120) + 0.03 * agl;
@@ -551,6 +572,11 @@ export function landAp(target = null) {
         const alive = craft.engines.filter((P) => P.alive !== false);
         hasMain = alive.some((P) => engineClass(P) === 'main');
         hasLift = alive.some((P) => engineClass(P) === 'lift');
+        // which way the hover thrusters push, in the body: brake with that side toward the sky so the turn
+        // onto them at the end is short
+        const la = new THREE.Vector3();
+        for (const P of alive) if (engineClass(P) === 'lift') la.addScaledVector(P.eng.dir, P.def.engine.thrust);
+        liftUp = la.lengthSq() > 0 && Math.abs(la.normalize().y) > 0.7 ? Math.sign(la.y) : 0;
         const peGround = el.pe - body.R - Math.max(0, ground);
         if (vh > 150 && agl > 8000 && peGround > (body === EARTH ? 25000 : -8000)) phase = 'deorbit';
         else if (vh > 60 && agl > 1500) phase = 'coast';
@@ -569,8 +595,13 @@ export function landAp(target = null) {
         const al = fwd.dot(dir);
         const peAlt = el.pe - body.R;
         if (peAlt < peTarget) { phase = 'coast'; return { dir, axis, throttle: 0 }; }
-        const dvNeed = Math.max(1, (peAlt - peTarget) / 5000);
-        return { dir, axis, throttle: al > 0.99 ? clamp(dvNeed / (amax * 0.5), 0.05, 1) : 0, status: 'Deorbit burn', engines: brakeEng };
+        // how much the periapsis drops per m/s from here (a lot from a high orbit), and the throttle eased off in
+        // time for the engines' spool-down not to overshoot
+        const el2 = elements(rs.r, rs.v.clone().addScaledVector(dir, 1), body.mu);
+        const sens = Math.max(50, el.pe - el2.pe);
+        const dvNeed = (peAlt - peTarget) / sens;
+        const spool = Math.max(0.2, ...craft.engines.filter((P) => P.eng.active).map((P) => P.eng.e.spool || 0.2));
+        return { dir, axis, throttle: al > 0.99 ? clamp(dvNeed / (amax * spool), 0.02, 1) : 0, status: 'Deorbit burn', engines: brakeEng };
       }
 
       if (phase === 'coast') {
@@ -615,19 +646,22 @@ export function landAp(target = null) {
         if (stop <= hTarget) phase = 'brake';
         else {
           // tell the game how long it may time-warp before we need control again
-          if (ship.t - lastWake > 20) {
+          // (once the engines have wound down: a burn still trailing off would move the fall by minutes)
+          if (ship.t - lastWake > 20 && !craft.engines.some((P) => P.eng.thr > 1e-3)) {
             lastWake = ship.t;
-            ap.wakeAt = estimateBrakeStart(ship, amax, Math.max(0, ground) + (body === MOON ? 3000 : 500)) - 60;
+            brakeAt = estimateBrakeStart(ship, amax, Math.max(0, ground) + (body === MOON ? 3000 : 500));
+            // a long coast is warped through in stages, re-predicting at each stop
+            ap.wakeAt = brakeAt - 60 - ship.t > 1500 ? ship.t + (brakeAt - 60 - ship.t) * 0.6 : brakeAt - 60;
             if (guided && !onMoon && corr === 0) ap.wakeAt = Math.min(ap.wakeAt, coastStart + 290, timeToAlt(ship, 152000));
             if (guided && !onMoon && corr === 1) ap.wakeAt = Math.min(ap.wakeAt, timeToAlt(ship, 130000));
             if (guided && onMoon && corr === 0) ap.wakeAt = Math.min(ap.wakeAt, coastStart + 250);
           }
-          let st = ap.wakeAt ? `Coasting · braking in ${fmtTime(Math.max(0, ap.wakeAt + 60 - ship.t))}` : 'Coasting to braking burn';
+          let st = brakeAt ? `Coasting · braking in ${fmtTime(Math.max(0, brakeAt - ship.t))}` : 'Coasting to braking burn';
           if (guided) {
             const d = onMoon ? aimAt(ship.t, 0).distanceTo(ship.r) : gcDist(E.lat, E.lon, target.lat, target.lon);
             st = `${onMoon ? 'Descending' : 'Falling'} to ${target.name || 'target'} · ${d > 1000 ? Math.round(d / 1000) + ' km' : Math.round(d) + ' m'}`;
           }
-          return { dir, axis, throttle: 0, status: st, engines: brakeEng };
+          return { dir, axis, up: rollRef, throttle: 0, status: st, engines: brakeEng };
         }
       }
       ap.wakeAt = null;
@@ -646,7 +680,7 @@ export function landAp(target = null) {
             thr = hi;
           }
           const al = fwd.dot(dir);
-          return { dir, axis, throttle: thr * smoothstep(0.7, 0.95, al), gear: agl < 3000 ? true : undefined, status: 'Braking burn', engines: brakeEng };
+          return { dir, axis, up: rollRef, throttle: thr * smoothstep(0.7, 0.95, al), gear: agl < 3000 ? true : undefined, status: 'Braking burn', engines: brakeEng };
         }
       }
 
@@ -683,9 +717,10 @@ export function landAp(target = null) {
       const vb = Math.max(vert, 0.3 * g);
       const hl = hor.length();
       if (hl > Math.tan(maxTilt) * vb) hor.multiplyScalar(Math.tan(maxTilt) * vb / hl);
-      const dir = up.clone().multiplyScalar(Math.max(vert, 0.05)).add(hor);
-      const need = dir.length();
-      dir.normalize();
+      // point no further from upright than maxTilt even when wanting to fall faster (a big craft would need too
+      // long to swing back); throttle for what is actually wanted
+      const need = up.clone().multiplyScalar(Math.max(vert, 0)).add(hor).length();
+      const dir = up.clone().multiplyScalar(vb).add(hor).normalize();
       const al = fwd.dot(dir);
       let thr = clamp(need / amax, 0, 1) * smoothstep(0.6, 0.95, al);
       if (vz > 3 && agl > 20) thr = 0;

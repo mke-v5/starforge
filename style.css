@@ -92,6 +92,16 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
 .hb-stats .warn{color:var(--amber);margin-top:6px}
 .hb-stats .bad{color:var(--red)}
 .hb-stats .good{color:var(--green)}
+.hb-stats{max-height:calc(100vh - 130px - var(--st) - var(--sb));overflow-y:auto;touch-action:pan-y}
+.mc{margin-top:8px;padding-top:6px;border-top:1px solid var(--line2)}
+.mc-h{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+.mc-row{display:flex;gap:6px;align-items:flex-start;padding:2px 0;line-height:1.25}
+.mc-row i{font-style:normal;width:12px;flex:none;text-align:center;font-weight:700}
+.mc-row span{display:flex;flex-direction:column}
+.mc-row small{color:var(--muted);font-size:.88em}
+.mc-row.ok i{color:var(--green)}.mc-row.no i{color:var(--red)}.mc-row.soft i{color:var(--amber)}
+.mc-row.no span{color:var(--muted)}
+textarea.field.code{min-height:90px;padding:8px;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;resize:vertical}
 .hb-hint{position:absolute;bottom:calc(66px + var(--sb));left:50%;transform:translateX(-50%);font-size:12px;color:var(--muted);background:rgba(5,7,12,.6);padding:4px 10px;border-radius:3px;z-index:2;white-space:nowrap;pointer-events:none}
 .hb-paint{position:absolute;bottom:calc(66px + var(--sb));left:50%;transform:translateX(-50%);padding:10px;display:grid;gap:8px;z-index:3}
 .swatches{display:flex;gap:6px;flex-wrap:wrap}
@@ -209,6 +219,7 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   #navball-slot{width:116px;height:116px}
   .toggles{grid-template-columns:repeat(2,56px)}.toggles button{height:32px;font-size:11px}
   .infopanel{width:150px;font-size:9.5px}
+  .infopanel:not(.open) .more{display:none}
   .hb-parts{width:210px}.hb-stats{width:180px;font-size:10px;padding:7px;max-height:calc(100vh - 130px - var(--st) - var(--sb));overflow-y:auto;touch-action:pan-y}
   .hb-shape{bottom:calc(56px + var(--sb));padding:5px 10px;gap:1px;left:calc(134px + var(--sl));width:300px;transform:none;font-size:10px}
   .hb-shape label{grid-template-columns:62px 1fr 50px;white-space:nowrap}
@@ -241,7 +252,17 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
   .hb-cats{flex-direction:row;overflow-x:auto;right:8px;top:calc(52px + var(--st));touch-action:pan-x}
   .hb-cats button{width:auto;flex:none}
   .hb-stats{top:calc(94px + var(--st));width:170px}
-  .infopanel{display:none}
+  /* flight HUD: warp drops under the readouts, the info panel stays (compact), the autopilot bar moves below the busy top */
+  .readouts{margin:0 0 0 auto}
+  .ro{min-width:62px;padding:0 3px}.ro b{font-size:19px}
+  #hud .topbar .warp{position:absolute;right:0;top:62px;height:34px}
+  #hud .topbar .warp button{height:32px;width:30px}
+  .orbitbar{top:calc(104px + var(--st));max-width:calc(100vw - 170px)}
+  .infopanel{width:138px;font-size:9.5px;top:calc(54px + var(--st))}
+  .infopanel:not(.open) .more{display:none}
+  .apbar{top:calc(196px + var(--st));max-width:calc(100vw - 24px)}
+  #toasts{top:calc(250px + var(--st));width:calc(100vw - 24px)}
+  .toast.big{font-size:19px}
   .title-wrap{max-width:100%;width:100%;padding:20px calc(18px + var(--sl)) 20px calc(18px + var(--sl))}
   .logo.big{font-size:clamp(30px,10.5vw,56px);letter-spacing:.2em}
   .tag{font-size:14px;letter-spacing:.05em}
@@ -259,3 +280,13 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
 .tgtmark{position:fixed;left:0;top:0;pointer-events:none;z-index:2;will-change:transform}
 .tgtmark i{position:absolute;left:-14px;top:-14px;width:28px;height:28px;border:1.5px solid var(--green);border-radius:2px;box-shadow:0 0 6px rgba(115,226,167,.35);clip-path:polygon(0 0,35% 0,35% 12%,65% 12%,65% 0,100% 0,100% 35%,88% 35%,88% 65%,100% 65%,100% 100%,65% 100%,65% 88%,35% 88%,35% 100%,0 100%,0 65%,12% 65%,12% 35%,0 35%)}
 .tgtmark span{position:absolute;left:20px;top:-22px;font:600 11px var(--display);letter-spacing:.08em;color:var(--green);text-shadow:0 0 5px #000;white-space:nowrap}
+
+/* destination marker: a pin on the spot, an arrow at the screen edge when it is out of view */
+.dstmark{position:fixed;left:0;top:0;pointer-events:none;z-index:2;will-change:transform}
+.dstmark i{position:absolute;left:-9px;top:-22px;width:18px;height:22px;background:var(--amber);clip-path:polygon(50% 100%,0 35%,10% 12%,35% 0,65% 0,90% 12%,100% 35%);filter:drop-shadow(0 0 4px rgba(0,0,0,.8))}
+.dstmark.edge i{left:-11px;top:-11px;width:22px;height:22px;clip-path:polygon(100% 50%,0 0,22% 50%,0 100%);transform-origin:50% 50%}
+.dstmark span{position:absolute;left:14px;top:-26px;font:600 11px var(--display);letter-spacing:.08em;color:var(--amber);text-shadow:0 0 5px #000;white-space:nowrap}
+.dstmark.edge span{top:10px;left:-30px}
+.orbitbar .navl{white-space:nowrap}
+.dest-row{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.dest-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

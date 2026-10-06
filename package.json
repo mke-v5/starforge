@@ -1,0 +1,13 @@
+{
+  "name": "starforge",
+  "private": true,
+  "description": "Build a spaceplane and fly it from any airport on a 1:1 Earth to the Moon and back.",
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "test:fast": "node tests/run.mjs --fast",
+    "serve": "node -e \"import('./tests/server.mjs').then(m=>m.serve(process.cwd(),8080)).then(()=>console.log('http://localhost:8080'))\""
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}

@@ -25,11 +25,12 @@ export class LaunchScreen {
     $('l-q').addEventListener('input', () => this.search());
     for (const b of document.querySelectorAll('#l-tabs .tab')) b.addEventListener('click', () => { this.mode = b.dataset.mode; for (const x of document.querySelectorAll('#l-tabs .tab')) x.classList.toggle('on', x === b); this.render(); });
     $('l-go').addEventListener('click', () => { if (this.selected) game.launch(this.selected); });
-    fetch('./data/cities.json').then((r) => r.json()).then((rows) => { this.cities = rows.map((r) => ({ n: r[0], c: r[1], lat: r[2], lon: r[3], p: r[4], l: r[0].toLowerCase() })); });
+    $('l-destb').addEventListener('click', () => { game.audio.click(); game.pickDest(); });
   }
 
   open() {
     this.renderShips();
+    this.renderDest();
     const last = this.game.lastSite;
     if (!this.anchor) this.anchor = last && last.anchor ? last.anchor : { name: 'San Francisco', lat: 37.62, lon: -122.38 };
     this.render();
@@ -47,22 +48,21 @@ export class LaunchScreen {
     }
   }
 
+  renderDest() {
+    const d = this.game.dest;
+    $('l-dest').textContent = d ? `Destination: ${d.name} (${d.sub})` : 'No destination — set one to see its distance and fly there on autopilot';
+    $('l-destb').textContent = d ? 'Change' : 'Set destination';
+  }
+
   search() {
-    const q = $('l-q').value.trim().toLowerCase();
+    const q = $('l-q').value.trim();
     if (!q) { this.render(); return; }
-    const out = [];
-    const A = this.game.world.airports;
-    for (const a of A.search(q, 6)) out.push({ kind: 'airport', a });
-    let n = 0;
-    for (const c of this.cities) { if (c.l.startsWith(q)) { out.push({ kind: 'city', c }); if (++n >= 6) break; } }
-    if (n < 6) for (const c of this.cities) { if (!c.l.startsWith(q) && c.l.includes(q)) { out.push({ kind: 'city', c }); if (++n >= 6) break; } }
     const el = $('l-list'); el.innerHTML = '';
-    for (const r of out) {
+    for (const p of this.game.places.search(q, 12)) {
       const b = document.createElement('button'); b.className = 'it';
-      if (r.kind === 'airport') b.innerHTML = `<span><span class="nm">${r.a.name}</span><span class="sub">${r.a.iata || r.a.ident} · ${r.a.city}, ${r.a.cc}</span></span><span class="r">airport</span>`;
-      else b.innerHTML = `<span><span class="nm">${r.c.n}</span><span class="sub">${r.c.c}</span></span><span class="r">city</span>`;
+      b.innerHTML = `<span><span class="nm">${esc(p.name)}</span><span class="sub">${esc(p.sub)}</span></span><span class="r">${p.kind}</span>`;
       b.addEventListener('click', () => {
-        this.anchor = r.kind === 'airport' ? { name: r.a.name, lat: r.a.lat, lon: r.a.lon, ap: r.a } : { name: r.c.n, lat: r.c.lat, lon: r.c.lon };
+        this.anchor = p.airport ? { name: p.name, lat: p.lat, lon: p.lon, ap: p.airport } : { name: p.name, lat: p.lat, lon: p.lon };
         $('l-q').value = '';
         this.render();
       });
@@ -111,3 +111,5 @@ export class LaunchScreen {
     $('l-go').disabled = false;
   }
 }
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

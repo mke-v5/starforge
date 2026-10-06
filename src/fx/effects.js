@@ -40,6 +40,8 @@ const STYLE = {
   fusion: { core: [0.95, 0.85, 1.0], edge: [0.45, 0.25, 1.0], len: 70, rad: 0.32 },
   plasma: { core: [0.8, 0.95, 1.0], edge: [0.2, 0.5, 1.0], len: 9, rad: 0.45 },
   rcs: { core: [0.95, 0.97, 1.0], edge: [0.55, 0.62, 0.7], len: 1.6, rad: 0.07 },
+  afterburner: { core: [1.0, 0.8, 0.95], edge: [1.0, 0.35, 0.45], len: 13, rad: 0.5 },
+  ion: { core: [0.75, 0.95, 1.0], edge: [0.25, 0.65, 1.0], len: 16, rad: 0.42 },
 };
 
 export class Effects {
@@ -133,7 +135,7 @@ void main(){
     for (const P of craft.parts) {
       if (!P.eng) continue;
       const e = P.eng.e;
-      const style = e.fusion ? (e.lift ? STYLE.plasma : STYLE.fusion) : e.type === 'jet' ? STYLE.jet : e.type === 'scram' ? STYLE.scram : STYLE.rocket;
+      const style = e.fusion ? (e.lift ? STYLE.plasma : STYLE.fusion) : e.power ? STYLE.ion : e.type === 'jet' ? STYLE.jet : e.type === 'scram' ? STYLE.scram : STYLE.rocket;
       const mat = new THREE.ShaderMaterial({
         uniforms: { uCore: { value: new THREE.Vector3(...style.core) }, uEdge: { value: new THREE.Vector3(...style.edge) }, uI: { value: 0 }, uDiamonds: { value: 0 }, uTime: { value: 0 } },
         vertexShader: PLUME_VERT, fragmentShader: PLUME_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
@@ -186,6 +188,7 @@ void main(){
       if (!on) continue;
       let st = pl.style;
       if (pl.hybridRocket) st = E.mode === 'rocket' ? STYLE.rocket : STYLE.jet;
+      if (E.ab > 0.05) st = STYLE.afterburner;              // afterburner lit: a long pink-orange flame with shock diamonds
       const u = pl.mesh.material.uniforms;
       u.uCore.value.set(...st.core); u.uEdge.value.set(...st.edge);
       const f = E.flame;
@@ -194,7 +197,7 @@ void main(){
       const rad = pl.r * (1 + vac * 1.6 * (st === STYLE.rocket || st === STYLE.fusion ? 1 : 0.3));
       pl.mesh.scale.set(rad, Math.max(0.5, len), rad);
       u.uI.value = (0.6 + 0.6 * f) * (st === STYLE.jet ? 0.8 : 1.1);
-      u.uDiamonds.value = st === STYLE.rocket ? p * 1.2 : st === STYLE.jet ? f * 0.6 : 0;
+      u.uDiamonds.value = st === STYLE.rocket ? p * 1.2 : st === STYLE.jet ? f * 0.6 : st === STYLE.afterburner ? 1.4 : 0;
       u.uTime.value = this.time;
     }
     if (this.rcsJets) {

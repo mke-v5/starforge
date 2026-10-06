@@ -8,6 +8,8 @@ import { deltaV } from '../ship/orbit.js';
 import { atmosphere } from '../core/atmo.js';
 import { save, load } from '../core/store.js';
 import { G0 } from '../core/geo.js';
+import { missionCheck } from './verdict.js';
+import { encodeDesign, decodeDesign, shareLink } from '../core/share.js';
 
 const $ = (id) => document.getElementById(id);
 const COLORS = ['#e8ecf0', '#c9ced6', '#8e98a6', '#3d4b5c', '#1d232c', '#f3f0e6', '#b8372e', '#2f5fae', '#2e7d5b', '#d9a22b', '#5a3d8a', '#ff7a3d'];
@@ -210,9 +212,49 @@ export class Builder {
   }
   shipsDialog() {
     const opts = this.game.shipList().map((d) => [d.name + (PRESETS.some((p) => p.make().name === d.name) ? ' (preset)' : ''), () => this.setDesign(JSON.parse(JSON.stringify(d)))]);
+    if (this.craft && this.craft.parts.length) opts.push([`Share “${this.design.name}” (code or link)…`, () => this.shareDialog()]);
+    opts.push(['Import a ship from a code…', () => this.importDialog()]);
     const mine = this.game.designs;
     if (mine.length) opts.push(['Delete a saved ship…', () => this.game.dialog('Delete', '', mine.map((d) => [d.name, () => { this.game.designs = mine.filter((x) => x !== d); save('designs', this.game.designs); }]))]);
     this.game.dialog('Ships', '', opts);
+  }
+  // ---- share codes ----
+  async shareDialog() {
+    this.design.name = ($('hb-name').value.trim() || this.design.name || 'My ship').slice(0, 24);
+    const code = await encodeDesign(this.design), link = shareLink(code);
+    const copy = (text, what) => async () => {
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+        try { ok = document.execCommand('copy'); } catch (e2) { /* ignore */ }
+        ta.remove();
+      }
+      this.game.hud.toast(ok ? `${what} copied` : 'Couldn’t copy — select the code and copy it by hand', ok ? 'good' : 'bad');
+    };
+    this.game.dialog(`Share “${this.design.name}”`, `<p class="dim small">Anyone can paste this code into their hangar (Ships → Import), or open the link to get the ship straight away.</p><textarea id="sh-code" class="field code" readonly rows="4" spellcheck="false">${code}</textarea><p class="dim small">${code.length.toLocaleString('en-US')} characters · ${this.craft.parts.length} parts</p>`, [
+      ['Copy code', copy(code, 'Ship code')],
+      ['Copy link', copy(link, 'Link')],
+    ]);
+    const ta = $('sh-code'); if (ta) ta.onfocus = () => ta.select();
+  }
+  importDialog() {
+    this.game.dialog('Import a ship', '<p class="dim small">Paste a ship code (starts with SF1.) or a shared link:</p><textarea id="sh-in" class="field code" rows="4" spellcheck="false" placeholder="SF1.…"></textarea>', [
+      ['Import', () => this.importCode($('sh-in').value)],
+    ]);
+    setTimeout(() => $('sh-in') && $('sh-in').focus(), 50);
+  }
+  async importCode(code) {
+    let d;
+    try { d = await decodeDesign(code); } catch (e) { this.game.hud.toast(`That code didn’t work: ${e.message}`, 'bad'); return false; }
+    const taken = new Set(this.game.shipList().map((x) => x.name));
+    let name = d.name, k = 2;
+    while (taken.has(name)) name = `${d.name.slice(0, 20)} (${k++})`;
+    d.name = name;
+    this.game.designs = [...this.game.designs, JSON.parse(JSON.stringify(d))];
+    save('designs', this.game.designs);
+    this.setDesign(d);
+    this.game.hud.toast(`Imported “${d.name}” — ${d.parts.length} parts`, 'good');
+    return true;
   }
   saveDesign(quiet) {
     this.design.name = ($('hb-name').value.trim() || this.design.name || 'My ship').slice(0, 24);
@@ -496,7 +538,11 @@ export class Builder {
     }
     if (c.engines.some((P) => P.eng.e.lift)) rows.push(['Hover TWR (lift)', (c.engines.filter((P) => P.eng.e.lift).reduce((s, P) => s + c.engineOutput(P, atm0)[0], 0) / (mass * G0)).toFixed(2)]);
     if (S > 0) { rows.push(['Wing area', `${S.toFixed(1)} m²`]); rows.push(['Stall speed', isFinite(vs) ? `${Math.round(vs)} m/s` : '—']); }
-    for (const k of ['LF', 'OX', 'FU']) { const cap = c.capacity(k); if (cap > 0) rows.push([RES[k].name, `${Math.round(cap).toLocaleString('en-US')} kg`]); }
+    const gl = c.gLimit;
+    if (isFinite(gl)) rows.push(['Wings break at', `${gl.toFixed(1)} g`]);
+    for (const k of ['LF', 'OX', 'FU', 'XE', 'ABL']) { const cap = c.capacity(k); if (cap > 0) rows.push([RES[k].name, `${Math.round(cap).toLocaleString('en-US')} kg`]); }
+    const pw = c.powerBudget(true);
+    if (pw.gen > 0 || pw.draw > 0) rows.push(['Power (gen / drives)', `${fmtKW(pw.gen)} / ${fmtKW(pw.draw)}`]);
     // warnings and checks
     const warn = [];
     const good = [];
@@ -531,8 +577,21 @@ export class Builder {
     if (fusionHeat > 0 && c.radCap < fusionHeat * 0.6) warn.push([`Fusion drive needs radiators (${Math.ceil(fusionHeat * 0.7 / 5e7)}+)`, '']);
     if (!c.parts[0].def.cat || c.parts[0].def.cat !== 'cockpit') warn.push(['The root part should be a cockpit', '']);
     if (c.docks.length && !c.rcsList.length) warn.push(['Add RCS thrusters so the docking port can steer in', '']);
-    else if (c.docks.length) good.push('Can dock at Meridian Station');
+    if (pw.draw > pw.gen) {
+      const mins = c.ecCap > 0 ? (c.ecCap / Math.max(1, pw.draw - pw.gen)) * 60 : 0;
+      warn.push([`Electric drives need ${fmtKW(pw.draw)} but the ship makes ${fmtKW(pw.gen)}${mins >= 1 ? ` — batteries last ${Math.round(mins)} min at full thrust` : ''}. Add a reactor.`, pw.gen <= 0 ? 'bad' : '']);
+    }
+    const reHeat = c.parts.reduce((s2, P) => s2 + (P.def.reactor ? P.def.reactor.heat : 0), 0);
+    if (reHeat > 0 && c.radCap < reHeat) warn.push(['Reactors run hot — add a radiator panel', '']);
+    if (isFinite(gl) && gl < 3.5) warn.push([`Wings too weak for this weight (break at ${gl.toFixed(1)} g) — thicker roots, shorter spans or more wing`, gl < 2 ? 'bad' : '']);
     let h = rows.map(([k, v]) => `<div class="row"><span class="dim">${k}</span><b>${v}</b></div>`).join('');
+    // what this ship can do, at a glance
+    const mc = st.mission = missionCheck(c, this.design);
+    if (mc) {
+      h += '<div class="mc"><div class="mc-h">Mission check</div>';
+      for (const m of mc.list) h += `<div class="mc-row ${m.ok ? 'ok' : m.soft ? 'soft' : 'no'}"><i>${m.ok ? '✓' : m.soft ? '~' : '✗'}</i><span>${m.label}<small>${m.detail}</small></span></div>`;
+      h += '</div>';
+    }
     h += `<div class="row"><span class="dim">Launch</span><span><button class="btn sm" id="hb-vert" style="min-height:26px">${this.design.vertical ? 'Vertical' : 'Runway'}</button></span></div>`;
     for (const [w, k] of warn) h += `<div class="warn ${k}">⚠ ${w}</div>`;
     for (const g of good) h += `<div class="good small">✓ ${g}</div>`;
@@ -595,6 +654,7 @@ export class Builder {
   }
 }
 
+const fmtKW = (kw) => (kw >= 1000 ? `${(kw / 1000).toFixed(1)} MW` : `${Math.round(kw)} kW`);
 function ghostMat(m) { const g = m.clone(); g.transparent = true; g.opacity = 0.45; g.depthWrite = false; if (g.emissive) g.emissive.setRGB(0.1, 0.25, 0.4); return g; }
 const r3 = (v) => Math.round(v * 1000) / 1000;
 const r5 = (v) => Math.round(v * 100000) / 100000;

@@ -6,6 +6,7 @@ import { PART, SIZES, variantDef } from './parts.js';
 import { buildPartMesh, makeMaterials } from './meshes.js';
 import { G0, clamp, smoothstep } from '../core/geo.js';
 
+const ABLATION_HEAT = 6e6;          // J absorbed per kg of ablator burned (game value: wear shows within a few reentries)
 const SIGMA = 5.670e-8;
 const _t = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3(), _f = new THREE.Vector3();
 const _r2 = new THREE.Vector3();
@@ -52,6 +53,7 @@ export class Craft {
           n: new THREE.Vector3(0, 0, 1).applyMatrix3(N).normalize(),
           area: w.area, ar: w.ar, ctrl: w.ctrl, tau: clamp(1.25 * Math.sqrt(w.ctrl), 0, 1), defl: 0, maxDefl: w.ctrl >= 1 ? 0.35 : 0.44,
           torq: new THREE.Vector3(),
+          fmax: w.sigma * w.area, load: 0, peak: 0, over: 0, cd0: w.body ? 0.035 : 0,
         };
         // control surfaces sit near the trailing edge (all-moving surfaces pivot near the quarter chord)
         P.wing.ctrlPt = new THREE.Vector3(w.ac[0], w.ac[1] - (w.ctrl >= 1 ? 0.1 : 0.6) * (w.mac || 1), 0).applyMatrix4(T);
@@ -202,6 +204,7 @@ export class Craft {
     if (this.ec === undefined) this.ec = this.ecCap;
     this.ec = Math.min(this.ec, this.ecCap);
     this.solar = this.parts.reduce((s, P) => s + (P.alive && P.def.solar ? P.def.solar : 0), 0);
+    this.reactors = this.parts.filter((P) => P.alive && P.def.reactor);
     this.root = this.parts[0];
     // extents for camera framing
     const box = new THREE.Box3();
@@ -283,6 +286,13 @@ export class Craft {
     list.forEach((L, i) => { L.P.eng.bal = mx > 0.05 ? s[i] / mx : 1; });
   }
 
+  // load factor the wings can take before the weakest one breaks (lift shared in proportion to area)
+  get gLimit() {
+    let A = 0, sig = Infinity;
+    for (const P of this.wings) if (P.alive !== false && Math.abs(P.wing.n.y) > 0.5) { A += P.wing.area; sig = Math.min(sig, P.wing.fmax / P.wing.area); }
+    return A > 0 ? (sig * A) / (this.mass * 9.80665) : Infinity;
+  }
+
   get intakeBonus() { return this._intake ?? (this._intake = this.parts.reduce((s, P) => s + (P.alive && P.def.intake ? P.def.intake : 0), 0)); }
 
   // ---------- aerodynamics ----------
@@ -329,7 +339,7 @@ export class Craft {
     const plate = 1.1 * Math.sin(2 * ad);
     const k = smoothstep(stall, stall + 0.25, Math.abs(ad));
     let cl = lin * (1 - k) + plate * k;
-    let cd = 0.006 + (M > 0.85 ? 0.012 * smoothstep(0.85, 1.1, M) : 0) + (cl * cl) / (Math.PI * 0.85 * ar) * (1 - k) + 1.2 * sa * sa * k + Math.abs(defl) * 0.02;
+    let cd = 0.006 + (W.cd0 || 0) + (M > 0.85 ? 0.012 * smoothstep(0.85, 1.1, M) : 0) + (cl * cl) / (Math.PI * 0.85 * ar) * (1 - k) + 1.2 * sa * sa * k + Math.abs(defl) * 0.02;
     let dCl = cla * W.tau * (1 - k * 0.7);           // lift change per radian of control deflection
     // hypersonic flow (Newtonian impact): normal force 2·sin²(incidence) on the fixed part and on the moving
     // control surface, which sees its full deflection — flaps get stronger at high angles of attack
@@ -375,6 +385,9 @@ export class Craft {
       Tq.add(_t.copy(_r2).cross(_f));
     }
     // torque sensitivity to deflection (for control allocation), per radian, at current dynamic pressure
+    // structural load: the force across the wing as a fraction of what it can carry
+    W.load = Math.abs((q * full.cl) * _u.dot(W.n) - q * full.cd * _w.dot(W.n)) / W.fmax;
+    if (W.load > W.peak) W.peak = W.load;
     W.torq.copy(_r2).cross(_u).multiplyScalar(q * full.dCl);
     W.stalled = full.k > 0.5;
     W.alpha = alpha;
@@ -410,6 +423,16 @@ export class Craft {
       Qin += hconv * ((V > 600 ? Math.min(Taw, 1500) : env.T) - P.temp) * 0.3;
       // engines and their own waste heat
       if (P.eng && engineHeat > 0) Qin += P.eng.e.heat * P.eng.thr * (1 - radFrac) * (P.eng.flame > 0 ? 1 : 0);
+      if (P.res.ABL) {
+        const A = P.res.ABL;
+        if (A.amt > 0 && P.temp > 750 && Qin > 0) {
+          const burn = Math.min(A.amt, (Qin * 0.7 * smoothstep(750, 1200, P.temp) * dt) / ABLATION_HEAT);
+          A.amt -= burn; Qin -= (burn * ABLATION_HEAT) / Math.max(dt, 1e-6);
+        }
+        P.maxT = A.amt > 0.5 ? P.def.maxT : 1900;
+      }
+      // reactors make their own waste heat (radiators carry it away)
+      if (P.def.reactor && P.reactorOn) Qin += P.def.reactor.heat * (1 - Math.min(1, this.radCap / Math.max(1, engineHeat + this.reactorHeat())));
       const Tenv = inSun ? 250 : 120;
       let Qout = 0.8 * SIGMA * P.Asurf * (P.temp ** 4 - Tenv ** 4);
       if (P.def.radiator) Qout += P.def.radiator * Math.min(1, engineHeat / Math.max(1, this.radCap)) * 0.15;
@@ -421,6 +444,20 @@ export class Craft {
     }
     this.heatFrac = worst; this.hottest = worstP;
     return hotDestroy;
+  }
+
+  // waste heat of the running reactors (W)
+  reactorHeat() { let h = 0; for (const P of this.reactors) if (P.alive && P.reactorOn) h += P.def.reactor.heat; return h; }
+  // electric power (kW): generation in sunlight / shade and the drives' draw at full throttle
+  powerBudget(inSun = true) {
+    let gen = 0, draw = 0;
+    for (const P of this.parts) {
+      if (!P.alive) continue;
+      if (P.def.reactor) gen += P.def.reactor.power;
+      if (P.def.solar && inSun) gen += P.def.solar * 10;
+      if (P.eng && P.eng.e.power) draw += P.eng.e.power;
+    }
+    return { gen, draw };
   }
 
   // ---------- damage ----------

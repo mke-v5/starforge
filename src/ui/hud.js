@@ -1,6 +1,6 @@
 // Flight HUD: readouts, navball, SAS buttons, toggles, resources, warnings and toasts.
 import * as THREE from 'three';
-import { EARTH, MOON, R2D, D2R, clamp, fmtTime } from '../core/geo.js';
+import { EARTH, MOON, R2D, D2R, clamp, fmtTime, llh, gcBearing } from '../core/geo.js';
 import { RES } from '../ship/parts.js';
 import { elements, relState, deltaV } from '../ship/orbit.js';
 import { moonPos } from '../core/astro.js';
@@ -39,7 +39,8 @@ export class Hud {
     this.buildSas();
     this.buildNavball();
     this.infoCollapsed = false;
-    $('h-info').addEventListener('click', () => { this.infoCollapsed = !this.infoCollapsed; $('h-info').classList.toggle('collapsed', this.infoCollapsed); });
+    // tap toggles the details: big screens start open ('collapsed' hides them), phones start compact ('open' shows them)
+    $('h-info').addEventListener('click', () => { this.infoCollapsed = !this.infoCollapsed; $('h-info').classList.toggle('collapsed', this.infoCollapsed); $('h-info').classList.toggle('open', this.infoCollapsed); });
     this.t = 0;
   }
 
@@ -51,7 +52,7 @@ export class Hud {
       ['rcs', 'RCS', 'R'], ['lights', 'Lights', 'U'],
       ['engines', 'Eng: all', 'E'], ['mode', 'Auto', 'X'],
       ['auto', 'Auto', 'P'], ['info', 'Info', 'O'],
-      ['dock', 'Dock', 'Y'], ['refuel', 'Refuel', ''],
+      ['dock', 'Dock', 'Y'], ['refuel', 'Refuel', ''], ['nav', 'Nav', '9'],
     ];
     this.toggles = {};
     for (const [id, label, key] of defs) {
@@ -140,10 +141,12 @@ export class Hud {
       // the station and the velocity relative to it (green)
       stn: mk((x) => { x.strokeStyle = '#73e2a7'; x.strokeRect(12, 12, 40, 40); x.beginPath(); x.moveTo(32, 4); x.lineTo(32, 20); x.moveTo(32, 44); x.lineTo(32, 60); x.moveTo(4, 32); x.lineTo(20, 32); x.moveTo(44, 32); x.lineTo(60, 32); x.stroke(); }),
       tpro: mk(circle('#73e2a7', false)), tretro: mk(circle('#73e2a7', true)),
+      // heading bug toward the destination (amber flag on the horizon)
+      dst: mk((x) => { x.fillStyle = '#ffb347'; x.beginPath(); x.moveTo(32, 8); x.lineTo(48, 30); x.lineTo(38, 30); x.lineTo(38, 56); x.lineTo(26, 56); x.lineTo(26, 30); x.lineTo(16, 30); x.closePath(); x.fill(); }),
     };
   }
 
-  renderNavball(renderer, ship, ctl) {
+  renderNavball(renderer, ship, ctl, dest = null) {
     const slot = $('navball-slot');
     if (!slot || slot.offsetParent === null) return;
     const r = slot.getBoundingClientRect();
@@ -185,6 +188,10 @@ export class Hud {
     } else for (const k of ['stn', 'tpro', 'tretro']) this.markers[k].visible = false;
     const node = ctl.node;
     place(this.markers.node, node ? (node.dvLeft || node.dv) : null);
+    if (dest && ship.env.body === EARTH) {
+      const b = gcBearing(ship.env.lat, ship.env.lon, dest.lat, dest.lon);
+      place(this.markers.dst, north.clone().multiplyScalar(Math.cos(b)).addScaledVector(east, Math.sin(b)));
+    } else this.markers.dst.visible = false;
     // render into the slot
     const dpr = renderer.getPixelRatio();
     const H = renderer.domElement.height / dpr;
@@ -212,6 +219,39 @@ export class Hud {
     el.hidden = false;
     el.style.transform = `translate(${((p.x * 0.5 + 0.5) * innerWidth).toFixed(1)}px,${((-p.y * 0.5 + 0.5) * innerHeight).toFixed(1)}px)`;
     const txt = `${STATION_SHORT.toUpperCase()} · ${this.units.dist(d)}`;
+    if (el._t !== txt) { el._t = txt; el.lastChild.textContent = txt; }
+  }
+
+  // ---------- destination marker: on the spot when in view, an arrow at the screen edge when not ----------
+  updateDest(camera, camI, ship, dest, eph) {
+    const el = this.dstEl || (this.dstEl = $('h-dest'));
+    if (!dest || !ship || ship.env.body !== EARTH || ship.docked) { el.hidden = true; return; }
+    const pF = llh(dest.lat, dest.lon, 0, EARTH.R, this._dp || (this._dp = new THREE.Vector3()));
+    const rel = pF.applyQuaternion(eph.earthQ).sub(camI);
+    const d = ship.r.distanceTo(rel.clone().add(camI));
+    if (d < 400) { el.hidden = true; return; }
+    const v = rel.clone().applyMatrix4(camera.matrixWorldInverse);       // camera space: -z forward
+    const W = innerWidth, H = innerHeight, m = 46;
+    let x, y, edge = false;
+    if (v.z < 0) {
+      const p = rel.clone().project(camera);
+      x = (p.x * 0.5 + 0.5) * W; y = (-p.y * 0.5 + 0.5) * H;
+      if (x < m || x > W - m || y < m || y > H - m) edge = true;
+    } else edge = true;
+    let ang = 0;
+    if (edge) {
+      // direction on screen toward the spot (behind us: the way to turn)
+      let dx = v.x, dy = -v.y;
+      if (v.z >= 0 && Math.hypot(dx, dy) < 1e-6) dy = 1;
+      const k = Math.min((W / 2 - m) / Math.max(1e-6, Math.abs(dx)), (H / 2 - m) / Math.max(1e-6, Math.abs(dy)));
+      x = W / 2 + dx * k; y = H / 2 + dy * k;
+      ang = Math.atan2(dy, dx);
+    }
+    el.hidden = false;
+    el.classList.toggle('edge', edge);
+    el.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`;
+    el.firstChild.style.transform = edge ? `rotate(${ang.toFixed(3)}rad)` : '';
+    const txt = `${dest.code || dest.name} · ${this.units.dist(d)}`;
     if (el._t !== txt) { el._t = txt; el.lastChild.textContent = txt; }
   }
 
@@ -301,7 +341,8 @@ export class Hud {
     this.updateInfo(ship, ctl, extra);
     // orbit bar
     const ob = $('h-orbit');
-    if (stx && stx.docked) { ob.innerHTML = `<div style="color:var(--green)">DOCKED · ${STATION_NAME}</div><div class="dim">Refuel, then undock (Y) when ready</div>`; ob.hidden = false; }
+    let obh = '';
+    if (stx && stx.docked) obh = `<div style="color:var(--green)">DOCKED · ${STATION_NAME}</div><div class="dim">Refuel, then undock (Y) when ready</div>`;
     else if ((E.h > 25000 || E.body === MOON) && !(ship.parked || (ship.contacts > 0 && E.vSurf < 5))) {
       const rs = relState(ship, E.body);
       const el = elements(rs.r, rs.v, rs.mu);
@@ -314,17 +355,28 @@ export class Hud {
       else if (el.e < 1 && el.tAp < el.period / 2) html += `<div class="dim">Ap in ${fmtTime(el.tAp)}</div>`;
       if (extra.encounter) html += `<div style="color:var(--violet)">${extra.encounter}</div>`;
       if (stx && !stx.docked && stx.d < 3e6) html += `<div style="color:var(--green)">${STATION_SHORT} ${U.dist(stx.d)}${stx.d < 2e5 ? ` · ${stx.closing >= 0 ? 'closing' : 'opening'} ${Math.abs(stx.closing) < 10 ? Math.abs(stx.closing).toFixed(1) : Math.round(Math.abs(stx.closing))} m/s` : ''}</div>`;
-      ob.innerHTML = html; ob.hidden = false;
-    } else ob.hidden = true;
+      obh = html;
+    }
+    const nv = extra.nav;
+    if (nv && extra.dest) {
+      const d = extra.dest;
+      obh += `<div class="navl"><span style="color:var(--amber)">▸ ${esc(d.code || d.name)}</span> ${U.dist(nv.d)}${ship.contacts === 0 && nv.toward > 20 ? ` · ${fmtTime(nv.eta)}` : ''}${nv.short ? ' <span style="color:var(--red)">· not enough fuel</span>' : ''}</div>`;
+    }
+    if (obh) { if (ob._h !== obh) { ob._h = obh; ob.innerHTML = obh; } ob.hidden = false; } else { ob.hidden = true; ob._h = ''; }
+    T.nav.classList.toggle('on', !!extra.dest);
+    T.nav.hidden = E.body !== EARTH && !extra.dest;
     // warnings
     const w = [];
     if (extra.stall) w.push(['STALL', '']);
     if (extra.pullUp) w.push(['PULL UP', '']);
     if (craft.heatFrac > 0.85) w.push(['OVERHEAT', '']); else if (craft.heatFrac > 0.7) w.push(['HOT', 'caut']);
     if (extra.lowFuel) w.push(['LOW FUEL', 'caut']);
-    if (ship.gForce > 9) w.push(['G LIMIT', '']);
+    if (extra.stress > 0.85) w.push(['OVERSTRESS', '']);
+    else if (ship.gForce > 9) w.push(['G LIMIT', '']);
     if (extra.gearUp) w.push(['GEAR UP', 'caut']);
     if (extra.flameout) w.push(['FLAMEOUT', 'caut']);
+    if (craft.engines.some((P) => P.eng.starved && P.eng.thr > 0.05)) w.push(['NO POWER', 'caut']);
+    if (craft.engines.some((P) => P.eng.ab > 0.05)) w.push(['AFTERBURNER', 'caut']);
     const key = w.map((x) => x[0]).join(',');
     if (key !== this.lastWarn) { this.lastWarn = key; this.warnEl.innerHTML = w.map(([t, c]) => `<span class="${c}">${t}</span>`).join(''); }
   }
@@ -332,7 +384,7 @@ export class Hud {
   updateInfo(ship, ctl, extra) {
     const craft = ship.craft, U = this.units;
     let html = '';
-    for (const k of ['LF', 'OX', 'FU', 'GAS']) {
+    for (const k of ['LF', 'OX', 'FU', 'XE', 'GAS', 'ABL']) {
       const cap = craft.capacity(k);
       if (cap <= 0) continue;
       const amt = craft.amount(k);
@@ -351,6 +403,7 @@ export class Hud {
     html += `<div class="ln"><span>TWR</span><span>${extra.twr.toFixed(2)}</span></div>`;
     html += `<div class="ln"><span>Mass</span><span>${(craft.mass / 1000).toFixed(1)} t</span></div>`;
     if (craft.ecCap > 0) html += `<div class="ln"><span>Charge</span><span>${Math.round(craft.ec / craft.ecCap * 100)}%</span></div>`;
+    if (craft.reactors.length) html += `<div class="ln"><span>Reactor</span><span>${craft.reactors.some((P) => P.reactorOn) ? 'charging' : craft.ec >= craft.ecCap - 1 ? 'standby' : 'no fuel'}</span></div>`;
     html += `<div class="ln"><span>Lat/Lon</span><span>${ship.env.lat.toFixed(2)}, ${ship.env.lon.toFixed(2)}</span></div>`;
     if (extra.nearest) html += `<div class="ln"><span>${extra.nearest.name}</span><span>${U.dist(extra.nearest.d)}</span></div>`;
     html += `</div>`;
@@ -358,4 +411,5 @@ export class Hud {
   }
 }
 
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 export function fmtWarp(w) { return w >= 1000 ? (w / 1000) + 'k×' : w + '×'; }

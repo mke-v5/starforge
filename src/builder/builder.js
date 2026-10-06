@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { PARTS, PART, CATS, SIZES, RES, WING_LIMITS, variantDef } from '../ship/parts.js';
 import { Craft } from '../ship/craft.js';
-import { buildPartMesh, makeMaterials } from '../ship/meshes.js';
+import { buildPartMesh, makeMaterials, PATTERNS } from '../ship/meshes.js';
 import { Q_FWD, mirrorQuat, PRESETS } from '../ship/designs.js';
 import { deltaV } from '../ship/orbit.js';
 import { atmosphere } from '../core/atmo.js';
@@ -206,8 +206,15 @@ export class Builder {
     if (!p.hidden) { p.hidden = true; return; }
     $('hb-shape').hidden = true; $('hangar').classList.remove('shaping'); this._shapeFor = -1;
     const sw = (list, key) => list.map((c) => `<button class="sw${this.design.colors[key] === c ? ' on' : ''}" data-k="${key}" data-c="${c}" style="background:${c}"></button>`).join('');
-    p.innerHTML = `<div class="dim small">Hull</div><div class="swatches">${sw(COLORS, 'hull')}</div><div class="dim small">Accent</div><div class="swatches">${sw(ACCENTS, 'accent')}</div>`;
-    for (const b of p.querySelectorAll('.sw')) b.onclick = () => { this.push(); this.design.colors[b.dataset.k] = b.dataset.c; this.rebuild(); this.togglePaint(); this.togglePaint(); };
+    const col = this.design.colors;
+    const pats = PATTERNS.map(([k, n]) => `<button class="pat${(col.pattern || 'panels') === k ? ' on' : ''}" data-p="${k}">${n}</button>`).join('');
+    p.innerHTML = `<div class="dim small">Hull</div><div class="swatches">${sw(COLORS, 'hull')}</div><div class="dim small">Accent</div><div class="swatches">${sw(ACCENTS, 'accent')}</div>`
+      + `<div class="dim small">Decals</div><div class="pats">${pats}</div>`
+      + `<label class="glowt"><input type="checkbox" id="hb-glow"${col.glow ? ' checked' : ''}> Glow trim (accent lights up)</label>`;
+    const redo = () => { this.rebuild(); this.togglePaint(); this.togglePaint(); };
+    for (const b of p.querySelectorAll('.sw')) b.onclick = () => { this.push(); col[b.dataset.k] = b.dataset.c; redo(); };
+    for (const b of p.querySelectorAll('.pat')) b.onclick = () => { this.push(); if (b.dataset.p === 'panels') delete col.pattern; else col.pattern = b.dataset.p; redo(); };
+    $('hb-glow').onchange = (e) => { this.push(); if (e.target.checked) col.glow = true; else delete col.glow; redo(); };
     p.hidden = false;
   }
   shipsDialog() {
@@ -540,7 +547,7 @@ export class Builder {
     if (S > 0) { rows.push(['Wing area', `${S.toFixed(1)} m²`]); rows.push(['Stall speed', isFinite(vs) ? `${Math.round(vs)} m/s` : '—']); }
     const gl = c.gLimit;
     if (isFinite(gl)) rows.push(['Wings break at', `${gl.toFixed(1)} g`]);
-    for (const k of ['LF', 'OX', 'FU', 'XE', 'ABL']) { const cap = c.capacity(k); if (cap > 0) rows.push([RES[k].name, `${Math.round(cap).toLocaleString('en-US')} kg`]); }
+    for (const k of ['LF', 'LH2', 'OX', 'FU', 'XE', 'AM', 'ABL']) { const cap = c.capacity(k); if (cap > 0) rows.push([RES[k].name, `${Math.round(cap).toLocaleString('en-US')} kg`]); }
     const pw = c.powerBudget(true);
     if (pw.gen > 0 || pw.draw > 0) rows.push(['Power (gen / drives)', `${fmtKW(pw.gen)} / ${fmtKW(pw.draw)}`]);
     // warnings and checks
@@ -581,6 +588,8 @@ export class Builder {
       const mins = c.ecCap > 0 ? (c.ecCap / Math.max(1, pw.draw - pw.gen)) * 60 : 0;
       warn.push([`Electric drives need ${fmtKW(pw.draw)} but the ship makes ${fmtKW(pw.gen)}${mins >= 1 ? ` — batteries last ${Math.round(mins)} min at full thrust` : ''}. Add a reactor.`, pw.gen <= 0 ? 'bad' : '']);
     }
+    const trap = c.parts.reduce((s2, P) => s2 + (P.def.contain || 0), 0);
+    if (trap > 0 && pw.gen < trap) warn.push([`Antimatter traps need ${trap} kW at all times — without a reactor the batteries last ${Math.round(c.ecCap / trap * 60)} min, then the cell lets go`, 'bad']);
     const reHeat = c.parts.reduce((s2, P) => s2 + (P.def.reactor ? P.def.reactor.heat : 0), 0);
     if (reHeat > 0 && c.radCap < reHeat) warn.push(['Reactors run hot — add a radiator panel', '']);
     if (isFinite(gl) && gl < 3.5) warn.push([`Wings too weak for this weight (break at ${gl.toFixed(1)} g) — thicker roots, shorter spans or more wing`, gl < 2 ? 'bad' : '']);

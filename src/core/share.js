@@ -5,13 +5,14 @@
 import { PART } from '../ship/parts.js';
 
 const HEX = /^#[0-9a-f]{6}$/i;
+const PAT = /^(stripes|checker|hazard|camo|chevron)$/;
 const MAX_PARTS = 400;
 
 // design -> compact array form
 function pack(d) {
   const r3 = (v) => Math.round(v * 1000) / 1000, r5 = (v) => Math.round(v * 1e5) / 1e5;
   return {
-    n: d.name, c: [d.colors?.hull, d.colors?.accent], v: d.vertical ? 1 : 0,
+    n: d.name, c: [d.colors?.hull, d.colors?.accent, d.colors?.pattern || '', d.colors?.glow ? 1 : 0], v: d.vertical ? 1 : 0,
     p: d.parts.map((q) => {
       const row = [q.id, ...q.p.map(r3), ...q.q.map(r5), q.mirror ? 1 : 0, q.parent ?? -1, q.sym ?? -1];
       if (q.w) row.push([q.w.span, q.w.root, q.w.tip, q.w.sweep].map(r3));
@@ -47,7 +48,7 @@ function unpack(o) {
   const c = Array.isArray(o.c) ? o.c : [];
   return {
     name, parts, vertical: o.v === 1, version: 1,
-    colors: { hull: HEX.test(c[0]) ? c[0] : '#e8ecf0', accent: HEX.test(c[1]) ? c[1] : '#ffb347' },
+    colors: { hull: HEX.test(c[0]) ? c[0] : '#e8ecf0', accent: HEX.test(c[1]) ? c[1] : '#ffb347', ...(PAT.test(c[2] || '') ? { pattern: c[2] } : {}), ...(c[3] === 1 ? { glow: true } : {}) },
   };
 }
 

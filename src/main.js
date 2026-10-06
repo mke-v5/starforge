@@ -259,6 +259,7 @@ class Game {
     this.station.seed(ship.t); this.station.occupied = -1;
     ship.station = this.station;
     const C = this.controller = new Controller(this.settings);
+    C.destFn = () => this.dest;
     C.onEngineGroup = (g) => { this.engGroup = this.availableGroups().includes(g) ? g : 'all'; };
     this.effects.attach(craft);
     this.setupLights(craft);
@@ -467,6 +468,7 @@ class Game {
     const ship = new Ship(craft, this.world, this.eph, this.settings);
     this.ship = ship;
     const C = this.controller = new Controller(this.settings);
+    C.destFn = () => this.dest;
     C.onEngineGroup = (g) => { this.engGroup = this.availableGroups().includes(g) ? g : 'all'; };
     this.effects.attach(craft);
     this.setupLights(craft);
@@ -1080,13 +1082,18 @@ class Game {
           this.effects.addDebris(mesh, pos, ship.v, q.multiply(qm));
         }
         this.audio.boom(clamp(P.def.mass / 2000, 0.5, 2));
-        if (!ship.dead) this.hud.toast(`${e.why === 'overheat' ? 'Burned up' : e.why === 'overstress' ? 'Overstressed — snapped off' : 'Lost'}: ${P.def.name}`, 'bad');
+        if (!ship.dead) this.hud.toast(`${e.why === 'overheat' ? 'Burned up' : e.why === 'overstress' ? 'Overstressed — snapped off' : e.why === 'containment' ? 'Containment failure' : 'Lost'}: ${P.def.name}`, 'bad');
       } else if (e.type === 'destroyed') {
-        const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.', overstress: 'Pulled too hard — the airframe broke up.', collision: `Crashed into ${STATION.name}.` }[e.why] || 'Destroyed.';
+        const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.', overstress: 'Pulled too hard — the airframe broke up.', containment: 'The antimatter trap lost power.', collision: `Crashed into ${STATION.name}.` }[e.why] || 'Destroyed.';
         $('c-why').textContent = why + ` (${Math.round(ship.env.vSurf)} m/s)`;
         this.clearSavedFlight();
         setTimeout(() => { if (this.ship === ship) { this.modal('crash'); } }, 2600);
         this.audio.boom(3);
+      } else if (e.type === 'antimatter') {
+        // the trap failed: a flash far bigger than any part breaking, and it takes the ship with it
+        const pw = ship.bodyToWorld(e.part.com, new THREE.Vector3());
+        this.effects.explode(pw, ship.v, 3);
+        if (!ship.dead) ship.breakPart(this.craft.root, 'containment');
       } else if (e.type === 'landed') {
         this.onLanded();
       } else if (e.type === 'docked') {
@@ -1157,7 +1164,7 @@ class Game {
     x.stall = airborne && E.q > 50 && E.vSurf > 20 && E.mach < 2.5 && craft.wings.some((P) => P.wing.stalled && P.wing.area > 4);
     x.pullUp = airborne && E.vVert < -25 && E.agl < -E.vVert * 7 && E.agl < 1500;
     x.gearUp = airborne && !ship.ctl.gear && E.agl < 250 && E.vVert < -1 && craft.gears.length > 0;
-    let fuelFrac = 1; for (const k of ['LF', 'OX', 'FU']) { const cap = craft.capacity(k); if (cap > 0) fuelFrac = Math.min(fuelFrac, craft.amount(k) / cap); }
+    let fuelFrac = 1; for (const k of ['LF', 'LH2', 'OX', 'FU']) { const cap = craft.capacity(k); if (cap > 0) fuelFrac = Math.min(fuelFrac, craft.amount(k) / cap); }
     x.lowFuel = fuelFrac < 0.1;
     x.flameout = ship.ctl.throttle > 0.1 && craft.engines.some((P) => P.eng.active && P.eng.thr > 0.2) && craft.engines.every((P) => !P.eng.active || P.eng.flame < 0.01) && !craft.engines.some((P) => P.eng.active && P.eng.starved);
     if (C.status) { this.hud.toast(C.status); C.status = ''; }

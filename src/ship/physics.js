@@ -148,6 +148,7 @@ export class Ship {
     const dt = total / n;
     this.lastV.copy(this.v);
     craft.balanceEngines(this.env);
+    craft.sweepWings(this.env.mach || 0, total);
     for (let i = 0; i < n; i++) {
       this.updateEnv(this.t);
       if (controller && i % 2 === 0) controller.update(this, dt * 2);
@@ -182,7 +183,23 @@ export class Ship {
     // electricity
     if (craft.solar && this.env.inSun) craft.ec = Math.min(craft.ecCap, craft.ec + craft.solar * total / 3600 * 10);
     if (this.thrustNow > 0) craft.ec = Math.min(craft.ecCap, craft.ec + total / 3600 * 50);
-    this.runReactors(total);
+    this.upkeep(total);
+  }
+
+  // things that go on all the time, flying or warping: reactors charge the batteries, liquid hydrogen boils off,
+  // antimatter traps draw their power — and let go if it fails
+  upkeep(dt) {
+    const craft = this.craft;
+    this.runReactors(dt);
+    for (const P of craft.parts) {
+      if (!P.alive) continue;
+      if (P.res.LH2 && P.res.LH2.amt > 0) P.res.LH2.amt *= Math.exp(-0.005 * dt / 86400);
+      if (P.def.contain && P.res.AM && P.res.AM.amt > 0.001) {
+        const need = P.def.contain * dt / 3600;
+        if (craft.ec >= need) craft.ec -= need;
+        else { craft.ec = 0; this.breakPart(P, 'containment', 0); this.events.push({ type: 'antimatter', part: P }); }
+      }
+    }
   }
 
   // reactors keep the batteries topped up (a fusion core burns a trickle of pellets while it works)
@@ -521,7 +538,7 @@ export class Ship {
     for (const G of this.craft.gears) { G.gear.contact = true; G.gear.deployed = 1; }
     this.gForce = 1;
     this.craft.recompute();
-    this.runReactors(dt);
+    this.upkeep(dt);
     // wake up on throttle, stick input or brake release on wheels
     const c = this.ctl;
     const wheels = this.craft.gears.length && !this.craft.gears.every((Q) => Q.def.gear.leg);
@@ -551,7 +568,7 @@ export class Ship {
     if (this.heatOn) this.craft.heat(Math.min(dt, 60), _d.set(0, 0, 0), this.env, 0, this.settings.heatScale, this.env.inSun);
     if (this.craft.solar && this.env.inSun) this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + this.craft.solar * dt / 3600 * 10);
     this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + dt / 3600 * 20);   // station power
-    this.runReactors(dt);
+    this.upkeep(dt);
   }
 
   // ---- time-warp "on rails": gravity only, RK4 ----
@@ -588,7 +605,7 @@ export class Ship {
       this.craft.heat(Math.min(dt, 60), vb, this.env, 0, this.settings.heatScale, this.env.inSun);
     }
     if (this.craft.solar && this.env.inSun) this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + this.craft.solar * dt / 3600 * 10);
-    this.runReactors(dt);
+    this.upkeep(dt);
   }
 }
 

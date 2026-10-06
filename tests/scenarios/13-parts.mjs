@@ -104,5 +104,60 @@ export default async function (t) {
   });
   t.check(!ab2.dead && ab2.alive && ab2.a1 < ab2.a0 - 1, `reentry burns ablator: ${ab2.a0.toFixed(0)} → ${ab2.a1.toFixed(0)} kg (shield peak ${ab2.peakT.toFixed(0)} K, now ${(ab2.h / 1000).toFixed(0)} km at ${ab2.v.toFixed(0)} m/s)`);
 
+  // swing wing: straight when slow, swept back at speed (lift moves aft, transonic drag drops)
+  const sw = await t.eval(async () => {
+    const sf = __sf, D = await import('/src/ship/designs.js');
+    const k = JSON.parse(JSON.stringify(__sf.shipList().find((d) => d.name === 'Kestrel')));
+    k.name = 'T-swing'; for (const p of k.parts) if (p.id === 'wg-swept') { p.id = 'wg-swing'; delete p.w; }
+    sf.designs.push(k);
+    await __t.start('T-swing', { type: 'air', lat: 37.0, lon: -123.5, alt: 9000, hdg: 90, speed: 340 });
+    const W = sf.ship.craft.wings.find((P) => P.def.id === 'wg-swing').wing;
+    const slow = { k: W.k, ar: W.ar };
+    sf.controller.input.throttle = 1;
+    await __t.sim(12, { dt: 0.05 });
+    const P = sf.ship.craft.wings.find((P) => P.def.id === 'wg-swing');
+    return { slow, fast: { k: P.wing.k, ar: P.wing.ar, mach: sf.ship.env.mach, rot: P.swingObj.rotation.z } };
+  });
+  t.check(sw.slow.k < 0.05 && sw.fast.k > 0.8 && sw.fast.ar < sw.slow.ar && sw.fast.rot < -0.5, `swing wing sweeps back at Mach ${sw.fast.mach.toFixed(2)} (k ${sw.fast.k.toFixed(2)}, model turned ${(-sw.fast.rot * 57.3).toFixed(0)}°)`);
+
+  // cryo hydrogen boils off; an antimatter cell without power lets go; with a reactor it holds; the torch pushes
+  const am = await t.eval(async () => {
+    const sf = __sf, D = await import('/src/ship/designs.js');
+    const mk = (name, ids, extra) => { const b = new D.DesignBuilder(name, { hull: '#d0d4da', accent: '#ff5fd8' }, { vertical: true }); b.chain(ids); if (extra) extra(b); return b.done(); };
+    const rads = (b) => { for (const z of [4, 8]) b.pair('ut-radiator', [0.7, 0.6, z], D.Q_FWD, 1); };
+    sf.designs.push(mk('T-am-batt', ['ck-aurora', 'am-cell', 'cr-m6', 'en-hydra']), mk('T-am', ['ck-bastion', 'ut-fusioncore', 'fu-m3', 'am-cell', 'cr-m6', 'en-ember'], rads));
+    await __t.start('T-am-batt', { type: 'orbit', alt: 400000 });
+    const lh0 = sf.ship.craft.amount('LH2'), tA = sf.ship.t;
+    sf.ship.warp = 1000;
+    await __t.sim(86400, { dt: 0.05, allowDead: true, until: (sf) => sf.ship.dead });
+    const r1 = { dead: sf.ship.dead, t: sf.ship.t - tA, lh: lh0 - sf.ship.craft.amount('LH2'), cell: sf.ship.craft.parts.find((P) => P.def.id === 'am-cell').alive };
+    await __t.start('T-am', { type: 'orbit', alt: 400000 });
+    const lh1 = sf.ship.craft.amount('LH2');
+    sf.ship.warp = 1000;
+    await __t.sim(86400, { dt: 0.05, allowDead: true, until: (sf) => sf.ship.dead });
+    const r2 = { dead: sf.ship.dead, boil: (lh1 - sf.ship.craft.amount('LH2')) / lh1 };
+    sf.ship.warp = 1; sf.controller.setSas('prograde');
+    const v0 = sf.ship.v.length(), am0 = sf.ship.craft.amount('AM');
+    sf.controller.input.throttle = 1;
+    await __t.sim(20, { dt: 0.05, allowDead: true });
+    const E = sf.ship.craft.engines.find((P) => P.def.id === 'en-ember');
+    const r3 = { thrust: E.eng.thrust, dv: sf.ship.v.length() - v0, am: am0 - sf.ship.craft.amount('AM'), dead: sf.ship.dead };
+    sf.controller.input.throttle = 0;
+    return { r1, r2, r3 };
+  });
+  t.check(am.r1.dead && !am.r1.cell, `an antimatter cell on batteries alone fails after ${(am.r1.t / 60).toFixed(0)} min`);
+  t.check(!am.r2.dead && am.r2.boil > 0.003 && am.r2.boil < 0.008, `with a fusion core it holds for a day; ${(am.r2.boil * 100).toFixed(2)} % of the hydrogen boiled off`);
+  t.check(!am.r3.dead && am.r3.thrust > 400000 && am.r3.dv > 100 && am.r3.am > 0 && am.r3.am < 0.1, `the Ember torch: ${(am.r3.thrust / 1000).toFixed(0)} kN, +${am.r3.dv.toFixed(0)} m/s in 20 s on ${(am.r3.am * 1000).toFixed(1)} g of antimatter`);
+
+  // paint: decals and glow trim survive a share code
+  const pc = await t.eval(async () => {
+    const S = await import('/src/core/share.js');
+    const d = JSON.parse(JSON.stringify(__sf.shipList().find((x) => x.name === 'Selene')));
+    d.colors.pattern = 'hazard'; d.colors.glow = true;
+    const back = await S.decodeDesign(await S.encodeDesign(d));
+    return back.colors;
+  });
+  t.check(pc.pattern === 'hazard' && pc.glow === true, `decals and glow trim travel in share codes (${JSON.stringify(pc)})`);
+
   await t.eval(() => { __sf.designs = __sf.designs.filter((d) => !/^T-/.test(d.name)); });
 }

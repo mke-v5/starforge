@@ -65,7 +65,7 @@ export class Hud {
   }
   buildSas() {
     const el = $('h-sas');
-    const modes = [['off', 'Off'], ['hold', 'Hold'], ['prograde', 'Pro'], ['retrograde', 'Retro'], ['normal', 'Nrm'], ['antinormal', 'Anrm'], ['radialOut', 'Rad+'], ['radialIn', 'Rad−'], ['target', 'Moon'], ['station', 'Stn'], ['tgtPro', 'T+'], ['tgtRetro', 'T−']];
+    const modes = [['off', 'Off'], ['hold', 'Hold'], ['prograde', 'Pro'], ['retrograde', 'Retro'], ['normal', 'Nrm'], ['antinormal', 'Anrm'], ['radialOut', 'Rad+'], ['radialIn', 'Rad−'], ['target', 'Moon'], ['dest', 'Dest'], ['station', 'Stn'], ['tgtPro', 'T+'], ['tgtRetro', 'T−']];
     this.sasBtns = {};
     for (const [m, label] of modes) {
       const b = document.createElement('button');
@@ -321,6 +321,7 @@ export class Hud {
       let hide = !space && !['off', 'hold', 'prograde', 'retrograde'].includes(m);
       if (['station', 'tgtPro', 'tgtRetro'].includes(m)) hide = !stNear;
       if (m === 'target' && stNear) hide = true;
+      if (m === 'dest') hide = !space || !ctl.dest;
       this.sasBtns[m].hidden = hide && ctl.sas !== m;
     }
     // AP bar
@@ -389,6 +390,7 @@ export class Hud {
     if (extra.gearUp) w.push(['GEAR UP', 'caut']);
     if (extra.flameout) w.push(['FLAMEOUT', 'caut']);
     if (craft.engines.some((P) => P.eng.starved && P.eng.thr > 0.05)) w.push(['NO POWER', 'caut']);
+    if (craft.ecCap > 0 && craft.ec < craft.ecCap * 0.15 && craft.parts.some((P) => P.alive && P.def.contain && P.res.AM && P.res.AM.amt > 0.001)) w.push(['CONTAINMENT', '']);
     if (craft.engines.some((P) => P.eng.ab > 0.05)) w.push(['AFTERBURNER', 'caut']);
     const key = w.map((x) => x[0]).join(',');
     if (key !== this.lastWarn) { this.lastWarn = key; this.warnEl.innerHTML = w.map(([t, c]) => `<span class="${c}">${t}</span>`).join(''); }
@@ -397,7 +399,7 @@ export class Hud {
   updateInfo(ship, ctl, extra) {
     const craft = ship.craft, U = this.units;
     let html = '';
-    for (const k of ['LF', 'OX', 'FU', 'XE', 'GAS', 'ABL']) {
+    for (const k of ['LF', 'LH2', 'OX', 'FU', 'XE', 'AM', 'GAS', 'ABL']) {
       const cap = craft.capacity(k);
       if (cap <= 0) continue;
       const amt = craft.amount(k);

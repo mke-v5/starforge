@@ -54,9 +54,11 @@ export class Craft {
           area: w.area, ar: w.ar, ctrl: w.ctrl, tau: clamp(1.25 * Math.sqrt(w.ctrl), 0, 1), defl: 0, maxDefl: w.ctrl >= 1 ? 0.35 : 0.44,
           torq: new THREE.Vector3(),
           fmax: w.sigma * w.area, load: 0, peak: 0, over: 0, cd0: w.body ? 0.035 : 0,
+          swing: w.swing || 0, k: 0, ar0: w.ar, yMac: w.ac[0], waveK: 1,
         };
         // control surfaces sit near the trailing edge (all-moving surfaces pivot near the quarter chord)
         P.wing.ctrlPt = new THREE.Vector3(w.ac[0], w.ac[1] - (w.ctrl >= 1 ? 0.1 : 0.6) * (w.mac || 1), 0).applyMatrix4(T);
+        if (w.swing) { P.wing.ac0 = P.wing.ac.clone(); P.wing.ctrl0 = P.wing.ctrlPt.clone(); }
         P.Asurf = w.area * 2.1;
       } else {
         P.Asurf = Math.PI * dia * L + Math.PI * dia * dia / 2;
@@ -92,7 +94,12 @@ export class Craft {
       P.contacts = this.contactPoints(def, T, N);
       if (this.visual) {
         const m = this.partMats(def);
-        const mesh = buildPartMesh(def, m);
+        let mesh = buildPartMesh(def, m);
+        if (def.wing && def.wing.swing) {
+          // a swing wing pivots at its root: the model sits in a holder that carries the part's placement
+          const holder = new THREE.Group();
+          holder.add(mesh); P.swingObj = mesh; mesh = holder;
+        }
         mesh.matrixAutoUpdate = false;
         mesh.matrix.copy(T);
         P.mesh = mesh; P.m = m;
@@ -339,7 +346,7 @@ export class Craft {
     const plate = 1.1 * Math.sin(2 * ad);
     const k = smoothstep(stall, stall + 0.25, Math.abs(ad));
     let cl = lin * (1 - k) + plate * k;
-    let cd = 0.006 + (W.cd0 || 0) + (M > 0.85 ? 0.012 * smoothstep(0.85, 1.1, M) : 0) + (cl * cl) / (Math.PI * 0.85 * ar) * (1 - k) + 1.2 * sa * sa * k + Math.abs(defl) * 0.02;
+    let cd = 0.006 + (W.cd0 || 0) + (M > 0.85 ? 0.012 * smoothstep(0.85, 1.1, M) * (W.waveK ?? 1) : 0) + (cl * cl) / (Math.PI * 0.85 * ar) * (1 - k) + 1.2 * sa * sa * k + Math.abs(defl) * 0.02;
     let dCl = cla * W.tau * (1 - k * 0.7);           // lift change per radian of control deflection
     // hypersonic flow (Newtonian impact): normal force 2·sin²(incidence) on the fixed part and on the moving
     // control surface, which sees its full deflection — flaps get stronger at high angles of attack
@@ -446,6 +453,22 @@ export class Craft {
     return hotDestroy;
   }
 
+  // swing wings: sweep back with Mach (0.8 → 1.05), moving their lift aft, shortening the effective span and
+  // cutting the transonic drag rise; dt-limited so the wings take a few seconds to move
+  sweepWings(mach, dt) {
+    for (const P of this.wings) {
+      const W = P.wing;
+      if (!W.swing || P.alive === false) continue;
+      const tgt = smoothstep(0.78, 1.05, mach);
+      W.k += clamp(tgt - W.k, -dt * 0.25, dt * 0.25);
+      const ang = W.swing * W.k, aft = W.yMac * Math.sin(ang);
+      W.ac.copy(W.ac0).addScaledVector(W.c, -aft);
+      W.ctrlPt.copy(W.ctrl0).addScaledVector(W.c, -aft);
+      W.ar = W.ar0 * (1 - 0.5 * W.k);
+      W.waveK = 1 - 0.65 * W.k;
+    }
+  }
+
   // waste heat of the running reactors (W)
   reactorHeat() { let h = 0; for (const P of this.reactors) if (P.alive && P.reactorOn) h += P.def.reactor.heat; return h; }
   // electric power (kW): generation in sunlight / shade and the drives' draw at full throttle
@@ -487,6 +510,7 @@ export class Craft {
         else if (m.emissive.r > 0) m.emissive.setRGB(0, 0, 0);
       }
       if (P.pivot && P.wing) P.pivot.setRotationFromAxisAngle(P.pivot.userData.hingeAxis, P.wing.defl);
+      if (P.swingObj) P.swingObj.rotation.z = -P.wing.swing * P.wing.k;
       if (P.strut && P.gear) {
         P.strut.rotation.z = (1 - P.gear.deployed) * 1.45;
         P.strut.position.x = -P.gear.comp * 0.6;

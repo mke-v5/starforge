@@ -27,10 +27,45 @@ function panels() {
   return panelTex;
 }
 
+// Hull decal patterns, painted over the panel lines (white = hull colour, dark = a darker shade of it)
+export const PATTERNS = [['panels', 'Panels'], ['stripes', 'Racing stripes'], ['checker', 'Test checker'], ['hazard', 'Hazard'], ['camo', 'Splinter camo'], ['chevron', 'Chevrons']];
+const patternTex = {};
+function pattern(kind) {
+  if (!kind || kind === 'panels') return panels();
+  if (patternTex[kind]) return patternTex[kind];
+  const base = panels().image;
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.drawImage(base, 0, 0);
+  g.fillStyle = 'rgba(40,40,44,0.78)';
+  if (kind === 'stripes') { g.fillRect(96, 0, 22, 256); g.fillRect(138, 0, 22, 256); }
+  else if (kind === 'checker') { for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) if ((x + y) % 2) g.fillRect(x * 128, y * 128, 128, 128); }
+  else if (kind === 'hazard') {
+    g.save(); g.beginPath(); g.rect(0, 0, 256, 256); g.clip();
+    g.fillStyle = 'rgba(25,25,28,0.85)';
+    for (let i = -256; i < 512; i += 64) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + 32, 0); g.lineTo(i + 32 - 256, 256); g.lineTo(i - 256, 256); g.closePath(); g.fill(); }
+    g.restore();
+  } else if (kind === 'camo') {
+    let sd = 7; const rnd = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+    for (let k = 0; k < 26; k++) {
+      g.fillStyle = k % 2 ? 'rgba(40,46,40,0.55)' : 'rgba(80,86,78,0.45)';
+      g.beginPath(); const cx = rnd() * 256, cy = rnd() * 256;
+      g.moveTo(cx, cy); for (let i = 0; i < 4; i++) g.lineTo(cx + (rnd() - 0.5) * 120, cy + (rnd() - 0.5) * 120); g.closePath(); g.fill();
+    }
+  } else if (kind === 'chevron') {
+    g.lineWidth = 18; g.strokeStyle = 'rgba(40,40,44,0.8)';
+    for (const y of [40, 168]) { g.beginPath(); g.moveTo(0, y + 50); g.lineTo(128, y); g.lineTo(256, y + 50); g.stroke(); }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return (patternTex[kind] = t);
+}
+
 export function makeMaterials(colors) {
-  const tex = panels();
+  const tex = pattern(colors.pattern);
   const hull = new THREE.MeshStandardMaterial({ color: colors.hull, metalness: 0.35, roughness: 0.42, map: tex, side: THREE.DoubleSide });
-  const accent = new THREE.MeshStandardMaterial({ color: colors.accent, metalness: 0.3, roughness: 0.35, emissive: new THREE.Color(colors.accent).multiplyScalar(0.12), side: THREE.DoubleSide });
+  // glow trim: the accent colour lit from within (night-time running lights for the whole ship)
+  const accent = new THREE.MeshStandardMaterial({ color: colors.accent, metalness: 0.3, roughness: 0.35, emissive: new THREE.Color(colors.accent).multiplyScalar(colors.glow ? 1.1 : 0.12), side: THREE.DoubleSide });
   const dark = new THREE.MeshStandardMaterial({ color: 0x2a2f37, metalness: 0.7, roughness: 0.38 });
   const black = new THREE.MeshStandardMaterial({ color: 0x15171b, metalness: 0.2, roughness: 0.75, side: THREE.DoubleSide });
   const glass = new THREE.MeshStandardMaterial({ color: 0x0d1724, metalness: 0.9, roughness: 0.06, envMapIntensity: 1.5 });
@@ -511,6 +546,24 @@ const B = {
     const t = new THREE.Mesh(new THREE.TorusGeometry(r * 0.72, r * 0.24, 16, 48), M.fusion.clone()); t.rotation.x = Math.PI / 2; t.userData.glow = true; g.add(t);
     for (const y of [-L / 2 + 0.1, L / 2 - 0.1]) { g.add(ring(r, y, 0.16, M.accent)); const d = cylY(r, r, 0.08, M.hull, 40); d.position.y = y; g.add(d); }
     for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; const s = new THREE.Mesh(new THREE.BoxGeometry(0.1, L, 0.1), M.metal); s.position.set(Math.sin(a) * r * 0.95, 0, Math.cos(a) * r * 0.95); g.add(s); }
+    return g;
+  },
+  cryo(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    const foam = new THREE.MeshStandardMaterial({ color: 0xe9ecef, roughness: 0.85, metalness: 0.05, map: M.hull.map });
+    const body = cylY(r, r, L, foam, 40); tubeUV(body, L, r); g.add(body);
+    for (let i = 0; i < 5; i++) g.add(ring(r, -L / 2 + (i + 0.5) * (L / 5), 0.08, M.dark));
+    for (const y of [-L / 2 + 0.1, L / 2 - 0.1]) g.add(ring(r, y, 0.18, M.accent));
+    const vent = cylY(0.06, 0.06, 0.5, M.metal, 8); vent.rotation.z = Math.PI / 2; vent.position.set(r + 0.2, L * 0.4, 0); g.add(vent);
+    return g;
+  },
+  amcell(def, M) {
+    const r = SIZES[def.size] / 2, L = def.len, g = new THREE.Group();
+    for (const y of [-L / 2 + 0.08, L / 2 - 0.08]) { const f = cylY(r, r, 0.16, M.dark, 24); f.position.y = y; g.add(f); }
+    for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, L, 0.1), M.metal); b.position.set(Math.sin(a) * r * 0.9, 0, Math.cos(a) * r * 0.9); g.add(b); }
+    const core = new THREE.Mesh(new THREE.SphereGeometry(r * 0.38, 20, 14), new THREE.MeshStandardMaterial({ color: 0x300020, emissive: 0xff40d0, emissiveIntensity: 1.6 }));
+    core.userData.glow = true; g.add(core);
+    for (const y of [-0.25, 0.25]) { const t = new THREE.Mesh(new THREE.TorusGeometry(r * 0.62, 0.07, 8, 32), M.accent); t.rotation.x = Math.PI / 2; t.position.y = y; g.add(t); }
     return g;
   },
   strobe(def, M) {

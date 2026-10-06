@@ -66,8 +66,9 @@ const PAGE_HELPERS = () => {
       while (performance.now() < end) {
         await new Promise((r) => requestAnimationFrame(r));
         const now = performance.now(), dt = Math.min(0.05, (now - last) / 1000); last = now;
+        if (sf.state === 'hangar' && sf.builder) { sf.builder.frame(dt, cam()); continue; }   // the hangar draws its own scene
         if (sf.ship && sf.state !== 'boot') { if (o.step !== false) sf.flightFrame(dt, inp, [], cam()); }
-        else if (sf.state !== 'hangar') sf.idleFrame(dt);
+        else sf.idleFrame(dt);
         sf.render(dt);
       }
     },

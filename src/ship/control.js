@@ -43,6 +43,9 @@ export class Controller {
     if (ship.env.body === EARTH) return ship.r.clone();
     moonPos(ship.t, _a); return ship.r.clone().sub(_a);
   }
+  // the game's chosen destination (a city or airport), if any
+  get dest() { return this.destFn ? this.destFn() : null; }
+
   modeDir(ship, mode) {
     const v = this.refVel(ship), r = this.refPos(ship);
     switch (mode) {
@@ -53,6 +56,8 @@ export class Controller {
       case 'radialOut': { const n = new THREE.Vector3().crossVectors(r, v); return new THREE.Vector3().crossVectors(v, n).normalize(); }
       case 'radialIn': { const n = new THREE.Vector3().crossVectors(r, v); return new THREE.Vector3().crossVectors(n, v).normalize(); }
       case 'target': moonPos(ship.t, _a); return _a.clone().sub(ship.r).normalize();
+      // the chosen destination on Earth (a city or airport), wherever it is under the ship
+      case 'dest': { const d = this.dest; if (!d) return null; return llh(d.lat, d.lon, 0, EARTH.R, new THREE.Vector3()).applyAxisAngle(_Y, earthAngle(ship.t)).sub(ship.r).normalize(); }
       // the station: point at it, or along / against the velocity relative to it
       case 'station': { const st = ship.station; if (!st) return null; return st.posAt(ship.t, _a).clone().sub(ship.r).normalize(); }
       case 'tgtPro': case 'tgtRetro': {

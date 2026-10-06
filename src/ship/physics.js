@@ -584,8 +584,14 @@ export class Ship {
       rk4(s, t, h);
       t += h; left -= h;
       this.r.set(s[0], s[1], s[2]); this.v.set(s[3], s[4], s[5]);
-      // stop warping before hitting air or ground
-      const alt = rr - body.R;
+      // stop warping before hitting air or ground (on the Moon: measured from the real ground below, whose
+      // highlands stand up to 10 km above the mean radius)
+      let alt = rr - body.R;
+      if (body === MOON && alt < 40000) {
+        this.toFixed(MOON, this.r, t, _fx);
+        const fl = _fx.length();
+        alt -= Math.max(0, this.world.groundAt(MOON, Math.asin(clamp(_fx.y / fl, -1, 1)) / D2R, Math.atan2(-_fx.z, _fx.x) / D2R));
+      }
       if ((body === EARTH && alt < EARTH.atmoTop + 2000) || alt < 3000 + (body === MOON ? 8000 : 0)) {
         this.warp = 1;
         this.events.push({ type: 'warpStop', why: body === EARTH && alt < EARTH.atmoTop + 2000 ? 'atmosphere' : 'surface' });

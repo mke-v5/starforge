@@ -3,6 +3,7 @@
 // still loads and renders. Elevation tiles are left to the real host.
 //
 //   imagery  (EOX, GIBS)      -> a procedural PNG: patchwork fields, darker on hash
+//   Moon imagery (Moon Trek)  -> grey regolith
 //   OpenFreeMap tile JSON      -> points at the fake vector tiles below
 //   vector tiles (z14)         -> a street grid with a motorway and a railway, a lake, a river and a block of buildings
 
@@ -43,6 +44,7 @@ function imagery(z, x, y) {
   return b;
 }
 const NIGHT = png(256, 256, () => [4, 4, 8]);
+const MOONIMG = png(256, 256, (x, y) => { const v = 118 + (hash(x >> 3, y >> 3) - 0.5) * 30; return [v, v, v - 4]; });
 
 // ---------- Mapbox vector tile ----------
 const varint = (n, o) => { while (n > 127) { o.push((n & 127) | 128); n = Math.floor(n / 128); } o.push(n); };
@@ -118,6 +120,7 @@ export async function installFixtures(ctx) {
     route.fulfill(ok(imagery(+m[1], +m[3], +m[2]), 'image/png'));
   });
   await ctx.route(/gibs\.earthdata\.nasa\.gov/, (route) => route.fulfill(ok(NIGHT, 'image/png')));
+  await ctx.route(/trek\.nasa\.gov/, (route) => route.fulfill(ok(MOONIMG, 'image/png')));
   await ctx.route(/tiles\.openfreemap\.org\/planet$/, (route) => route.fulfill(ok(JSON.stringify({ tiles: ['https://tiles.openfreemap.org/fixture/{z}/{x}/{y}.pbf'] }), 'application/json')));
   await ctx.route(/tiles\.openfreemap\.org\/fixture\//, (route) => route.fulfill(ok(vectorTile(), 'application/x-protobuf')));
 }

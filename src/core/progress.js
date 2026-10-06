@@ -24,6 +24,12 @@ export const MILESTONES = [
   { id: 'rendezvous', name: 'Rendezvous', desc: 'Get within 1 km of Meridian Station, moving less than 5 m/s relative to it.' },
   { id: 'docked', name: 'Soft capture', desc: 'Dock with Meridian Station.' },
   { id: 'stationRun', name: 'Runway to rendezvous', desc: 'Take off from an airport and dock at Meridian Station in the same flight.' },
+  { id: 'arrived', name: 'You have arrived', desc: 'Set a destination, fly there and land within 5 km of it.' },
+  { id: 'ownPad', name: 'Launch complex', desc: 'Lift off from a launch pad you built.' },
+  { id: 'farSide', name: 'The far side', desc: 'Fly over the side of the Moon that never faces Earth.' },
+  { id: 'ionDrive', name: 'Patience', desc: 'Run an ion drive for ten minutes.' },
+  { id: 'antimatter', name: 'Matter, meet antimatter', desc: 'Fire an antimatter torch.' },
+  { id: 'shared', name: 'Show and tell', desc: 'Share a ship as a code or link, or import someone else’s.' },
 ];
 
 export class Progress {
@@ -41,7 +47,7 @@ export class Progress {
     if (m && this.onUnlock) this.onUnlock(m);
   }
   startFlight(info) {
-    this.flight = { from: info.airport || null, tookOff: false, visitedMoon: false, landedMoon: false, dist: 0, custom: !!info.custom };
+    this.flight = { from: info.airport || null, ownPad: !!info.ownPad, tookOff: false, visitedMoon: false, landedMoon: false, dist: 0, custom: !!info.custom, ionT: 0 };
     if (info.custom) this.unlock('builder');
   }
   // called a few times per second
@@ -51,13 +57,20 @@ export class Progress {
     F.dist += E.vSurf * dt;
     if (F.dist > 40075000) this.unlock('aroundWorld');
     if (E.body === EARTH) {
-      if (!F.tookOff && ship.contacts === 0 && E.agl > 30 && E.vSurf > 30) { F.tookOff = true; if (F.from) this.unlock('firstFlight'); }
+      if (!F.tookOff && ship.contacts === 0 && E.agl > 30 && E.vSurf > 30) { F.tookOff = true; if (F.from) this.unlock('firstFlight'); if (F.ownPad) this.unlock('ownPad'); }
       if (E.mach > 1 && E.rho > 0.01) this.unlock('mach1');
       if (E.mach > 5 && E.rho > 1e-4) this.unlock('mach5');
       if (E.h > 100000) this.unlock('space');
     } else {
       F.visitedMoon = true;
       this.unlock('moonSoi');
+      if (Math.abs(E.lon) > 100 && E.agl < 500000) this.unlock('farSide');
+    }
+    // the drives
+    for (const P of ship.craft.engines) {
+      if (!(P.eng.thrust > 0)) continue;
+      if (P.eng.e.power) { F.ionT += dt; if (F.ionT > 600) this.unlock('ionDrive'); }
+      if (P.eng.e.antimatter) this.unlock('antimatter');
     }
     // orbit milestones (checked every couple of seconds, not only while the map is open)
     F.orbT = (F.orbT || 0) + dt;
@@ -77,8 +90,13 @@ export class Progress {
     const F = this.flight;
     if (F && F.tookOff && F.from) this.unlock('stationRun');
   }
-  landed(ship, airport) {
+  landed(ship, airport, dest = null) {
     const F = this.flight; if (!F) return;
+    if (dest && F.tookOff && ship.env.body.name === 'Earth') {
+      const E = ship.env, D = Math.PI / 180;
+      const c = Math.sin(E.lat * D) * Math.sin(dest.lat * D) + Math.cos(E.lat * D) * Math.cos(dest.lat * D) * Math.cos((E.lon - dest.lon) * D);
+      if (Math.acos(Math.min(1, c)) * 6371000 < 5000) this.unlock('arrived');
+    }
     if (ship.env.body === MOON) {
       F.landedMoon = true; this.unlock('moonLand');
       // Tranquility Base, 0.674° N 23.473° E

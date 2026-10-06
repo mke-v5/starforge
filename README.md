@@ -6,7 +6,7 @@ No build step, no account, no keys. Serve this folder with any static host (GitH
 - **Fly**: fly-by-wire jets and spaceplanes, flight school, auto-land on any runway.
 - **Space**: orbital mechanics with the Moon's pull, map view burn planning, time warp, reentry heating.
 - **Meridian Station**: a station in a 420 km, 51.6° orbit. Launch-window ascent into its plane, Lambert transfers, closest-approach planning, RCS docking (by hand or autopilot) and free refuelling.
-- **The Moon**: transfers, captures, landings at famous sites, and a fly-me-home autopilot back to the runway you left from.
+- **The Moon**: transfers, captures, landings at famous sites over the real lunar terrain, a one-tap "fly me to the Moon" trip from any runway or pad, and a fly-me-home autopilot back to the runway you left from.
 - **Hangar**: build and reshape your own ships, see at a glance what each can do (orbit, station, Moon and back), and share them as a short code or link. Wings have structural limits; electric drives need power.
 - **Fly anywhere**: pick any of 16,000 cities or every airport and the autopilot flies you there and lands.
 

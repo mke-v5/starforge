@@ -440,7 +440,7 @@ export class MapView {
     if (n && n.target) { n.target.elev = elev; n.vertical = true; this.renderNode(); }
   }
   // pick a famous spot on the Moon and plan the descent to it
-  pickMoonSite(onPick = (s) => this.planMoonSite(s)) {
+  pickMoonSite(onPick = (s) => this.planMoonSite(s), orbitOnly = false) {
     const g = this.game, $b = $('d-btns');
     $('d-title').textContent = 'Land at…';
     $('d-body').innerHTML = '<p class="dim small">The autopilot times the descent burn (it may wait for the Moon to turn the site under your orbit), brakes, and hovers onto the spot.</p>';
@@ -451,6 +451,7 @@ export class MapView {
       b.onclick = () => { g.modal('dialog', false); onPick(site); };
       $b.appendChild(b);
     }
+    if (orbitOnly) { const o = document.createElement('button'); o.className = 'btn wide'; o.textContent = 'Just into lunar orbit'; o.onclick = () => { g.modal('dialog', false); onPick(null); }; $b.appendChild(o); }
     const c = document.createElement('button'); c.className = 'btn ghost wide'; c.textContent = 'Cancel'; c.onclick = () => g.modal('dialog', false); $b.appendChild(c);
     g.modal('dialog');
   }

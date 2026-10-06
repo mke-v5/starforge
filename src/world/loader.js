@@ -25,6 +25,30 @@ export class Loader {
     this.frame = 0;
     this.online = true;
     this._sortNeeded = false;
+    // elevation tiles are fetched and decoded in workers when the browser allows (keeps frames smooth while
+    // the ground streams in); otherwise on the main thread
+    this.decoders = [];
+    this.decodeJobs = new Map(); this.decodeId = 0;
+    if (typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined') {
+      try {
+        for (let i = 0; i < 2; i++) {
+          const w = new Worker(new URL('./dworker.js', import.meta.url), { type: 'module' });
+          w.onmessage = (e) => { const j = this.decodeJobs.get(e.data.id); if (j) { this.decodeJobs.delete(e.data.id); j(e.data); } };
+          w.onerror = () => { this.decoders = []; };
+          this.decoders.push(w);
+        }
+      } catch (e) { this.decoders = []; }
+    }
+  }
+
+  // fetch + decode an elevation PNG in a worker: resolves to { data, w, h } or null
+  decodeRemote(url, kind) {
+    if (!this.decoders.length) return undefined;
+    const id = ++this.decodeId, w = this.decoders[id % this.decoders.length];
+    return new Promise((res) => {
+      this.decodeJobs.set(id, (m) => { if (m.ok) this.stats.bytes += m.bytes || 0; res(m.ok ? m : null); });
+      w.postMessage({ id, url, kind });
+    });
   }
   get busy() { return this.queue.length + this.active; }
 
@@ -94,11 +118,17 @@ export class Loader {
       if (e.kind === 'night') return await this.bitmap(SRC.night.url(e.z, e.x, e.y));
       if (e.kind === 'moon') return await this.bitmap(SRC.moon.url(e.z, e.x, e.y));
       if (e.kind === 'dem') {
-        const b = await this.bitmap(SRC.dem.url(e.z, e.x, e.y));
+        const url = SRC.dem.url(e.z, e.x, e.y);
+        const m = this.decodeRemote(url, 'terrarium');
+        if (m !== undefined) { const r = await m; if (!r) return null; r.data.size = r.w; return r.data; }
+        const b = await this.bitmap(url);
         return b ? decodeTerrarium(b) : null;
       }
       if (e.kind === 'moonh') {
-        const b = await this.bitmap(`./data/moon/${e.x}.png`);
+        const url = new URL(`../../data/moon/${e.x}.png`, import.meta.url).href;
+        const m = this.decodeRemote(url, 'moonh');
+        if (m !== undefined) { const r = await m; if (!r) return null; r.data.w = r.w; r.data.h = r.h; return r.data; }
+        const b = await this.bitmap(url);
         return b ? decodeMoonHeight(b) : null;
       }
       if (e.kind === 'raw') {

@@ -229,6 +229,7 @@ export class Builder {
   async shareDialog() {
     this.design.name = ($('hb-name').value.trim() || this.design.name || 'My ship').slice(0, 24);
     const code = await encodeDesign(this.design), link = shareLink(code);
+    this.game.progress.unlock('shared');
     const copy = (text, what) => async () => {
       let ok = false;
       try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
@@ -261,6 +262,7 @@ export class Builder {
     save('designs', this.game.designs);
     this.setDesign(d);
     this.game.hud.toast(`Imported “${d.name}” — ${d.parts.length} parts`, 'good');
+    this.game.progress.unlock('shared');
     return true;
   }
   saveDesign(quiet) {

@@ -7,7 +7,7 @@ import { Progress, MILESTONES } from './core/progress.js';
 import { World } from './world/world.js';
 import { Craft } from './ship/craft.js';
 import { Ship } from './ship/physics.js';
-import { Controller, landAp, ascentAp, nodeExec, reentryAp, landRunwayAp } from './ship/control.js';
+import { Controller, landAp, ascentAp, nodeExec, reentryAp, landRunwayAp, flyToMoonAp } from './ship/control.js';
 import { PRESETS } from './ship/designs.js';
 import { PART } from './ship/parts.js';
 import { deltaV, elements, relState, predict, engineClass, planCircularize } from './ship/orbit.js';
@@ -16,7 +16,7 @@ import { Audio } from './fx/audio.js';
 import { Input } from './ui/input.js';
 import { Hud, fmtWarp } from './ui/hud.js';
 import { LaunchScreen } from './ui/launch.js';
-import { MapView } from './ui/mapview.js';
+import { MapView, MOON_SITES } from './ui/mapview.js';
 import { HELP_HTML } from './ui/help.js';
 import { Tutorial, flightSchool } from './ui/tutorial.js';
 import { Station, STATION, stationKepler } from './world/station.js';
@@ -25,6 +25,7 @@ import { Places } from './world/places.js';
 import { navInfo, headingAp, flyToAp, runwayFor, fmtDist } from './ship/navigate.js';
 
 const $ = (id) => document.getElementById(id);
+const x0dv = (g) => deltaV(g.craft, false);
 const WARPS = [1, 2, 4, 10, 50, 100, 1000, 10000, 100000];
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
 
@@ -271,7 +272,7 @@ class Game {
     this.camMode = 'chase';
     this.cam.dist = Math.max(12, craft.size * 1.5 + 8);
     this.cam.yaw = 0; this.cam.pitch = craft.vertical ? 0.05 : 0.16;
-    this.progress.startFlight({ airport: site.airport, custom: !PRESETS.some((p) => p.make().name === this.design.name) });
+    this.progress.startFlight({ airport: site.airport, ownPad: site.type === 'padAt', custom: !PRESETS.some((p) => p.make().name === this.design.name) });
     const A = this.world.airports;
     let body = EARTH, lat, lon, hdg = 0, needGround = true, h;
     const vert = craft.vertical;
@@ -434,6 +435,7 @@ class Game {
       flight: F ? { ...F, from: F.from ? F.from.ident : null } : null,
       flightTime: this.flightTime, where: this.whereText(),
       homeTo: C.ap && C.ap.home ? C.ap.home : null,
+      moonTo: C.ap && C.ap.moonSite ? C.ap.moonSite : null,
       rdvTo: !!(C.ap && C.ap.rdvStation),
       dest: this.destLite(this.dest),
       flyTo: !!(C.ap && C.ap.nav && C.ap.dest),
@@ -526,6 +528,11 @@ class Game {
     if (s.homeTo && (ship.env.body === MOON || ship.env.h > EARTH.atmoTop + 5000)) {
       const a = findAp(s.homeTo);
       if (a) setTimeout(() => { if (this.ship === ship && !this.controller.ap) { this.mapView.flyHomeAll(a); this.hud.toast(`Autopilot resumed: flying you home to ${a.iata || a.ident}`); } }, 1500);
+    }
+    // and so does a trip to the Moon (from orbit or on the way)
+    if (s.moonTo && (ship.env.body === MOON || ship.env.h > EARTH.atmoTop + 5000) && !ship.parked) {
+      const site = MOON_SITES.find((x) => x.name === s.moonTo) || null;
+      setTimeout(() => { if (this.ship === ship && !this.controller.ap) { this.flyToMoon(site); } }, 1500);
     }
     // a destination carries over, and so does a fly-to in progress (once airborne)
     if (s.dest) this.setDest(this.destFrom(s.dest), true);
@@ -696,6 +703,7 @@ class Game {
     const cls = new Set(this.craft.engines.filter((P) => P.alive !== false).map((P) => this.engineClass(P)));
     const rocket = cls.has('main') || this.craft.engines.some((P) => P.alive !== false && P.eng.e.type === 'hybrid');
     if (rocket && ((ship.env.body === EARTH && ship.env.h < 120000) || (ship.env.body === MOON && ship.env.agl < 20000))) opts.push([ship.env.body === MOON ? 'Take off to lunar orbit' : 'Ascend to orbit', () => this.engage(ascentAp())]);
+    if (rocket && ship.env.body === EARTH && x0dv(this) > 6000) opts.push([ship.contacts > 0 ? 'Fly me to the Moon (launch, transfer, land)…' : 'Fly me to the Moon…', () => this.mapView.pickMoonSite((st) => this.flyToMoon(st), true)]);
     { const E = ship.env; if (E.body === EARTH && E.h < 400000 && E.vSurf > 2500 && (E.vVert < 0 || E.h < EARTH.atmoTop)) opts.push(['Reentry: belly-first, then hand back control', () => this.engage(reentryAp())]); }
     // powered landings need engines that can hold the craft up: lift thrusters, or rockets on a tail-sitter / in low gravity
     const canHover = cls.has('lift') || (rocket && (this.craft.vertical || ship.env.body === MOON));
@@ -1125,7 +1133,16 @@ class Game {
       this.hud.toast(E.body === MOON ? 'Touchdown on the Moon' : ap ? `Landed at ${ap.name}` : 'Landed', 'good');
       this.audio.thump(0.6);
     }
-    this.progress.landed(ship, ap);
+    this.progress.landed(ship, ap, this.dest);
+  }
+
+  // the whole trip to the Moon on autopilot, ending in lunar orbit or on a famous site
+  flyToMoon(site = null) {
+    const C = this.controller, ship = this.ship;
+    if (!ship) return;
+    C.node = null;
+    this.engage(flyToMoonAp(ship, { site, elevAt: (st) => this.world.groundAt(MOON, st.lat, st.lon) }));
+    this.hud.toast(`Autopilot: to the Moon${site ? ' — landing at ' + site.name : ''}. About three days; time warp runs by itself between burns.`);
   }
 
   // A one-tap suggestion while flying by hand: coasting up out of the air on a path that falls back in →

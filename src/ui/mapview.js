@@ -44,6 +44,7 @@ export class MapView {
     this.lineNodeAfter = mk(0x5aa8ff, 0.5);
     this.lineStation = mk(0x73e2a7, 0.75);
     this.lineDest = mk(0xffb347, 0.85);
+    this.lineTrack = mk(0x7fd4ff, 0.6);         // where this flight has been
     // ship marker
     const c = document.createElement('canvas'); c.width = c.height = 64;
     const x = c.getContext('2d'); x.fillStyle = '#7fd4ff'; x.beginPath(); x.moveTo(32, 6); x.lineTo(54, 56); x.lineTo(32, 44); x.lineTo(10, 56); x.closePath(); x.fill();
@@ -184,6 +185,19 @@ export class MapView {
       const d = this.game.dest;
       this.dstMark.position.copy(llh(d.lat, d.lon, 2000, EARTH.R, v)).applyQuaternion(q).sub(this.camI); this.dstMark.visible = true;
     } else { this.lineDest.visible = false; this.dstMark.visible = false; }
+    // the track flown so far (Earth- or Moon-fixed points, carried round with the body)
+    const R = this.game.rec;
+    if (R && R.track.length > 1) {
+      const a = this.lineTrack.geometry.attributes.position.array, v = new THREE.Vector3(), q = this.game.eph.earthQ;
+      let n = 0;
+      for (const [b, lat, lon, h] of R.track) {
+        if (n >= a.length / 3) break;
+        if (b === 'e') llh(lat, lon, Math.max(h, 0) + 3000, EARTH.R, v).applyQuaternion(q).sub(this.camI);
+        else this.game.eph.toI(MOON, llh(lat, lon, h + 2000, MOON.R, v), v).sub(this.camI);
+        a[n * 3] = v.x; a[n * 3 + 1] = v.y; a[n * 3 + 2] = v.z; n++;
+      }
+      this.lineTrack.geometry.attributes.position.needsUpdate = true; this.lineTrack.geometry.setDrawRange(0, n); this.lineTrack.visible = n > 1;
+    } else this.lineTrack.visible = false;
     this.shipMark.position.copy(ship.r).sub(this.camI);
     this.updateLabels(camera, moonNow);
     return this.camI;

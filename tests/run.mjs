@@ -50,7 +50,7 @@ for (const { meta, fn } of scenarios) {
     if (err) console.log('   error:', err.stack || err.message);
     for (const f of t.fails) console.log('   ✗', f);
     for (const e of consoleErr.slice(0, 10)) console.log('   console:', e);
-    if (!ok) for (const n of t.notes.slice(-12)) console.log('   ·', n);
+    if (!ok || opts.verbose) for (const n of t.notes.slice(-12)) console.log('   ·', n);
   }
   results.push({ name: meta.name, ok, secs });
 }

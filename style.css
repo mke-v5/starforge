@@ -211,6 +211,8 @@ textarea.field.code{min-height:90px;padding:8px;font:12px/1.35 ui-monospace,Menl
 .help-body kbd{font:11px var(--mono);border:1px solid var(--line2);border-radius:3px;padding:0 4px;background:#0b111c}
 .ach{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line)}
 .ach .ic{width:28px;height:28px;border-radius:50%;border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;flex:none;color:var(--muted)}
+.lb-h{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:14px 0 4px;font-weight:500}
+.ach.flight .ic{background:transparent;color:var(--ice)}
 .ach.done .ic{background:var(--amber);color:#1b1206;border-color:var(--amber)}
 .ach .nm{font-weight:600}
 .ach .sub{color:var(--muted);font-size:11px}

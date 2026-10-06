@@ -25,6 +25,7 @@ export const HELP_HTML = `
 <h3>Views</h3>
 <p>The camera button cycles chase, cockpit, free (turns with the ship) and <b>fly-by</b>, which stands beside your flight path and watches you pass. Low over the ground you'll see roads, rivers and lakes from OpenStreetMap; above about 80 km the stars come out even in daylight. Below 10 km the weather you saw from space is there in 3D — cumulus decks you can fly over, under and through (the view whites out inside one).</p>
 <p>Flying a rocket by hand, coast up out of the air and the HUD offers to <b>circularize at apoapsis</b> — one tap plans and flies the burn.</p>
+<p>The map draws the track you've flown this flight in pale blue. When a flight ends it goes in the <b>Logbook</b> under Recent flights: where you started, how it ended, how long, how far, top speed and height.</p>
 <h3>Heat and damage</h3>
 <p>Coming back from space at 7–11 km/s heats your ship. Fly belly-first at a high angle of attack so the heat-tiled underside and heat shields take it. Parts that overheat burn away. Landing too hard breaks gear; hitting the ground or a building destroys the ship. Fusion drives also run hot — bring radiators.</p>
 <p>Wings have a structural limit too: pull too many g (or bend them hard at high speed) and they snap off. The hangar shows the load each design's wings can take (<b>Wings break at</b>), Assisted flight keeps you inside it, and an <b>OVERSTRESS</b> warning flashes when you're close. Thick, broad wing roots are strong; long slender spans are not. Settings → Airframe limits turns this off.</p>

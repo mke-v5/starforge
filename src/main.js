@@ -26,6 +26,7 @@ import { navInfo, headingAp, flyToAp, runwayFor, fmtDist } from './ship/navigate
 
 const $ = (id) => document.getElementById(id);
 const x0dv = (g) => deltaV(g.craft, false);
+const escH = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const WARPS = [1, 2, 4, 10, 50, 100, 1000, 10000, 100000];
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
 
@@ -196,6 +197,18 @@ class Game {
       d.innerHTML = `<div class="ic">${this.progress.has(m.id) ? '★' : '·'}</div><div><div class="nm">${m.name}</div><div class="sub">${m.desc}</div></div>`;
       el.appendChild(d);
     }
+    // recent flights
+    const flights = load('flights', []);
+    if (flights.length) {
+      const h = document.createElement('h3'); h.className = 'lb-h'; h.textContent = 'Recent flights'; el.appendChild(h);
+      for (const f of flights) {
+        const d = document.createElement('div'); d.className = 'ach flight';
+        const when = new Date(f.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        const bits = [when, fmtTime(f.dur || 0), f.dist.toLocaleString('en-US') + ' km', f.maxMach >= 0.3 ? 'Mach ' + f.maxMach.toFixed(1) : '', f.maxAlt >= 1 ? f.maxAlt.toLocaleString('en-US') + ' km up' : '', f.moon ? 'went to the Moon' : ''].filter(Boolean);
+        d.innerHTML = `<div class="ic">${f.outcome === 'Crashed' ? '✕' : f.moon ? '☾' : '✈'}</div><div><div class="nm">${escH(f.design)} · ${escH(f.from)} → ${escH(f.outcome)}</div><div class="sub">${bits.join(' · ')}</div></div>`;
+        el.appendChild(d);
+      }
+    }
     this.modal('logbook');
   }
 
@@ -233,6 +246,7 @@ class Game {
 
   endFlight() {
     if (this.tutorial && !this._keepTut) this.tutorial.stop();
+    if (this.ship) this.logFlight();
     if (this.ship) {
       this.scene.remove(this.craft.group);
       this.craft.dispose();
@@ -270,6 +284,7 @@ class Game {
     this.prevContacts = 0;
     this.cam.init = false;
     this.camMode = 'chase';
+    this.rec = this.newRecord(site.label || (site.airport ? `${site.airport.iata || site.airport.ident}` : site.name || site.type));
     this.cam.dist = Math.max(12, craft.size * 1.5 + 8);
     this.cam.yaw = 0; this.cam.pitch = craft.vertical ? 0.05 : 0.16;
     this.progress.startFlight({ airport: site.airport, ownPad: site.type === 'padAt', custom: !PRESETS.some((p) => p.make().name === this.design.name) });
@@ -477,6 +492,7 @@ class Game {
     this.engGroup = s.eg && this.availableGroups().includes(s.eg) ? s.eg : 'all';
     this.applyEngGroup();
     this.flightTime = s.flightTime || 0;
+    this.rec = this.newRecord(s.site.label || s.site.name || 'resumed flight');
     this.prevContacts = 0;
     this.cam.init = false; this.camMode = 'chase';
     this.cam.dist = Math.max(12, craft.size * 1.5 + 8); this.cam.yaw = 0; this.cam.pitch = craft.vertical ? 0.05 : 0.16;
@@ -994,6 +1010,7 @@ class Game {
     this.stationFrame(ship);
     this.eph.update(ship.t);
     this.flightTime += dt;
+    this.record(dt);
     if (this.tutorial) this.tutorial.update(dt);
     this._saveT = (this._saveT || 0) + dt;
     if (this._saveT > 5) { this._saveT = 0; this.saveFlight(); }
@@ -1134,6 +1151,48 @@ class Game {
       this.audio.thump(0.6);
     }
     this.progress.landed(ship, ap, this.dest);
+    if (this.rec) this.rec.landedAt = E.body === MOON ? 'the Moon' : ap ? (ap.iata || ap.ident) : 'off-airport';
+  }
+
+  // ---- the flight log: peaks, distance and a track while flying; a summary in the logbook when it ends ----
+  newRecord(from) { return { from, design: this.design.name, start: Date.now(), dist: 0, maxMach: 0, maxAlt: 0, maxV: 0, moon: false, landedAt: null, track: [], acc: 0, gameT: 0 }; }
+  record(dt) {
+    const R = this.rec, ship = this.ship;
+    if (!R || !ship) return;
+    const E = ship.env, step = dt * ship.warp;
+    R.dist += E.vSurf * step; R.gameT += step;
+    if (E.body === EARTH) {
+      if (E.rho > 1e-4) R.maxMach = Math.max(R.maxMach, E.mach);
+      R.maxAlt = Math.max(R.maxAlt, E.h);
+    } else R.moon = true;
+    R.maxV = Math.max(R.maxV, E.vSurf);
+    R.acc += step;
+    // a track point every few seconds, closer together near the ground; thinned when it gets long
+    const every = E.agl < 20000 ? 4 : 30;
+    if (R.acc >= every) {
+      R.acc = 0;
+      const last = R.track[R.track.length - 1];
+      const b = E.body === MOON ? 'm' : 'e';
+      if (!last || last[0] !== b || Math.abs(last[1] - E.lat) + Math.abs(last[2] - E.lon) > 0.002 || Math.abs(last[3] - E.h) > 200) R.track.push([b, E.lat, E.lon, E.h]);
+      if (R.track.length > 3000) R.track = R.track.filter((p, i) => i % 2 === 0 || i === R.track.length - 1);
+    }
+  }
+  logFlight() {
+    const R = this.rec, ship = this.ship;
+    this.rec = null;
+    if (!R || !ship || this.flightTime < 15) return;
+    const E = ship.env;
+    let outcome;
+    if (ship.dead) outcome = 'Crashed';
+    else if (ship.docked) outcome = 'Docked at the station';
+    else if (ship.parked || ship.contacts > 0) outcome = R.landedAt === 'the Moon' || E.body === MOON ? 'On the Moon' : R.landedAt && R.landedAt !== 'off-airport' ? `Landed at ${R.landedAt}` : 'Landed';
+    else {
+      const rs = relState(ship, E.body), el = elements(rs.r, rs.v, E.body.mu);
+      outcome = el.e < 1 && el.pe - E.body.R > (E.body === EARTH ? 140000 : 5000) ? (E.body === MOON ? 'In lunar orbit' : 'In orbit') : 'Still flying';
+    }
+    const log = load('flights', []);
+    log.unshift({ date: R.start, design: R.design, from: R.from, outcome, dur: Math.round(R.gameT), dist: Math.round(R.dist / 1000), maxMach: +R.maxMach.toFixed(2), maxAlt: Math.round(R.maxAlt / 1000), moon: R.moon });
+    save('flights', log.slice(0, 25));
   }
 
   // the whole trip to the Moon on autopilot, ending in lunar orbit or on a famous site

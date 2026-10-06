@@ -10,6 +10,7 @@ No build step, no account, no keys. Serve this folder with any static host (GitH
 - **Six ships to start from**: Kestrel (jet), Lynx (VTOL), Peregrine (swing-wing afterburner fighter), Selene (fusion spaceplane), Starhopper (vertical starship) and Courier (ion tug for space).
 - **Hangar**: build and reshape your own ships, see at a glance what each can do (orbit, station, Moon and back), and share them as a short code or link. Wings have structural limits; electric drives need power.
 - **Fly anywhere**: pick any of 16,000 cities or every airport and the autopilot flies you there and lands.
+- **Logbook**: milestones to earn and your recent flights (where from, how it ended, time, distance, top speed and height); the map draws the track you've flown.
 
 Data: EOX Sentinel-2 cloudless (CC BY-NC-SA, non-commercial), NASA GIBS, AWS/Mapzen terrain tiles, OpenStreetMap buildings, OurAirports, GeoNames cities, NASA LRO Moon imagery and elevation.
 Controls: thumbstick steers, slider sets speed. Keys: WASD pitch and roll, Q/E yaw, Shift/Ctrl throttle, M map, P autopilot; in space H/N J/L I/K translate on RCS, Y docks. Full list under How to play.

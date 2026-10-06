@@ -95,6 +95,12 @@ function selene() {
   b.pair('gr-heavy', [3.0, -0.62, 13.0], Q_BOT, wr);
   b.add('ut-strobe', [0, 1.25, 12.0], Q_TOP, b.at(12.0));
   b.add('ut-light', [0, -1.15, 3.0], Q_BOT, b.at(3.0));
+  // docking: a port on the spine and RCS blocks at both ends to steer in
+  b.add('ut-dock', [0, 1.25, 7.0], Q_TOP, b.at(7.0));
+  for (const z of [5.8, 16.8]) for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    b.add('ct-rcs', [Math.cos(a) * 1.25, Math.sin(a) * 1.25, z], qRollFrom(a), b.at(z));
+  }
   return b.done();
 }
 
@@ -121,13 +127,17 @@ function starhopper() {
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
     b.add('ct-rcs', [Math.cos(a) * 1.55, Math.sin(a) * 1.55, 3.5], qRollFrom(a), b.at(3.5));
+    b.add('ct-rcs', [Math.cos(a) * 1.875, Math.sin(a) * 1.875, 10.2], qRollFrom(a), b.at(10.2));   // tail ring: translate without twisting
   }
+  // docking port on the nose
+  const nose = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, -1), Y.clone(), X.clone()));
+  b.add('ut-dock', [0, 0, 0.8], nose, 0);
   return b.done();
 }
 
 export const PRESETS = [
   { key: 'kestrel', make: kestrel, blurb: 'Nimble jet. Perfect first flight: take off, tour cities, land at any airport.' },
-  { key: 'selene', make: selene, blurb: 'Fusion spaceplane. Hangar → orbit → Moon landing → back to a runway.' },
+  { key: 'selene', make: selene, blurb: 'Fusion spaceplane. Hangar → orbit → Moon landing → back to a runway. Docks at Meridian Station.' },
   { key: 'lynx', make: lynx, blurb: 'VTOL jet with lift fans. Hover out of the hangar and land on rooftops.' },
   { key: 'starhopper', make: starhopper, blurb: 'Vertical fusion starship. Launches from the pad, lands on its legs anywhere.' },
 ];

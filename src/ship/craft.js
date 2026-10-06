@@ -82,6 +82,10 @@ export class Craft {
       if (def.rcs) {
         P.rcs = { pos: new THREE.Vector3(0.18, 0, 0).applyMatrix4(T), dirs: [[0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].map((a) => new THREE.Vector3(...a).applyMatrix3(N).normalize()), fire: [0, 0, 0, 0] };
       }
+      if (def.dock) {
+        // port face centre and outward axis (body frame)
+        P.dock = { pos: new THREE.Vector3(def.dock.h, 0, 0).applyMatrix4(T), axis: new THREE.Vector3(1, 0, 0).applyMatrix3(N).normalize() };
+      }
       // contact points for hull-ground collisions (body frame)
       P.contacts = this.contactPoints(def, T, N);
       if (this.visual) {
@@ -191,6 +195,7 @@ export class Craft {
     this.wings = this.parts.filter((P) => P.alive && P.wing);
     this.gears = this.parts.filter((P) => P.alive && P.gear);
     this.rcsList = this.parts.filter((P) => P.alive && P.rcs);
+    this.docks = this.parts.filter((P) => P.alive && P.dock);
     this.wheelTorque = this.parts.reduce((s, P) => s + (P.alive && P.def.torque ? P.def.torque : 0), 0);
     this.radCap = this.parts.reduce((s, P) => s + (P.alive && P.def.radiator ? P.def.radiator : 0), 0);
     this.ecCap = this.parts.reduce((s, P) => s + (P.alive ? (P.def.ecStore || 0) + (P.def.ec || 0) : 0), 0);

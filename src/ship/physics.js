@@ -31,6 +31,9 @@ export class Ship {
     this.cmdT = new THREE.Vector3();   // normalized torque command per body axis (set by the controller)
     this.parked = null;
     this.parkTimer = 0;
+    this.docked = null;                // { port, part, qRel, pRel } while attached to the station
+    this.station = null;               // set by the game: the station to collide with and dock at
+    this.nearStation = false;
     this.warp = 1;
     this.events = [];                  // {type, ...} consumed by the game
     this.dead = false;
@@ -135,6 +138,7 @@ export class Ship {
     const craft = this.craft;
     const warp = this.warp;
     const rails = warp > 4;
+    if (this.docked) { this.stepDocked(dtFrame * warp, controller); return; }
     if (this.parked) { this.stepParked(dtFrame * warp, controller); return; }
     if (rails) { this.stepRails(dtFrame * warp, controller); return; }
     const total = dtFrame * warp;
@@ -239,11 +243,13 @@ export class Ship {
       craft.ec = Math.max(0, craft.ec - (Math.abs(this.cmdT.x) + Math.abs(this.cmdT.y) + Math.abs(this.cmdT.z)) * craft.wheelTorque * dt / 3.6e9);
     }
     if (ctl.rcs && craft.rcsList.length && E.rho < 0.05) this.rcs(dt, _F, _T);
+    else for (const P of craft.rcsList) P.rcs.fire.fill(0);
     // forces so far are in the body frame -> world
     const Fw = _F.applyQuaternion(this.q);
     // ---- contacts (world frame forces, body torques) ----
     if (this.dbg) this.dbg.pre.copy(_T);
     this.contactForces(dt, Fw, _T);
+    if (this.nearStation && this.station) this.station.contactForces(this, Fw, _T, _qShipInv.copy(this.q).invert());
     if (this.dbg) this.dbg.contact.copy(_T).sub(this.dbg.pre);
     // ---- integrate ----
     gravity(this.r, this.bodyCenter(MOON, this.t, _b), _a);
@@ -473,6 +479,28 @@ export class Ship {
       this.parked = null;
       this.warp = 1;
     }
+  }
+
+  // ---- docked: carried along by the station ----
+  stepDocked(dt, controller) {
+    const D = this.docked, st = this.station;
+    this.t += dt;
+    st.advanceTo(this.t);
+    this.q.copy(st.q).multiply(D.qRel);
+    st.toWorld(D.pRel, this.t, this.r);
+    st.pointVel(this.r, this.t, this.v);
+    this.w.copy(st.w).applyQuaternion(_qi.copy(this.q).invert());
+    this.updateEnv(this.t);
+    for (const P of this.craft.engines) { P.eng.thr = 0; P.eng.flame = 0; P.eng.thrust = 0; }
+    for (const P of this.craft.rcsList) P.rcs.fire.fill(0);
+    this.thrustNow = 0;
+    if (controller) controller.update(this, dt);
+    this.contacts = 0;
+    this.gForce = 0;
+    this.craft.recompute();
+    if (this.heatOn) this.craft.heat(Math.min(dt, 60), _d.set(0, 0, 0), this.env, 0, this.settings.heatScale, this.env.inSun);
+    if (this.craft.solar && this.env.inSun) this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + this.craft.solar * dt / 3600 * 10);
+    this.craft.ec = Math.min(this.craft.ecCap, this.craft.ec + dt / 3600 * 20);   // station power
   }
 
   // ---- time-warp "on rails": gravity only, RK4 ----

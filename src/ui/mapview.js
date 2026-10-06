@@ -4,6 +4,8 @@ import { EARTH, MOON, clamp, fmtTime, D2R } from '../core/geo.js';
 import { moonPos, moonVel } from '../core/astro.js';
 import { predict, elements, relState, propagate, planCircularize, planMoonTransfer, planReturn, planCapture, planPeriapsis, planCorrection, planDeorbitTo, planLandingTo, planMoonLandingTo, landingModel, burnTime, deltaV } from '../ship/orbit.js';
 import { nodeExec, landAp, ascentAp, reentryAp, coastToAp, landRunwayAp, sequenceAp, flyHomeAp, planBurnAp } from '../ship/control.js';
+import { kepler, closestApproach, relInclination, planPlaneMatch, planIntercept, rendezvousAp } from '../ship/rendezvous.js';
+import { STATION } from '../world/station.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -40,11 +42,18 @@ export class MapView {
     this.lineMoonOrbit = mk(0xffffff, 0.25);
     this.lineEarthAfter = mk(0xffb347, 0.55);   // after leaving the Moon's sphere of influence
     this.lineNodeAfter = mk(0x5aa8ff, 0.5);
+    this.lineStation = mk(0x73e2a7, 0.75);
     // ship marker
     const c = document.createElement('canvas'); c.width = c.height = 64;
     const x = c.getContext('2d'); x.fillStyle = '#7fd4ff'; x.beginPath(); x.moveTo(32, 6); x.lineTo(54, 56); x.lineTo(32, 44); x.lineTo(10, 56); x.closePath(); x.fill();
     this.shipMark = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, sizeAttenuation: false }));
     this.shipMark.scale.set(0.035, 0.035, 1); this.shipMark.renderOrder = 60; this.group.add(this.shipMark);
+    // the station: a green square
+    const c2 = document.createElement('canvas'); c2.width = c2.height = 64;
+    const x2 = c2.getContext('2d'); x2.strokeStyle = '#73e2a7'; x2.lineWidth = 7; x2.strokeRect(14, 14, 36, 36); x2.fillStyle = '#73e2a7'; x2.fillRect(27, 27, 10, 10);
+    this.stMark = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c2), depthTest: false, sizeAttenuation: false }));
+    this.stMark.scale.set(0.028, 0.028, 1); this.stMark.renderOrder = 59; this.group.add(this.stMark);
+    this.ca = null; this.stPts = null;
     this.labels = [];
     this.focus = 'ship';
     this.yaw = 0.6; this.pitch = 0.5; this.dist = 2e7;
@@ -56,7 +65,7 @@ export class MapView {
     $('m-wd').addEventListener('click', () => game.warpStep(-1));
     $('m-wu').addEventListener('click', () => game.warpStep(1));
     const foc = $('m-focus');
-    for (const [k, n] of [['ship', 'Ship'], ['earth', 'Earth'], ['moon', 'Moon']]) {
+    for (const [k, n] of [['ship', 'Ship'], ['earth', 'Earth'], ['moon', 'Moon'], ['station', 'Station']]) {
       const b = document.createElement('button'); b.textContent = n; b.dataset.k = k;
       b.addEventListener('click', () => this.setFocus(k));
       foc.appendChild(b);
@@ -76,13 +85,14 @@ export class MapView {
     this.focus = k;
     for (const b of $('m-focus').children) b.classList.toggle('on', b.dataset.k === k);
     if (reset) this.dist = k === 'earth' ? 4.2 * EARTH.R : k === 'moon' ? 6 * MOON.R : 3 * EARTH.R;
-    if (k === 'ship') this.dist = Math.max(2e5, Math.min(this.dist, 2e7));
+    if (k === 'ship' || k === 'station') this.dist = Math.max(2e5, Math.min(this.dist, 2e7));
   }
 
   focusPos(out) {
     const ship = this.game.ship;
     if (this.focus === 'earth') return out.set(0, 0, 0);
     if (this.focus === 'moon') return moonPos(ship.t, out);
+    if (this.focus === 'station') return out.copy(this.game.station.r);
     return out.copy(ship.r);
   }
 
@@ -91,7 +101,7 @@ export class MapView {
     const ship = this.game.ship;
     this.yaw -= cam.dx * 0.005; this.pitch = clamp(this.pitch + cam.dy * 0.005, -1.5, 1.5);
     this.dist *= Math.exp(cam.zoom * 0.15);
-    const minD = this.focus === 'moon' ? MOON.R * 1.3 : this.focus === 'earth' ? EARTH.R * 1.3 : 5e4;
+    const minD = this.focus === 'moon' ? MOON.R * 1.3 : this.focus === 'earth' ? EARTH.R * 1.3 : this.focus === 'station' ? 2e3 : 5e4;
     this.dist = clamp(this.dist, minD, 2e9);
     const f = this.focusPos(new THREE.Vector3());
     const dir = new THREE.Vector3(Math.cos(this.pitch) * Math.sin(this.yaw), Math.sin(this.pitch), Math.cos(this.pitch) * Math.cos(this.yaw));
@@ -113,6 +123,7 @@ export class MapView {
         this.predNode.start = st.r.clone();
       } else this.predNode = null;
       if (!this.moonOrbit || Math.abs(this.moonOrbit.t - ship.t) > 86400) this.buildMoonOrbit(ship.t);
+      this.buildStation(ship);
       this.renderInfo();
     }
     // draw relative to the camera
@@ -144,9 +155,23 @@ export class MapView {
     drawPred(this.pred, this.lineEarth, this.lineMoon, this.lineEarthAfter);
     drawPred(this.predNode, this.lineNode, this.lineNodeMoon, this.lineNodeAfter);
     if (this.moonOrbit) setLine(this.lineMoonOrbit, this.moonOrbit.pts, 3, new THREE.Vector3());
+    if (this.stPts) setLine(this.lineStation, this.stPts, 3, new THREE.Vector3()); else this.lineStation.visible = false;
+    this.stMark.position.copy(this.game.station.r).sub(this.camI);
     this.shipMark.position.copy(ship.r).sub(this.camI);
     this.updateLabels(camera, moonNow);
     return this.camI;
+  }
+
+  // the station's orbit and the closest approach to it over the next orbit and a half
+  buildStation(ship) {
+    const st = this.game.station;
+    st.advanceTo(ship.t);
+    const T = 2 * Math.PI * Math.sqrt(st.r.length() ** 3 / EARTH.mu);
+    const pts = [];
+    for (let i = 0; i <= 200; i++) { const k = kepler(st.r, st.v, (i / 200) * T); pts.push(k.r.x, k.r.y, k.r.z); }
+    this.stPts = pts;
+    const el = elements(ship.r, ship.v, EARTH.mu);
+    this.ca = ship.env.body === EARTH && !ship.docked && el.e < 1 && el.pe > EARTH.R + 60000 ? closestApproach(ship, st) : null;
   }
 
   buildMoonOrbit(t) {
@@ -167,7 +192,7 @@ export class MapView {
       const d = document.createElement('div');
       d.className = 'maplabel ' + cls;
       d.textContent = text;
-      d.style.cssText = `position:fixed;left:${(v.x * 0.5 + 0.5) * innerWidth}px;top:${(-v.y * 0.5 + 0.5) * innerHeight}px;transform:translate(-50%,-140%);font:600 12px var(--display);letter-spacing:.05em;color:${cls === 'moon' ? 'var(--violet)' : cls === 'node' ? '#5aa8ff' : 'var(--amber)'};text-shadow:0 0 6px #000;pointer-events:none;white-space:nowrap;z-index:6`;
+      d.style.cssText = `position:fixed;left:${(v.x * 0.5 + 0.5) * innerWidth}px;top:${(-v.y * 0.5 + 0.5) * innerHeight}px;transform:translate(-50%,-140%);font:600 12px var(--display);letter-spacing:.05em;color:${cls === 'moon' ? 'var(--violet)' : cls === 'node' ? '#5aa8ff' : cls === 'st' ? 'var(--green)' : 'var(--amber)'};text-shadow:0 0 6px #000;pointer-events:none;white-space:nowrap;z-index:6`;
       document.body.appendChild(d);
       this.labels.push(d);
     };
@@ -183,6 +208,12 @@ export class MapView {
     }
     add(moonNow, 'MOON', 'moon');
     add(ship.r, 'YOU');
+    const st = this.game.station;
+    if (!ship.docked) add(st.r, STATION.short.toUpperCase(), 'st');
+    if (this.ca && this.ca.t > ship.t + 30) {
+      add(this.ca.rShip, `Closest ${U.dist(this.ca.d)}`, 'st');
+      if (this.ca.d > 20000) add(this.ca.rSt, `${STATION.short} then`, 'st');
+    }
     const P = this.pred;
     if (P && P.closeMoon && P.closeMoon.d < MOON.soi && P.moonPts.length) {
       add(moonNow.clone().add(P.closeMoon.r), `Moon Pe ${U.dist(P.closeMoon.d - MOON.R)}`, 'moon');
@@ -214,6 +245,15 @@ export class MapView {
       if (P.soiIn) h += `<div style="color:var(--violet)">Moon encounter in ${fmtTime(P.soiIn - ship.t)}</div>`;
       if (P.closeMoon && P.closeMoon.d < MOON.soi) h += `<div style="color:var(--violet)">Closest to Moon: ${U.dist(P.closeMoon.d - MOON.R)}</div>`;
       if (P.impact) h += `<div style="color:var(--red)">${P.impact.body.name} ${P.impact.body === EARTH ? 'atmosphere/impact' : 'impact'} in ${fmtTime(P.impact.t - ship.t)}</div>`;
+    }
+    if (body === EARTH) {
+      const st = this.game.station;
+      if (ship.docked) h += `<div style="color:var(--green)">Docked at ${STATION.name}</div>`;
+      else {
+        const di = relInclination(ship, st) / D2R;
+        h += `<div style="color:var(--green)">${STATION.short}: ${U.dist(ship.r.distanceTo(st.r))} away · planes ${di.toFixed(2)}° apart</div>`;
+        if (this.ca && this.ca.t > ship.t + 30) h += `<div style="color:var(--green)">Closest approach ${U.dist(this.ca.d)} in ${fmtTime(this.ca.t - ship.t)} at ${this.ca.vRel < 100 ? this.ca.vRel.toFixed(1) : Math.round(this.ca.vRel)} m/s</div>`;
+      }
     }
     h += `<div class="dim">Δv left ≈ ${Math.round(deltaV(ship.craft)).toLocaleString('en-US')} m/s (vacuum)</div>`;
     this.game.progress.orbitCheck(body, el.pe);
@@ -258,6 +298,15 @@ export class MapView {
       if (el.pe - EARTH.R > 140000 && !farOut) {
         if (this.canGlideHome()) btns.push(['Fly home to an airport…', () => this.pickHome()]);
         else if (this.canLandVertically()) btns.push(['Land at an airport…', () => this.pickHome((a) => this.planLandHome(a))]);
+        // the station
+        const st = this.game.station, docks = ship.craft.docks.length > 0;
+        if (!ship.docked) {
+          btns.push([`Autopilot: rendezvous${docks ? ' and dock' : ''} with ${STATION.short}`, () => { this.game.engage(rendezvousAp(ship, st)); this.renderPlan(); }]);
+          const di = relInclination(ship, st);
+          if (di > 0.0009) btns.push([`Match planes with ${STATION.short} (${(di / D2R).toFixed(2)}°)`, () => this.plan(() => planPlaneMatch(ship, st))]);
+          if (ship.r.distanceTo(st.r) > 20000) btns.push([`Intercept ${STATION.short}`, () => this.planAsync((cb) => planIntercept(ship, st, cb), `No transfer to ${STATION.short} found`)]);
+          if (this.ca && this.ca.d < 20000 && this.ca.t > ship.t + 60) btns.push([`Match speed at closest approach (${this.game.hud.units.dist(this.ca.d)})`, () => this.plan(() => this.planMatchAtClosest())]);
+        }
         btns.push(['Go to the Moon', () => this.planAsync((cb) => planMoonTransfer(ship, 120000, cb))]);
         btns.push(['Deorbit for reentry (Pe 40 km)', () => this.plan(() => planPeriapsis(ship, 40000))]);
       }
@@ -411,6 +460,17 @@ export class MapView {
       if (n.miss > 900e3) this.game.hud.toast(`This orbit never passes close to ${name} today — the jets will have to fly the last ${Math.round(n.miss / 1000)} km`, 'bad');
       this.renderNode();
     }
+  }
+
+  // a burn at the closest approach that leaves the ship at rest next to the station
+  planMatchAtClosest() {
+    const ship = this.game.ship, st = this.game.station, ca = this.ca;
+    if (!ca) return null;
+    const s2 = propagate(ship.r, ship.v, ship.t, ca.t - ship.t);
+    const st2 = st.stateAt(ca.t);
+    const w = new THREE.Vector3().crossVectors(st2.r, st2.v).divideScalar(st2.r.lengthSq());
+    const dv = st2.v.clone().add(new THREE.Vector3().crossVectors(w, s2.r.clone().sub(st2.r))).sub(s2.v);
+    return { t: s2.t, dv, body: EARTH, label: `Match speed with ${STATION.short}` };
   }
 
   plan(fn) {

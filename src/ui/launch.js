@@ -5,6 +5,8 @@ const $ = (id) => document.getElementById(id);
 
 export const SPECIAL = [
   { id: 'leo', name: 'Low Earth orbit', sub: '400 km circular orbit above the equator', type: 'orbit', alt: 400000 },
+  { id: 'stDock', name: 'Docked at Meridian Station', sub: '420 km up, tanks full — undock and fly anywhere (needs a docking port)', type: 'docked' },
+  { id: 'stNear', name: 'Beside Meridian Station', sub: 'Holding off its aft port — practise docking (Y)', type: 'stationNear' },
   { id: 'llo', name: 'Lunar orbit', sub: '100 km circular orbit around the Moon', type: 'lunarOrbit', alt: 100000 },
   { id: 'tranq', name: 'Tranquility Base', sub: 'Apollo 11 landing site, the Moon', type: 'moon', lat: 0.674, lon: 23.473 },
   { id: 'shackleton', name: 'Shackleton rim', sub: 'Lunar south pole', type: 'moon', lat: -89.4, lon: 129.8 },

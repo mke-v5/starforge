@@ -254,3 +254,8 @@ h2{font:700 22px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercas
 @media (max-width:600px) and (orientation:portrait){
   .tut{left:50%;transform:translateX(-50%);width:calc(100vw - 24px);top:calc(70px + var(--st))}
 }
+
+/* station target bracket */
+.tgtmark{position:fixed;left:0;top:0;pointer-events:none;z-index:2;will-change:transform}
+.tgtmark i{position:absolute;left:-14px;top:-14px;width:28px;height:28px;border:1.5px solid var(--green);border-radius:2px;box-shadow:0 0 6px rgba(115,226,167,.35);clip-path:polygon(0 0,35% 0,35% 12%,65% 12%,65% 0,100% 0,100% 35%,88% 35%,88% 65%,100% 65%,100% 100%,65% 100%,65% 88%,35% 88%,35% 100%,0 100%,0 65%,12% 65%,12% 35%,0 35%)}
+.tgtmark span{position:absolute;left:20px;top:-22px;font:600 11px var(--display);letter-spacing:.08em;color:var(--green);text-shadow:0 0 5px #000;white-space:nowrap}

@@ -171,6 +171,8 @@ export const PARTS = [
   { id: 'ut-battery', cat: 'utility', name: 'Battery pack', desc: 'Stores 200 kWh of charge.', size: 'S', len: 0.6, mass: 300, maxT: 1500, ecStore: 200, nodes: stack(0.6, 'S'), surface: true, mesh: 'battery' },
   { id: 'ut-light', cat: 'utility', name: 'Landing light', desc: 'Bright floodlight for night landings.', mass: 15, maxT: 1500, light: true, nodes: [], surface: true, mesh: 'lamp' },
   { id: 'ut-strobe', cat: 'utility', name: 'Nav strobe', desc: 'Blinking position light.', mass: 5, maxT: 1500, strobe: true, nodes: [], surface: true, mesh: 'strobe' },
+  { id: 'ut-dock', cat: 'utility', name: 'Docking port', desc: 'Docks with Meridian Station, where you can refuel. Mount it on the hull facing out (the top or the nose is best) and bring RCS thrusters to steer in.',
+    mass: 240, maxT: 1700, crash: 8, dock: { h: 0.75, r: 0.7 }, nodes: [], surface: true, mesh: 'dock', com: [0.35, 0, 0] },
 ];
 
 export const PART = Object.fromEntries(PARTS.map((p) => [p.id, p]));

@@ -398,6 +398,24 @@ const B = {
     const l = new THREE.Mesh(new THREE.CircleGeometry(0.11, 12), new THREE.MeshBasicMaterial({ color: 0xfff6dd })); l.position.x = 0.26; l.rotation.y = Math.PI / 2; g.add(l);
     return g;
   },
+  dock(def, M) {
+    // androgynous port along local +X: flange, tunnel, collar, gold face ring and three guide petals
+    const g = new THREE.Group(), h = def.dock.h;
+    const alongX = (m, x) => { m.rotation.z = -Math.PI / 2; m.position.x = x; g.add(m); return m; };
+    alongX(cylY(0.85, 0.85, 0.12, M.dark, 28), 0.06);
+    alongX(cylY(0.62, 0.62, h - 0.2, M.metal, 28), (h - 0.2) / 2 + 0.1);
+    alongX(cylY(0.74, 0.74, 0.12, M.dark, 28), h - 0.12);
+    const face = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.74, 28), M.accent); face.rotation.y = Math.PI / 2; face.position.x = h - 0.05; g.add(face);
+    const hatch = new THREE.Mesh(new THREE.CircleGeometry(0.3, 20), M.black); hatch.rotation.y = Math.PI / 2; hatch.position.x = h - 0.06; g.add(hatch);
+    for (let k = 0; k < 3; k++) {
+      const a = (k / 3) * Math.PI * 2;
+      const pet = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.34, 0.05), M.hull);
+      pet.position.set(h - 0.02, Math.cos(a) * 0.6, Math.sin(a) * 0.6);
+      pet.rotation.x = a; pet.rotateZ(0.2);
+      g.add(pet);
+    }
+    return g;
+  },
   strobe(def, M) {
     const g = new THREE.Group();
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3b3b })); s.position.x = 0.08; s.userData.strobe = true; g.add(s);

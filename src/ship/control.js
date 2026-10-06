@@ -11,7 +11,7 @@ const _q = new THREE.Quaternion(), _qi = new THREE.Quaternion();
 const _err = new THREE.Vector3(), _treq = new THREE.Vector3(), _ga = new THREE.Vector3(), _gb = new THREE.Vector3(), _gc = new THREE.Vector3();
 const NOSE = new THREE.Vector3(0, 0, -1), UPB = new THREE.Vector3(0, 1, 0);
 
-export const SAS_MODES = ['off', 'hold', 'prograde', 'retrograde', 'normal', 'antinormal', 'radialOut', 'radialIn', 'target'];
+export const SAS_MODES = ['off', 'hold', 'prograde', 'retrograde', 'normal', 'antinormal', 'radialOut', 'radialIn', 'target', 'station', 'tgtPro', 'tgtRetro'];
 
 export class Controller {
   constructor(settings) {
@@ -52,6 +52,15 @@ export class Controller {
       case 'radialOut': { const n = new THREE.Vector3().crossVectors(r, v); return new THREE.Vector3().crossVectors(v, n).normalize(); }
       case 'radialIn': { const n = new THREE.Vector3().crossVectors(r, v); return new THREE.Vector3().crossVectors(n, v).normalize(); }
       case 'target': moonPos(ship.t, _a); return _a.clone().sub(ship.r).normalize();
+      // the station: point at it, or along / against the velocity relative to it
+      case 'station': { const st = ship.station; if (!st) return null; return st.posAt(ship.t, _a).clone().sub(ship.r).normalize(); }
+      case 'tgtPro': case 'tgtRetro': {
+        const st = ship.station; if (!st) return null;
+        const d = ship.v.clone().sub(st.velAt(ship.t, _a));
+        if (d.lengthSq() < 1e-4) return null;
+        d.normalize();
+        return mode === 'tgtPro' ? d : d.negate();
+      }
       default: return null;
     }
   }
@@ -186,6 +195,7 @@ export class Controller {
       if (D) {
         pointing = true;
         this.pointRates(ship, D, axis, upRef, wd);
+        if (apOut && apOut.rateCap) wd.clampLength(0, apOut.rateCap);      // gentle turns (saves RCS gas)
       } else {
         // attitude hold (captured when the stick is released), stored relative to the planet near the surface
         if (!this.holdQ || this.holdLocal !== local) { this.holdQ = local ? frameQ.clone().invert().multiply(ship.q) : ship.q.clone(); this.holdLocal = local; }
@@ -1094,8 +1104,9 @@ export function reentryAp(target = null, opts = {}) {
 }
 
 // Ascent to orbit: vertical rockets and spaceplanes from Earth, and any lander from the Moon
-// (lift thrusters for the first few hundred metres, then the main engine).
-export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
+// (lift thrusters for the first few hundred metres, then the main engine). With opts.plane (an orbit normal in
+// frame I) it steers into that orbital plane instead of holding a fixed heading.
+export function ascentAp(targetAlt = null, heading = Math.PI / 2, opts = {}) {
   let phase = 'init', plane = false, circ = null, hasMain = false, hasLift = false, hasJets = false, mainOn = false, hybrid = false, wasPlane = false;
   let sub = null;    // the circularization burn, flown as part of the ascent
   const orbitMsg = (ship) => {
@@ -1127,8 +1138,17 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
       const spin = moon ? new THREE.Vector3(0, Math.cos(0.4091), Math.sin(0.4091)) : new THREE.Vector3(0, 1, 0);
       const east = spin.clone().cross(up).normalize();      // toward local east in I
       const north = up.clone().cross(east).normalize();
-      const hdg = north.clone().multiplyScalar(Math.cos(heading)).addScaledVector(east, Math.sin(heading));
+      let hdg = north.clone().multiplyScalar(Math.cos(heading)).addScaledVector(east, Math.sin(heading));
       const rs = relState(ship, body);
+      if (opts.plane && !moon) {
+        // horizontal direction that ends with the velocity in the target plane: what is still missing along the
+        // plane, minus the velocity across it
+        const hT = opts.plane, dP = new THREE.Vector3().crossVectors(hT, up).normalize();
+        const vc = Math.sqrt(body.mu / rs.r.length());
+        const want = dP.multiplyScalar(Math.max(400, vc - rs.v.dot(dP))).addScaledVector(hT, -rs.v.dot(hT));
+        want.addScaledVector(up, -want.dot(up));
+        if (want.lengthSq() > 1) hdg = want.normalize();
+      }
       const el = elements(rs.r, rs.v, body.mu);
       const apAlt = el.ap - body.R, peAlt = el.pe - body.R;
       const safePe = moon ? 15000 : EARTH.atmoTop + 5000;
@@ -1157,7 +1177,16 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         if (peAlt > safePe) return { done: true, throttle: 0, msg: `Orbit reached: ${Math.round(apAlt / 1000)} × ${Math.round(peAlt / 1000)} km` };
         // once the high point reaches the target (and the air is too thin to matter), coast up to it and
         // circularize there instead of burning on: powerful engines would otherwise fling the apoapsis far out
-        const coastOk = moon ? (mainOn || !hasLift) && E.agl > 3000 : E.h > 100000;
+        // (on Earth only when the burn at the top is moderate and there is time to centre it there: a steep
+        // climb that coasts would need a huge burn, half of it after the high point)
+        let coastOk;
+        if (moon) coastOk = (mainOn || !hasLift) && E.agl > 3000;
+        else {
+          const hMom = new THREE.Vector3().crossVectors(rs.r, rs.v).length();
+          const dvC = Math.sqrt(body.mu / el.ap) - hMom / el.ap;
+          const bt = dvC / Math.max(0.1, maxAccel(ship));
+          coastOk = E.h > 100000 && dvC < 2500 && isFinite(el.tAp) && el.tAp > bt / 2 + 30;
+        }
         if (coastOk && apAlt > tAlt - 500) {
           if (circularize(ship, C)) return { throttle: 0, dir: rs.v.clone().normalize(), axis, status: 'coasting to apoapsis' };
         }
@@ -1237,6 +1266,20 @@ export function ascentAp(targetAlt = null, heading = Math.PI / 2) {
         return { throttle: 1, gear: true, engines, pitchCmd: E.vSurf > vRot ? clamp((10 - pitchNow) * 0.12, -0.3, 0.6) : 0, status: E.vSurf > vRot ? 'Rotate' : 'Take-off roll' };
       }
       if (!onGround && E.agl > 50) ship.ctl.gear = false;
+      if (!rocket && C.settings.assist !== 'realistic') {
+        // jet climb through the fly-by-wire: hold a climb angle, wings level until clear of the ground, then a
+        // gentle banked turn onto the heading (pointing the nose there straight off a runway facing the other
+        // way would drag a wing or the tail along the ground)
+        const north = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y).normalize();
+        const eastL = new THREE.Vector3().crossVectors(north, up);
+        const track = Math.atan2(E.vAir.dot(eastL), E.vAir.dot(north));
+        const want = Math.atan2(hdg.dot(eastL), hdg.dot(north));
+        const err = Math.atan2(Math.sin(want - track), Math.cos(want - track));
+        C.gammaHold = Math.max(0, pitch - 3) * D2R;
+        C.bankHold = E.agl < 400 ? 0 : clamp(err * 1.2, -0.5, 0.5);
+        if (C.sas !== 'hold' && C.sas !== 'off') C.sas = 'hold';
+        return { throttle: 1, engines, gear: E.agl > 50 ? false : undefined, status: `Jet climb · Mach ${mach.toFixed(1)}${Math.abs(err) > 0.3 ? ' · turning' : ''}` };
+      }
       const dir = up.clone().multiplyScalar(Math.sin(pitch * D2R)).addScaledVector(hdg, Math.cos(pitch * D2R)).normalize();
       return { dir, axis: NOSE, up, throttle: 1, engines, status: rocket ? `Rocket climb · Ap ${Math.round(apAlt / 1000)} km` : `Jet climb · Mach ${mach.toFixed(1)}` };
     },

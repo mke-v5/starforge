@@ -21,6 +21,9 @@ export const MILESTONES = [
   { id: 'tranquility', name: 'The Eagle has landed', desc: 'Land within 500 m of the Apollo 11 site.' },
   { id: 'pinpoint', name: 'Stuck the landing', desc: 'Land a tail-sitting starship on its legs at an airport.' },
   { id: 'homeAgain', name: 'There and back again', desc: 'Land on the Moon, then land back at the airport you took off from.' },
+  { id: 'rendezvous', name: 'Rendezvous', desc: 'Get within 1 km of Meridian Station, moving less than 5 m/s relative to it.' },
+  { id: 'docked', name: 'Soft capture', desc: 'Dock with Meridian Station.' },
+  { id: 'stationRun', name: 'Runway to rendezvous', desc: 'Take off from an airport and dock at Meridian Station in the same flight.' },
 ];
 
 export class Progress {
@@ -68,6 +71,11 @@ export class Progress {
   orbitCheck(body, pe) {
     if (body === EARTH && pe - EARTH.R > 140000) this.unlock('orbit');
     if (body === MOON && pe - MOON.R > 5000 && this.flight) { this.unlock('moonOrbit'); }
+  }
+  docked() {
+    this.unlock('docked');
+    const F = this.flight;
+    if (F && F.tookOff && F.from) this.unlock('stationRun');
   }
   landed(ship, airport) {
     const F = this.flight; if (!F) return;

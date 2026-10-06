@@ -4,6 +4,8 @@ import { EARTH, MOON, R2D, D2R, clamp, fmtTime } from '../core/geo.js';
 import { RES } from '../ship/parts.js';
 import { elements, relState, deltaV } from '../ship/orbit.js';
 import { moonPos } from '../core/astro.js';
+import { STATION } from '../world/station.js';
+const STATION_SHORT = STATION.short, STATION_NAME = STATION.name;
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,14 +48,15 @@ export class Hud {
     const el = $('h-toggles');
     const defs = [
       ['gear', 'Gear', 'G'], ['brake', 'Brake', 'B'],
-      ['rcs', 'RCS', 'R'], ['lights', 'Lights', 'L'],
+      ['rcs', 'RCS', 'R'], ['lights', 'Lights', 'U'],
       ['engines', 'Eng: all', 'E'], ['mode', 'Auto', 'X'],
-      ['auto', 'Auto', 'P'], ['info', 'Info', 'I'],
+      ['auto', 'Auto', 'P'], ['info', 'Info', 'O'],
+      ['dock', 'Dock', 'Y'], ['refuel', 'Refuel', ''],
     ];
     this.toggles = {};
     for (const [id, label, key] of defs) {
       const b = document.createElement('button');
-      b.textContent = label; b.title = `${label} (${key})`;
+      b.textContent = label; b.title = key ? `${label} (${key})` : label;
       b.addEventListener('click', () => this.game.action(id));
       el.appendChild(b);
       this.toggles[id] = b;
@@ -61,7 +64,7 @@ export class Hud {
   }
   buildSas() {
     const el = $('h-sas');
-    const modes = [['off', 'Off'], ['hold', 'Hold'], ['prograde', 'Pro'], ['retrograde', 'Retro'], ['normal', 'Nrm'], ['antinormal', 'Anrm'], ['radialOut', 'Rad+'], ['radialIn', 'Rad−'], ['target', 'Moon']];
+    const modes = [['off', 'Off'], ['hold', 'Hold'], ['prograde', 'Pro'], ['retrograde', 'Retro'], ['normal', 'Nrm'], ['antinormal', 'Anrm'], ['radialOut', 'Rad+'], ['radialIn', 'Rad−'], ['target', 'Moon'], ['station', 'Stn'], ['tgtPro', 'T+'], ['tgtRetro', 'T−']];
     this.sasBtns = {};
     for (const [m, label] of modes) {
       const b = document.createElement('button');
@@ -134,6 +137,9 @@ export class Hud {
       nrm: mk(tri('#d86cff')), anrm: mk(tri('#d86cff')), radOut: mk(sq('#5fd3ff')), radIn: mk(sq('#5fd3ff')),
       tgt: mk((x) => { x.strokeStyle = '#ff6ad5'; x.beginPath(); x.arc(32, 32, 16, 0, Math.PI * 2); x.stroke(); x.beginPath(); x.arc(32, 32, 6, 0, Math.PI * 2); x.stroke(); }),
       node: mk((x) => { x.strokeStyle = '#3c8dff'; x.beginPath(); x.arc(32, 32, 18, 0, Math.PI * 2); x.stroke(); x.fillStyle = '#3c8dff'; x.beginPath(); x.arc(32, 32, 7, 0, Math.PI * 2); x.fill(); }),
+      // the station and the velocity relative to it (green)
+      stn: mk((x) => { x.strokeStyle = '#73e2a7'; x.strokeRect(12, 12, 40, 40); x.beginPath(); x.moveTo(32, 4); x.lineTo(32, 20); x.moveTo(32, 44); x.lineTo(32, 60); x.moveTo(4, 32); x.lineTo(20, 32); x.moveTo(44, 32); x.lineTo(60, 32); x.stroke(); }),
+      tpro: mk(circle('#73e2a7', false)), tretro: mk(circle('#73e2a7', true)),
     };
   }
 
@@ -169,7 +175,14 @@ export class Hud {
       else for (const k of ['nrm', 'anrm', 'radOut', 'radIn']) this.markers[k].visible = false;
     } else for (const k of ['pro', 'retro', 'nrm', 'anrm', 'radOut', 'radIn']) this.markers[k].visible = false;
     moonPos(ship.t, this._m || (this._m = new THREE.Vector3()));
-    place(this.markers.tgt, this._m.clone().sub(ship.r));
+    const st = ship.station, nearSt = st && ship.env.body === EARTH && ship.r.distanceTo(st.r) < 1.5e6 && !ship.docked;
+    place(this.markers.tgt, nearSt && ship.r.distanceTo(st.r) < 2e5 ? null : this._m.clone().sub(ship.r));
+    if (nearSt) {
+      place(this.markers.stn, st.r.clone().sub(ship.r));
+      const rv = ship.v.clone().sub(st.v);
+      if (rv.length() > 0.05) { place(this.markers.tpro, rv); place(this.markers.tretro, rv.clone().negate()); }
+      else { this.markers.tpro.visible = false; this.markers.tretro.visible = false; }
+    } else for (const k of ['stn', 'tpro', 'tretro']) this.markers[k].visible = false;
     const node = ctl.node;
     place(this.markers.node, node ? (node.dvLeft || node.dv) : null);
     // render into the slot
@@ -185,6 +198,21 @@ export class Hud {
     renderer.setScissorTest(false);
     const W = renderer.domElement.width / dpr;
     renderer.setViewport(0, 0, W, H);
+  }
+
+  // ---------- target bracket over the station (every frame) ----------
+  updateTarget(camera, camI, ship) {
+    const el = this.tgtEl || (this.tgtEl = $('h-tgt'));
+    const st = ship && ship.station;
+    if (!st || ship.docked || ship.env.body !== EARTH) { el.hidden = true; return; }
+    const d = ship.r.distanceTo(st.r);
+    if (d > 1.5e6 || d < 25) { el.hidden = true; return; }
+    const p = st.r.clone().sub(camI).project(camera);
+    if (p.z > 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) { el.hidden = true; return; }
+    el.hidden = false;
+    el.style.transform = `translate(${((p.x * 0.5 + 0.5) * innerWidth).toFixed(1)}px,${((-p.y * 0.5 + 0.5) * innerHeight).toFixed(1)}px)`;
+    const txt = `${STATION_SHORT.toUpperCase()} · ${this.units.dist(d)}`;
+    if (el._t !== txt) { el._t = txt; el.lastChild.textContent = txt; }
   }
 
   // ---------- messages ----------
@@ -205,6 +233,8 @@ export class Hud {
     const orbital = E.agl > 60000 || (E.body === MOON && E.agl > 15000);
     let spd = E.vSurf, spdK = 'SRF';
     if (orbital) { spd = ctl.refVel(ship).length(); spdK = 'ORB'; }
+    const stx = extra.station;
+    if (stx && !stx.docked && stx.d < 5000) { spd = stx.vrel; spdK = 'TGT'; }
     const [s, su] = U.speed(spd);
     $('h-spd').textContent = s; $('h-spdu').textContent = su; $('h-spdk').textContent = spdK;
     const radar = E.agl < 3000;
@@ -240,10 +270,18 @@ export class Hud {
     if (hasHybrid) { const m = ship.ctl.engineMode; T.mode.textContent = m === 'auto' ? 'Mode: auto' : m === 'air' ? 'Mode: air' : 'Mode: rocket'; T.mode.classList.toggle('alt', m !== 'auto'); }
     T.auto.classList.toggle('on', !!ctl.ap);
     T.auto.textContent = ctl.ap ? ctl.ap.name : 'Auto';
+    T.dock.hidden = !(stx && (stx.docked || (stx.d < 8000 && craft.docks.length)));
+    T.dock.textContent = stx && stx.docked ? 'Undock' : 'Dock';
+    T.dock.classList.toggle('on', !!(stx && stx.docked));
+    T.refuel.hidden = !(stx && stx.docked);
     const space = E.rho < 0.01 || E.h > 30000;
+    const stNear = stx && !stx.docked && stx.d < 100000;
     for (const m in this.sasBtns) {
       this.sasBtns[m].classList.toggle('on', ctl.sas === m);
-      this.sasBtns[m].hidden = !space && !['off', 'hold', 'prograde', 'retrograde'].includes(m) && ctl.sas !== m;
+      let hide = !space && !['off', 'hold', 'prograde', 'retrograde'].includes(m);
+      if (['station', 'tgtPro', 'tgtRetro'].includes(m)) hide = !stNear;
+      if (m === 'target' && stNear) hide = true;
+      this.sasBtns[m].hidden = hide && ctl.sas !== m;
     }
     // AP bar
     const apb = $('h-ap');
@@ -263,7 +301,8 @@ export class Hud {
     this.updateInfo(ship, ctl, extra);
     // orbit bar
     const ob = $('h-orbit');
-    if ((E.h > 25000 || E.body === MOON) && !(ship.parked || (ship.contacts > 0 && E.vSurf < 5))) {
+    if (stx && stx.docked) { ob.innerHTML = `<div style="color:var(--green)">DOCKED · ${STATION_NAME}</div><div class="dim">Refuel, then undock (Y) when ready</div>`; ob.hidden = false; }
+    else if ((E.h > 25000 || E.body === MOON) && !(ship.parked || (ship.contacts > 0 && E.vSurf < 5))) {
       const rs = relState(ship, E.body);
       const el = elements(rs.r, rs.v, rs.mu);
       const R = E.body.R;
@@ -274,6 +313,7 @@ export class Hud {
       if (el.e < 1 && !sub) html += `<div class="dim">Ap in ${fmtTime(el.tAp)} · Pe in ${fmtTime(el.tPe)} · ${fmtTime(el.period)} orbit</div>`;
       else if (el.e < 1 && el.tAp < el.period / 2) html += `<div class="dim">Ap in ${fmtTime(el.tAp)}</div>`;
       if (extra.encounter) html += `<div style="color:var(--violet)">${extra.encounter}</div>`;
+      if (stx && !stx.docked && stx.d < 3e6) html += `<div style="color:var(--green)">${STATION_SHORT} ${U.dist(stx.d)}${stx.d < 2e5 ? ` · ${stx.closing >= 0 ? 'closing' : 'opening'} ${Math.abs(stx.closing) < 10 ? Math.abs(stx.closing).toFixed(1) : Math.round(Math.abs(stx.closing))} m/s` : ''}</div>`;
       ob.innerHTML = html; ob.hidden = false;
     } else ob.hidden = true;
     // warnings

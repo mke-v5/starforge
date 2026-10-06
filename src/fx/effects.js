@@ -39,6 +39,7 @@ const STYLE = {
   rocket: { core: [1.0, 0.92, 0.7], edge: [1.0, 0.45, 0.12], len: 22, rad: 0.48 },
   fusion: { core: [0.95, 0.85, 1.0], edge: [0.45, 0.25, 1.0], len: 70, rad: 0.32 },
   plasma: { core: [0.8, 0.95, 1.0], edge: [0.2, 0.5, 1.0], len: 9, rad: 0.45 },
+  rcs: { core: [0.95, 0.97, 1.0], edge: [0.55, 0.62, 0.7], len: 1.6, rad: 0.07 },
 };
 
 export class Effects {
@@ -147,6 +148,24 @@ void main(){
       const r = (P.def.size ? { S: 1.25, M: 2.5, L: 3.75 }[P.def.size] : 1.0) * style.rad;
       this.plumes.push({ P, mesh, style, r, hybridRocket: e.type === 'hybrid' });
     }
+    // cold-gas puffs from the RCS nozzles (they push the opposite way)
+    this.rcsJets = [];
+    const rcsMat = new THREE.ShaderMaterial({
+      uniforms: { uCore: { value: new THREE.Vector3(...STYLE.rcs.core) }, uEdge: { value: new THREE.Vector3(...STYLE.rcs.edge) }, uI: { value: 0.9 }, uDiamonds: { value: 0 }, uTime: { value: 0 } },
+      vertexShader: PLUME_VERT, fragmentShader: PLUME_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    this.rcsMat = rcsMat;
+    for (const P of craft.parts) {
+      if (!P.rcs) continue;
+      P.rcs.dirs.forEach((d, i) => {
+        const mesh = new THREE.Mesh(this.plumeGeo, rcsMat);
+        mesh.frustumCulled = false; mesh.renderOrder = 31; mesh.visible = false;
+        mesh.position.copy(P.rcs.pos).addScaledVector(d, 0.22);
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().negate());
+        craft.group.add(mesh);
+        this.rcsJets.push({ P, i, mesh });
+      });
+    }
     if (this.plasma.parent) this.plasma.parent.remove(this.plasma);
     if (this.trail.parent) this.trail.parent.remove(this.trail);
     craft.group.add(this.plasma);
@@ -177,6 +196,14 @@ void main(){
       u.uI.value = (0.6 + 0.6 * f) * (st === STYLE.jet ? 0.8 : 1.1);
       u.uDiamonds.value = st === STYLE.rocket ? p * 1.2 : st === STYLE.jet ? f * 0.6 : 0;
       u.uTime.value = this.time;
+    }
+    if (this.rcsJets) {
+      this.rcsMat.uniforms.uTime.value = this.time;
+      for (const j of this.rcsJets) {
+        const f = j.P.alive ? j.P.rcs.fire[j.i] : 0;
+        j.mesh.visible = f > 0.04;
+        if (j.mesh.visible) { const fl = 0.85 + 0.3 * Math.random(); j.mesh.scale.set(STYLE.rcs.rad * (0.6 + f), STYLE.rcs.len * (0.3 + f) * fl, STYLE.rcs.rad * (0.6 + f)); }
+      }
     }
     // reentry plasma
     const pi = clamp((heatFlux - 1.5e5) / 1.2e6, 0, 1);

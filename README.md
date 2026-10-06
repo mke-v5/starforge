@@ -1,7 +1,13 @@
 # Starforge
 
-Stage 1: a streamed 1:1 Earth you can fly over. Real satellite imagery and terrain, search for any of ~16,000 cities.
+Build a spaceplane from snap-together parts and fly it from any airport on a 1:1 Earth to orbit, Meridian Station and the Moon and back, with real physics. Streamed satellite imagery and terrain, ~16,000 cities, every airport.
 No build step, no account, no keys. Serve this folder with any static host (GitHub Pages, Netlify Drop) and open index.html.
 
-Data: EOX Sentinel-2 cloudless (CC BY-NC-SA, non-commercial), NASA GIBS, AWS/Mapzen terrain tiles, GeoNames cities.
-Controls: thumbstick steers, slider sets speed, Level / Orbit / Ground buttons. Keys: WASD turn and pitch, R/F speed, Space stop.
+- **Fly**: fly-by-wire jets and spaceplanes, flight school, auto-land on any runway.
+- **Space**: orbital mechanics with the Moon's pull, map view burn planning, time warp, reentry heating.
+- **Meridian Station**: a station in a 420 km, 51.6° orbit. Launch-window ascent into its plane, Lambert transfers, closest-approach planning, RCS docking (by hand or autopilot) and free refuelling.
+- **The Moon**: transfers, captures, landings at famous sites, and a fly-me-home autopilot back to the runway you left from.
+- **Hangar**: build and reshape your own ships.
+
+Data: EOX Sentinel-2 cloudless (CC BY-NC-SA, non-commercial), NASA GIBS, AWS/Mapzen terrain tiles, OpenStreetMap buildings, OurAirports, GeoNames cities, NASA LRO Moon imagery and elevation.
+Controls: thumbstick steers, slider sets speed. Keys: WASD pitch and roll, Q/E yaw, Shift/Ctrl throttle, M map, P autopilot; in space H/N J/L I/K translate on RCS, Y docks. Full list under How to play.

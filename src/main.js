@@ -19,6 +19,8 @@ import { LaunchScreen } from './ui/launch.js';
 import { MapView } from './ui/mapview.js';
 import { HELP_HTML } from './ui/help.js';
 import { Tutorial, flightSchool } from './ui/tutorial.js';
+import { Station, STATION, stationKepler } from './world/station.js';
+import { rendezvousAp, proxAp, departAp, choosePort } from './ship/rendezvous.js';
 
 const $ = (id) => document.getElementById(id);
 const WARPS = [1, 2, 4, 10, 50, 100, 1000, 10000, 100000];
@@ -44,6 +46,7 @@ class Game {
     this.world = new World(this.scene, this.renderer, this.settings);
     this.world.buildings.enabled = this.settings.buildings !== '0';
     this.effects = new Effects(this.scene);
+    this.station = new Station(this.scene);
     this.audio = new Audio();
     this.audio.setOn(this.settings.sound !== '0');
     this.input = new Input(this.canvas);
@@ -217,6 +220,7 @@ class Game {
       this.ship = null; this.craft = null;
     }
     this.effects.clearWorld();
+    this.station.hide(); this.station.occupied = -1;
     this.world.setHangar(null);
     if (this.spot) { this.scene.remove(this.spot); this.spot = null; }
     this.mapOpen = false;
@@ -234,6 +238,8 @@ class Game {
     this.eph.update(this.simStart(site));
     const ship = new Ship(craft, this.world, this.eph, this.settings);
     this.ship = ship;
+    this.station.seed(ship.t); this.station.occupied = -1;
+    ship.station = this.station;
     const C = this.controller = new Controller(this.settings);
     C.onEngineGroup = (g) => { this.engGroup = this.availableGroups().includes(g) ? g : 'all'; };
     this.effects.attach(craft);
@@ -278,6 +284,23 @@ class Game {
     } else if (site.type === 'air') {
       lat = site.lat; lon = site.lon; hdg = site.hdg * D2R; needGround = false;
     } else needGround = false;
+    if (site.type === 'docked' || site.type === 'stationNear') {
+      // off the station's aft port, facing it; docked there if the ship has a docking port
+      const st = this.station, t = ship.t;
+      const portI = 1, pPos = new THREE.Vector3(), pAx = new THREE.Vector3(), pUp = new THREE.Vector3();
+      st.port(portI, t, pPos, pAx, pUp);
+      ship.r.copy(pPos).addScaledVector(pAx, 30 + craft.size * 0.8);
+      st.pointVel(ship.r, t, ship.v);
+      this.orientTo(ship, pAx.clone().negate(), pUp);
+      ship.w.copy(st.w).applyQuaternion(ship.q.clone().invert());
+      ship.parked = null; ship.ctl.gear = false;
+      C.setSas('hold');
+      const part = craft.docks[0];
+      if (site.type === 'docked') {
+        if (part) { st.dock(ship, part, choosePort(st, ship.bodyToWorld(part.dock.pos, new THREE.Vector3()), t)); ship.events.length = 0; }
+        else setTimeout(() => this.hud.toast(`${this.design.name} has no docking port — starting next to the station`, 'bad'), 600);
+      }
+    }
     // stream terrain at the spawn point before physics starts
     this.show('boot');
     $('bootmsg').textContent = body === MOON ? 'Landing on the Moon…' : 'Preparing the ground…';
@@ -325,6 +348,8 @@ class Game {
       this.orientTo(ship, vdir, ship.r.clone().normalize());
       ship.parked = null; ship.ctl.gear = false;
       C.setSas('prograde');
+    } else if (site.type === 'docked' || site.type === 'stationNear') {
+      // (placed above)
     } else if (site.type === 'lunarOrbit') {
       const r = MOON.R + site.alt;
       const m = this.eph.moon, mv = this.eph.moonV;
@@ -348,6 +373,7 @@ class Game {
   // ---------------- saving and resuming a flight ----------------
   whereText() {
     const ship = this.ship, E = ship.env;
+    if (ship.docked) return `docked at ${STATION.name}`;
     const rs = relState(ship, E.body), el = elements(rs.r, rs.v, rs.mu);
     if (E.body === MOON) return ship.parked || ship.contacts > 0 ? 'on the Moon' : el.e < 1 && el.pe > MOON.R + 5000 ? 'in lunar orbit' : 'near the Moon';
     if (ship.parked || ship.contacts > 0) { const n = this.world.airports.nearestRunway(E.lat, E.lon, 8000); return n ? `at ${n.rw.ap.iata || n.rw.ap.ident}` : 'on the ground'; }
@@ -372,6 +398,9 @@ class Game {
       flight: F ? { ...F, from: F.from ? F.from.ident : null } : null,
       flightTime: this.flightTime, where: this.whereText(),
       homeTo: C.ap && C.ap.home ? C.ap.home : null,
+      rdvTo: !!(C.ap && C.ap.rdvStation),
+      station: { r: v3(this.station.r), v: v3(this.station.v), t: this.station.t },
+      docked: ship.docked ? { port: ship.docked.port, part: ship.docked.part, qRel: ship.docked.qRel.toArray(), pRel: v3(ship.docked.pRel) } : null,
     };
   }
   saveFlight() { try { const s = this.snapshot(); if (s) save('flight', s); } catch (e) { /* storage full or unavailable */ } }
@@ -413,6 +442,14 @@ class Game {
     if (s.flight) this.progress.flight = { ...s.flight, from: findAp(s.flight.from) };
     ship.t = s.t;
     ship.r.fromArray(s.r); ship.v.fromArray(s.vel); ship.q.fromArray(s.q).normalize(); ship.w.fromArray(s.w);
+    if (s.station) this.station.setState(new THREE.Vector3().fromArray(s.station.r), new THREE.Vector3().fromArray(s.station.v), s.station.t);
+    else this.station.seed(s.t);
+    this.station.advanceTo(s.t); this.station.occupied = -1;
+    ship.station = this.station;
+    if (s.docked && craft.parts[s.docked.part] && craft.parts[s.docked.part].alive) {
+      ship.docked = { port: s.docked.port, part: s.docked.part, qRel: new THREE.Quaternion().fromArray(s.docked.qRel), pRel: new THREE.Vector3().fromArray(s.docked.pRel) };
+      this.station.occupied = s.docked.port;
+    }
     if (s.parked) ship.parked = { body: s.parked.body === 'moon' ? MOON : EARTH, pF: new THREE.Vector3().fromArray(s.parked.pF), qF: new THREE.Quaternion().fromArray(s.parked.qF) };
     ship.ctl.gear = s.gear; ship.ctl.rcs = s.rcs !== false;
     C.sas = s.sas || 'hold'; C.input.throttle = s.thr || 0;
@@ -450,6 +487,10 @@ class Game {
       const a = findAp(s.homeTo);
       if (a) setTimeout(() => { if (this.ship === ship && !this.controller.ap) { this.mapView.flyHomeAll(a); this.hud.toast(`Autopilot resumed: flying you home to ${a.iata || a.ident}`); } }, 1500);
     }
+    // so does a trip to the station (from orbit; an ascent in progress is left to the pilot)
+    if (s.rdvTo && !ship.docked && ship.env.body === EARTH && ship.env.h > EARTH.atmoTop + 5000) {
+      setTimeout(() => { if (this.ship === ship && !this.controller.ap) { this.engage(rendezvousAp(ship, this.station)); this.hud.toast(`Autopilot resumed: on the way to ${STATION.name}`); } }, 1500);
+    }
   }
 
   // choose a start time so the launch site has the requested lighting
@@ -457,6 +498,7 @@ class Game {
     const now = nowSimTime();
     const tod = this.settings.tod || 'day';
     if (tod === 'real') return now;
+    if (site.type === 'docked' || site.type === 'stationNear') return this.stationDaylight(now);
     const moon = site.type === 'moon' || site.type === 'lunarOrbit';
     let lat = site.lat, lon = site.lon;
     if (site.rw) { lat = site.rw.latC; lon = site.rw.lonC; }
@@ -481,6 +523,18 @@ class Game {
       if (score > bestScore) { bestScore = score; best = t; }
     }
     return best;
+  }
+
+  // a start time with the station in sunshine for the next half hour
+  stationDaylight(now) {
+    const eph = new Ephemeris(), r = new THREE.Vector3();
+    const lit = (t) => { eph.update(t); stationKepler(t, r); const a = r.dot(eph.sun); return a > 0 || r.lengthSq() - a * a > EARTH.R * EARTH.R; };
+    for (let t = now; t < now + 6000; t += 30) {
+      let ok = true;
+      for (let k = 0; k <= 1800 && ok; k += 120) ok = lit(t + k);
+      if (ok) return t + 60;
+    }
+    return now;
   }
 
   orientTo(ship, fwd, up) {
@@ -534,7 +588,30 @@ class Game {
       case 'mode': { const m = ship.ctl.engineMode; ship.ctl.engineMode = m === 'auto' ? 'air' : m === 'air' ? 'rocket' : 'auto'; break; }
       case 'auto': this.autopilotMenu(); break;
       case 'info': $('h-info').hidden = !$('h-info').hidden; break;
+      case 'dock': this.dockAction(); break;
+      case 'refuel': this.refuel(); break;
     }
+  }
+  // dock with the station (autopilot) or undock and back away
+  dockAction() {
+    const ship = this.ship, C = this.controller, st = this.station;
+    if (ship.docked) {
+      const port = ship.docked.port;
+      st.undock(ship);
+      C.input.throttle = 0;
+      this.engage(departAp(st, port));
+      return;
+    }
+    if (!this.craft.docks.length) { this.hud.toast('This ship has no docking port', 'bad'); return; }
+    if (!this.craft.rcsList.length) { this.hud.toast('Docking needs RCS thrusters', 'bad'); return; }
+    if (ship.r.distanceTo(st.r) > 8000) { this.engage(rendezvousAp(ship, st)); return; }
+    this.engage(proxAp(st));
+  }
+  refuel() {
+    if (!this.ship || !this.ship.docked) { this.hud.toast(`Dock at ${STATION.short} to refuel`, 'bad'); return; }
+    this.craft.refuel();
+    this.hud.toast(`Tanks full — courtesy of ${STATION.name}`, 'good');
+    this.audio.chime();
   }
   engineClass(P) { return engineClass(P); }
   availableGroups() {
@@ -564,6 +641,12 @@ class Game {
     const ship = this.ship, C = this.controller;
     const opts = [];
     if (C.ap) opts.push(['Stop autopilot', () => C.cancelAp()]);
+    if (ship.docked) {
+      opts.push(['Refuel at the station', () => this.refuel()]);
+      opts.push(['Undock and back away', () => this.dockAction()]);
+      this.dialog('Autopilot', `<p class="dim small">Docked at ${STATION.name}.</p>`, opts);
+      return;
+    }
     const cls = new Set(this.craft.engines.filter((P) => P.alive !== false).map((P) => this.engineClass(P)));
     const rocket = cls.has('main') || this.craft.engines.some((P) => P.alive !== false && P.eng.e.type === 'hybrid');
     if (rocket && ((ship.env.body === EARTH && ship.env.h < 120000) || (ship.env.body === MOON && ship.env.agl < 20000))) opts.push([ship.env.body === MOON ? 'Take off to lunar orbit' : 'Ascend to orbit', () => this.engage(ascentAp())]);
@@ -578,6 +661,18 @@ class Game {
       const inSpace = E.body === MOON || el.e >= 1 || E.h > 2e6 || (E.h > EARTH.atmoTop && el.pe - EARTH.R > 100000);
       if (rocket && inSpace && MV.canComeHome()) opts.push([E.body === MOON && E.agl < 50 ? 'Take off and fly me home…' : 'Fly me home to an airport…', () => MV.pickHome((a) => MV.flyHomeAll(a))]);
       if (rocket && E.body === MOON && el.e < 1 && E.agl > 5000) opts.push(['Land at a famous site…', () => MV.pickMoonSite((s) => MV.landAtSiteAuto(s))]);
+    }
+    // the station: the whole trip from a launch pad or runway, or from orbit; or just the docking when close
+    {
+      const E = ship.env, st = this.station;
+      const d = ship.r.distanceTo(st.r);
+      const rs = elements(ship.r, ship.v, EARTH.mu);
+      const inOrbit = E.body === EARTH && rs.e < 1 && rs.pe > EARTH.R + 130000;
+      const grounded = E.body === EARTH && (ship.parked || ship.contacts > 0);
+      if (d < 8000 && this.craft.docks.length) opts.push([`Dock at ${STATION.short}`, () => this.dockAction()]);
+      else if (rocket && (inOrbit || (grounded && (this.craft.vertical || this.mapView.canGlideHome())))) {
+        opts.push([grounded ? `Fly to ${STATION.name} (launch window, ascent, rendezvous${this.craft.docks.length ? ', dock' : ''})` : `Rendezvous${this.craft.docks.length ? ' and dock' : ''} with ${STATION.name}`, () => this.engage(rendezvousAp(ship, st))]);
+      }
     }
     if (ship.env.body === EARTH && ship.env.rho > 0.05) opts.push(['Cruise: hold altitude & heading', () => this.engage(cruiseAp(ship))]);
     { const E = ship.env, rw = E.body === EARTH && E.h < 25000 && ship.contacts === 0 && this.craft.wings.length ? this.landingRunway() : null;
@@ -646,7 +741,7 @@ class Game {
   canWarp(level) {
     const ship = this.ship, E = ship.env;
     if (level <= 4) return ship.parked || true;
-    if (ship.parked) return true;
+    if (ship.parked || ship.docked) return true;
     if (ship.thrustNow > 0 || ship.ctl.throttle > 0) return 'Cut the throttle to warp';
     if (E.body === EARTH && E.h < EARTH.atmoTop + 2000) return 'Can’t warp in the atmosphere';
     if (E.agl < 10000) return 'Too close to the surface';
@@ -727,7 +822,7 @@ class Game {
     const ship = this.ship, C = this.controller, craft = this.craft;
     // keys
     for (const k of keys) this.key(k);
-    if (this.paused || this.state === 'boot') { this.eph.update(ship.t); this.placeCamera(dt, camIn); this.world.update(this.camI, this.camera, this.eph, dt); this.placeShip(); return; }
+    if (this.paused || this.state === 'boot') { this.eph.update(ship.t); this.placeCamera(dt, camIn); this.world.update(this.camI, this.camera, this.eph, dt); this.placeShip(); this.station.update(this.camI, this.eph, this.flightTime); return; }
     // continuous inputs
     C.input.pitch = inp.pitch; C.input.roll = inp.roll; C.input.yaw = inp.yaw;
     if (inp.thr) C.input.throttle = clamp(C.input.throttle + inp.thr * dt * 0.6, 0, 1);
@@ -757,6 +852,7 @@ class Game {
     this.eph.update(ship.t);
     ship.step(dt, C);
     if (holdBrake) C.input.brake = wasBrake;
+    this.stationFrame(ship);
     this.eph.update(ship.t);
     this.flightTime += dt;
     if (this.tutorial) this.tutorial.update(dt);
@@ -770,6 +866,7 @@ class Game {
     else this.placeCamera(dt, camIn);
     this.world.update(this.camI, this.camera, this.eph, dt);
     this.placeShip();
+    if (this.mapOpen) this.station.hide(); else this.station.update(this.camI, this.eph, this.flightTime);
     // effects
     const vb = ship.dirToBody(ship.env.vAir, _v);
     const flux = 1.83e-4 * Math.sqrt(Math.max(0, ship.env.rho)) * Math.pow(ship.env.vSurf, 3) * this.settings.heatScale;
@@ -789,13 +886,28 @@ class Game {
     this.updateAudio(flux);
   }
 
+  // keep the station in step with the ship; latch the ports when they meet gently
+  stationFrame(ship) {
+    const st = this.station;
+    st.advanceTo(ship.t);
+    const d = ship.r.distanceTo(st.r);
+    ship.nearStation = d < 200;
+    if (d < 80 && !ship.docked) {
+      const cap = st.checkCapture(ship);
+      if (cap && cap.fail && !(this._capT > ship.t - 3)) {
+        this._capT = ship.t;
+        this.hud.toast(cap.vrel > 0.8 ? `Too fast to latch (${cap.vrel.toFixed(1)} m/s) — under 0.8 m/s` : 'Not lined up with the port', 'bad');
+      }
+    }
+  }
+
   key(k) {
     const ship = this.ship, C = this.controller;
     switch (k) {
       case 'Escape': if (this.mapOpen) this.toggleMap(); else this.pause(!this.paused); break;
       case 'g': this.action('gear'); break;
       case 'r': this.action('rcs'); break;
-      case 'l': this.action('lights'); break;
+      case 'u': this.action('lights'); break;
       case 'm': this.toggleMap(); break;
       case 'c': this.cycleCam(); break;
       case 't': this.setSas(C.sas === 'off' ? 'hold' : 'off'); break;
@@ -805,7 +917,8 @@ class Game {
       case ',': case '<': this.warpStep(-1); break;
       case 'e': break;
       case 'p': this.action('auto'); break;
-      case 'i': this.action('info'); break;
+      case 'y': this.action('dock'); break;
+      case 'o': this.action('info'); break;
       case 'v': this.action('engines'); break;
       case 'f': this.action('mode'); break;
       case '1': this.setSas('hold'); break;
@@ -839,13 +952,22 @@ class Game {
         this.audio.boom(clamp(P.def.mass / 2000, 0.5, 2));
         if (!ship.dead) this.hud.toast(`${e.why === 'overheat' ? 'Burned up' : 'Lost'}: ${P.def.name}`, 'bad');
       } else if (e.type === 'destroyed') {
-        const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.' }[e.why] || 'Destroyed.';
+        const why = { impact: 'Hit the ground too hard.', overheat: 'Overheated and broke apart.', building: 'Flew into a building.', splash: 'Hit the water too hard.', collision: `Crashed into ${STATION.name}.` }[e.why] || 'Destroyed.';
         $('c-why').textContent = why + ` (${Math.round(ship.env.vSurf)} m/s)`;
         this.clearSavedFlight();
         setTimeout(() => { if (this.ship === ship) { this.modal('crash'); } }, 2600);
         this.audio.boom(3);
       } else if (e.type === 'landed') {
         this.onLanded();
+      } else if (e.type === 'docked') {
+        if (ship.warp > 1) ship.warp = 1;
+        this.warpTarget = null;
+        this.hud.toast(`Docked at ${STATION.name} (${e.port} port) — tap Refuel to fill the tanks`, 'good');
+        this.audio.thump(0.5);
+        this.progress.docked();
+      } else if (e.type === 'undocked') {
+        this.hud.toast('Undocked');
+        this.audio.thump(0.25);
       } else if (e.type === 'warpStop') {
         this.hud.toast(e.why === 'atmosphere' ? 'Warp stopped: entering the atmosphere' : 'Warp stopped: near the surface', '');
         this.warpTarget = null;
@@ -895,6 +1017,15 @@ class Game {
     if (C.ap && C.node && C.ap.name === 'Burn') {
       const left = (C.node.dvLeft || C.node.dv).length();
       x.apMsg = C.node.started ? `${Math.round(left)} m/s to go` : `burn in ${Math.round(C.node.tStart - ship.t)} s`;
+    }
+    {
+      const st = this.station;
+      if (E.body === EARTH && E.h > 30000) {
+        const d = ship.r.distanceTo(st.r), rv = ship.v.clone().sub(st.v);
+        const closing = -rv.dot(ship.r.clone().sub(st.r).normalize());
+        x.station = { d, vrel: rv.length(), closing, docked: !!ship.docked };
+        if (d < 1000 && rv.length() < 5 && this.site && !['docked', 'stationNear'].includes(this.site.type)) this.progress.unlock('rendezvous');
+      } else x.station = ship.docked ? { d: 0, vrel: 0, closing: 0, docked: true } : null;
     }
     if (E.body === EARTH && E.agl < 20000) {
       const n = this.world.airports.nearestRunway(E.lat, E.lon, 80000);
@@ -1000,7 +1131,7 @@ class Game {
 
   render(dt) {
     this.renderer.render(this.scene, this.camera);
-    if (this.ship && this.state === 'hud' && !this.mapOpen) this.hud.renderNavball(this.renderer, this.ship, this.controller);
+    if (this.ship && this.state === 'hud' && !this.mapOpen) { this.hud.updateTarget(this.camera, this.camI, this.ship); this.hud.renderNavball(this.renderer, this.ship, this.controller); }
   }
 }
 

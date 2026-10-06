@@ -530,6 +530,8 @@ export class Builder {
     const fusionHeat = c.engines.reduce((s, P) => s + (P.eng.e.fusion ? P.eng.e.heat : 0), 0);
     if (fusionHeat > 0 && c.radCap < fusionHeat * 0.6) warn.push([`Fusion drive needs radiators (${Math.ceil(fusionHeat * 0.7 / 5e7)}+)`, '']);
     if (!c.parts[0].def.cat || c.parts[0].def.cat !== 'cockpit') warn.push(['The root part should be a cockpit', '']);
+    if (c.docks.length && !c.rcsList.length) warn.push(['Add RCS thrusters so the docking port can steer in', '']);
+    else if (c.docks.length) good.push('Can dock at Meridian Station');
     let h = rows.map(([k, v]) => `<div class="row"><span class="dim">${k}</span><b>${v}</b></div>`).join('');
     h += `<div class="row"><span class="dim">Launch</span><span><button class="btn sm" id="hb-vert" style="min-height:26px">${this.design.vertical ? 'Vertical' : 'Runway'}</button></span></div>`;
     for (const [w, k] of warn) h += `<div class="warn ${k}">⚠ ${w}</div>`;

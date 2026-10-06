@@ -135,9 +135,40 @@ function starhopper() {
   return b.done();
 }
 
+// Swing-wing fighter: wings spread for take-off and landing, sweep back past Mach 0.8; afterburning turbojet.
+function peregrine() {
+  const b = new DesignBuilder('Peregrine', { hull: '#5a6470', accent: '#ff5a4f', pattern: 'chevron' });
+  b.chain(['ck-kestrel', 'fs-s4', 'fs-s2', 'en-raptor']);
+  const [wr] = b.pair('wg-swing', [0.6, -0.25, 7.0], Q_FWD, b.at(7.0));
+  b.pair('wg-tailplane', [0.55, 0.05, 12.6], Q_FWD, b.at(12.6));
+  b.add('wg-fin', [0, 0.6, 11.8], Q_TOP, b.at(11.8));
+  b.add('gr-light', [0, -0.46, 2.6], Q_BOT, b.at(2.6));
+  b.pair('gr-light', [1.25, -0.3, 8.4], Q_BOT, wr);          // near the wing root, where the sweep barely moves it
+  b.add('ut-strobe', [0, 0.62, 9.0], Q_TOP, b.at(9.0));
+  return b.done();
+}
+
+// Ion tug for space: a fusion power core feeds an ion drive; docks at the station. Start it in orbit.
+function courier() {
+  const b = new DesignBuilder('Courier', { hull: '#e9ecef', accent: '#7ff0e8', glow: true });
+  b.chain(['ck-aurora', 'ut-fusioncore', 'fu-m3', 'cb-m4', 'ae-tail-m', 'xe-s2', 'xe-s2', 'en-ion']);
+  const cbz = 3.0 + 2.4 + 3.0 + 2.0;
+  b.pair('ut-radiator', [1.25, 0, cbz], qRollFrom(0), b.at(cbz));
+  b.pair('ut-solar', [0.9, 0.9, cbz + 1.2], qRollFrom(Math.PI / 4), b.at(cbz + 1.2));
+  for (const z of [1.6, cbz + 1.6]) for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    b.add('ct-rcs', [Math.cos(a) * 1.27, Math.sin(a) * 1.27, z], qRollFrom(a), b.at(z));
+  }
+  const nose = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, -1), Y.clone(), X.clone()));
+  b.add('ut-dock', [0, 0, 0.0], nose, 0);
+  return b.done();
+}
+
 export const PRESETS = [
   { key: 'kestrel', make: kestrel, blurb: 'Nimble jet. Perfect first flight: take off, tour cities, land at any airport.' },
   { key: 'selene', make: selene, blurb: 'Fusion spaceplane. Hangar → orbit → Moon landing → back to a runway. Docks at Meridian Station.' },
   { key: 'lynx', make: lynx, blurb: 'VTOL jet with lift fans. Hover out of the hangar and land on rooftops.' },
   { key: 'starhopper', make: starhopper, blurb: 'Vertical fusion starship. Launches from the pad, lands on its legs anywhere.' },
+  { key: 'peregrine', make: peregrine, blurb: 'Swing-wing fighter with an afterburner. Wings spread to land, sweep back for Mach 2.5.' },
+  { key: 'courier', make: courier, blurb: 'Ion tug for space, powered by a fusion core. Start it in orbit or docked at the station.' },
 ];

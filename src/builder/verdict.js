@@ -64,15 +64,24 @@ export function missionCheck(c, design) {
   out.push(orbit);
 
   // ---- the station: orbit, then rendezvous and docking ----
-  const needStation = needOrbit + 400;
+  // (a craft built for space — it can't get there from the ground — is judged from orbit)
+  const fromOrbit = !orbit.ok && tMainVac > 0 && !takeoff.ok;
+  const base = fromOrbit ? 0 : needOrbit;
+  const needStation = base + 400;
   const dockOk = c.docks.length > 0 && c.rcsList.length > 0;
   out.push({
-    ok: orbit.ok && dv >= needStation && dockOk, label: 'Docks at Meridian Station',
+    ok: (orbit.ok || fromOrbit) && dv >= needStation && dockOk, label: fromOrbit ? 'From orbit: docks at the station' : 'Docks at Meridian Station',
     detail: !c.docks.length ? 'needs a docking port' : !c.rcsList.length ? 'needs RCS thrusters to steer in' : `Δv ${fmt(dv)} of ~${fmt(needStation)} m/s`,
   });
 
   // ---- the Moon and back: land with hover or main thrust in lunar gravity; home by gliding or a powered landing ----
   const B = MOON_BUDGET;
+  if (fromOrbit) {
+    // to lunar orbit and back to Earth orbit (no landing, no reentry)
+    const need = B.tli + B.capture + B.home + 900;
+    out.push({ ok: dv >= need, label: 'From orbit: to the Moon and back', detail: `Δv ${fmt(dv)} of ~${fmt(need)} m/s` });
+    return { list: out, dv, needOrbit, needStation, needMoon: need };
+  }
   const glideHome = S > 0 && !vertical;
   const needMoon = needOrbit + B.tli + B.capture + B.descent + B.ascent + B.home + (glideHome ? 100 : 1000);
   const landT = Math.max(tLiftVac, tMainVac);

@@ -569,7 +569,9 @@ export class Builder {
       else good.push('Pitch stability looks good');
     }
     const gears = c.gears;
-    if (!gears.length) warn.push(['No landing gear', '']);
+    const mc = st.mission = missionCheck(c, this.design);
+    const spaceOnly = mc && mc.list.some((m) => /^From orbit/.test(m.label));
+    if (!gears.length && !spaceOnly) warn.push(['No landing gear', '']);
     else if (!this.design.vertical) {
       const wheels = gears.map((P) => P.gear.ext.clone().multiplyScalar(P.gear.g.len + P.gear.g.wheel).add(P.gear.mount));
       const ahead = wheels.filter((w) => w.z < c.com.z - 0.2), behind = wheels.filter((w) => w.z > c.com.z);
@@ -601,7 +603,6 @@ export class Builder {
     if (isFinite(gl) && gl < 3.5) warn.push([`Wings too weak for this weight (break at ${gl.toFixed(1)} g) — thicker roots, shorter spans or more wing`, gl < 2 ? 'bad' : '']);
     let h = rows.map(([k, v]) => `<div class="row"><span class="dim">${k}</span><b>${v}</b></div>`).join('');
     // what this ship can do, at a glance
-    const mc = st.mission = missionCheck(c, this.design);
     if (mc) {
       h += '<div class="mc"><div class="mc-h">Mission check</div>';
       for (const m of mc.list) h += `<div class="mc-row ${m.ok ? 'ok' : m.soft ? 'soft' : 'no'}"><i>${m.ok ? '✓' : m.soft ? '~' : '✗'}</i><span>${m.label}<small>${m.detail}</small></span></div>`;

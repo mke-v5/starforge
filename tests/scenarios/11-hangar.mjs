@@ -19,6 +19,8 @@ export default async function (t) {
   t.check(v('Lynx VTOL', 'Takes off vertically') && v('Lynx VTOL', 'Reaches orbit') === false, 'Lynx: takes off vertically, can’t reach orbit');
   t.check(v('Selene', 'Reaches orbit') && v('Selene', 'Docks at Meridian Station') && v('Selene', 'Lands on the Moon and comes home'), 'Selene: orbit, station, Moon and back');
   t.check(v('Starhopper', 'Lifts off its pad') && v('Starhopper', 'Reaches orbit') && v('Starhopper', 'Docks at Meridian Station') && v('Starhopper', 'Lands on the Moon and comes home'), 'Starhopper: orbit, station, Moon and back');
+  t.check(v('Peregrine', 'Takes off from a runway') && v('Peregrine', 'Reaches orbit') === false, 'Peregrine: a fighter, not a spaceship');
+  t.check(v('Courier', 'From orbit: docks at the station') && v('Courier', 'From orbit: to the Moon and back') && v('Courier', 'Takes off from a runway') === false, 'Courier: built for space, judged from orbit');
   t.check(verdicts.Selene._html >= 5, `mission check is shown (${verdicts.Selene._html} rows)`);
   t.log(JSON.stringify(verdicts));
 

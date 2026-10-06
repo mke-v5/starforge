@@ -49,6 +49,9 @@ vec3 bump(vec3 N, float h){
   float dhx = dFdx(h), dhy = dFdy(h);
   vec3 r1 = cross(dpdy, N), r2 = cross(N, dpdx);
   float det = dot(dpdx, r1);
+  // seen edge-on (a tile's skirt hanging straight down, or the ground at a grazing angle) the derivatives say
+  // nothing about the ground: leave the normal alone rather than blow it up
+  if (abs(det) < 0.05 * length(dpdx) * length(dpdy)) return N;
   vec3 g = sign(det) * (dhx * r1 + dhy * r2);
   return normalize(abs(det) * N - g);
 }
@@ -515,7 +518,7 @@ export class Planet {
       const e2 = (e + 1) % cnt;
       const ka = edge[e], kb = edge[e2];
       const ia = ka % st, ja = (ka / st) | 0, ib = kb % st, jb = (kb / st) | 0;
-      if (Math.min(ia, ib) >= i0 && Math.max(ia, ib) <= i1 && Math.min(ja, jb) >= j0 && Math.max(ja, jb) <= j1) idx.push(ka, nv + e, kb, kb, nv + e, nv + e2);
+      if (Math.min(ia, ib) >= i0 && Math.max(ia, ib) <= i1 && Math.min(ja, jb) >= j0 && Math.max(ja, jb) <= j1) idx.push(ka, kb, nv + e, kb, nv + e2, nv + e);
     }
     const g = new THREE.BufferGeometry();
     const src = t.mesh.geometry;
@@ -691,7 +694,7 @@ export class Planet {
     const cnt = edge.length;
     for (let e = 0; e < cnt; e++) {
       const e2 = (e + 1) % cnt;
-      idx.push(edge[e], nv + e, edge[e2], edge[e2], nv + e, nv + e2);
+      idx.push(edge[e], edge[e2], nv + e, edge[e2], nv + e2, nv + e);   // facing out of the tile, toward its neighbour
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));

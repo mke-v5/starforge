@@ -172,7 +172,7 @@ export class MapView {
       setLine(lM, P.moonPts, 4, moonNow);
       if (P.soiOutIdx >= 0) setLine(lA, P.earthPts, 3, zero, P.soiOutIdx); else lA.visible = false;
     };
-    drawPred(this.pred, this.lineEarth, this.lineMoon, this.lineEarthAfter);
+    drawPred(this.onGround() ? null : this.pred, this.lineEarth, this.lineMoon, this.lineEarthAfter);   // no path through the ground while parked
     drawPred(this.predNode, this.lineNode, this.lineNodeMoon, this.lineNodeAfter);
     if (this.moonOrbit) setLine(this.lineMoonOrbit, this.moonOrbit.pts, 3, new THREE.Vector3());
     if (this.stPts) setLine(this.lineStation, this.stPts, 3, new THREE.Vector3()); else this.lineStation.visible = false;
@@ -270,7 +270,8 @@ export class MapView {
     const rs = relState(ship, body);
     const el = elements(rs.r, rs.v, rs.mu);
     const center = body === EARTH ? new THREE.Vector3() : moonNow;
-    if (el.e < 1 && el.ev.length() > 1e-4) {
+    const ground = this.onGround();
+    if (el.e < 1 && el.ev.length() > 1e-4 && !ground) {
       const peDir = el.ev.clone().normalize();
       if (el.pe > body.R) add(center.clone().addScaledVector(peDir, el.pe), `Pe ${U.dist(el.pe - body.R)}`);
       if (isFinite(el.ap)) add(center.clone().addScaledVector(peDir, -el.ap), `Ap ${U.dist(el.ap - body.R)}`);
@@ -284,13 +285,19 @@ export class MapView {
       if (this.ca.d > 20000) add(this.ca.rSt, `${STATION.short} then`, 'st');
     }
     const P = this.pred;
-    if (P && P.closeMoon && P.closeMoon.d < MOON.soi && P.moonPts.length) {
+    if (P && P.closeMoon && P.closeMoon.d < MOON.soi && P.moonPts.length && !ground) {
       add(moonNow.clone().add(P.closeMoon.r), `Moon Pe ${U.dist(P.closeMoon.d - MOON.R)}`, 'moon');
     }
     if (P && P.soiIn && !P.startInSoi) add(moonPos(P.soiIn, new THREE.Vector3()), 'Moon at encounter', 'moon');
-    if (P && P.impact) add(P.impact.body === EARTH ? P.impact.r : moonNow.clone().add(P.impact.r), P.impact.body === EARTH ? 'Impact/Reentry' : 'Lunar impact', 'moon');
+    if (P && P.impact && !ground) add(P.impact.body === EARTH ? P.impact.r : moonNow.clone().add(P.impact.r), P.impact.body === EARTH ? 'Impact/Reentry' : 'Lunar impact', 'moon');
     if (this.dstMark.visible && this.game.dest) add(this.dstMark.position.clone().add(this.camI), `${this.game.dest.code || this.game.dest.name}`, '');
     if (this.predNode && this.predNode.start) add(this.predNode.start, 'Burn', 'node');
+  }
+
+  // parked, rolling on wheels or standing on legs (not docked: the station is in orbit)
+  onGround() {
+    const ship = this.game.ship, E = ship.env;
+    return !ship.docked && (!!ship.parked || ship.contacts > 0 || (E.agl < 30 && E.vSurf < 3));
   }
 
   renderInfo() {
@@ -298,10 +305,17 @@ export class MapView {
     const body = ship.env.body;
     const rs = relState(ship, body);
     const el = elements(rs.r, rs.v, rs.mu);
-    let h = `<div><b>${body.name}</b> · ${U.dist(ship.env.h)} up · ${U.speed(rs.v.length()).join(' ')}</div>`;
-    const P = this.pred;
-    const arr = this.arrival();
-    if (arr) {
+    const P = this.onGround() ? null : this.pred;
+    const arr = P && this.arrival();
+    let h;
+    if (!P) {
+      // sitting on the ground: where, not an orbit through the planet
+      const E = ship.env, pl = body === EARTH ? this.game.places.near(E.lat, E.lon) : null;
+      const ll = `${Math.abs(E.lat).toFixed(2)}°${E.lat >= 0 ? 'N' : 'S'} ${Math.abs(E.lon).toFixed(2)}°${E.lon >= 0 ? 'E' : 'W'}`;
+      h = `<div><b>${body.name}</b> · on the ground</div><div>${pl && pl.kind !== 'point' ? `${pl.kind === 'airport' ? 'At' : 'Near'} <b>${pl.name}</b> · ` : ''}${ll}</div>`;
+      if (body === MOON) { const site = MOON_SITES.reduce((b, x) => { const d = gcDist(E.lat, E.lon, x.lat, x.lon, MOON.R); return !b || d < b.d ? { x, d } : b; }, null); if (site && site.d < 300000) h += `<div style="color:var(--violet)">${site.d < 3000 ? 'At' : U.dist(site.d) + ' from'} ${site.x.name}</div>`; }
+    } else h = `<div><b>${body.name}</b> · ${U.dist(ship.env.h)} up · ${U.speed(rs.v.length()).join(' ')}</div>`;
+    if (!P) { /* nothing orbital to show */ } else if (arr) {
       // on the way to Earth the two-body numbers are skewed by the Moon: show the predicted arrival instead
       h += `<div>Arrival periapsis <b>${arr.peAlt < 0 ? 'below the surface' : U.dist(arr.peAlt)}</b> in <b>${fmtTime(arr.t - ship.t)}</b></div>`;
       h += `<div>Arrival inclination <b>${(arr.inc * 57.2958).toFixed(1)}°</b></div>`;
@@ -394,9 +408,9 @@ export class MapView {
         btns.push([(shield ? 'Return to Earth (direct reentry)' : 'Return to Earth orbit') + lined, () => this.planAsync((cb) => planReturn(ship, shield ? 45000 : 250000, cb, { iMin: this.iMinFor(hm) }))]);
       }
       if (E.agl < 20000 && E.vSurf < 300) btns.push(['Autopilot: take off to lunar orbit', () => { this.game.engage(ascentAp()); this.game.toggleMap(); }]);
-      if (el.e < 1) btns.push(['Circularize at apoapsis', () => this.plan(() => planCircularize(ship, true))]);
+      if (el.e < 1 && !landed) btns.push(['Circularize at apoapsis', () => this.plan(() => planCircularize(ship, true))]);
       if (el.e < 1 && !landed) btns.push(['Land at a site…', () => this.pickMoonSite()]);
-      btns.push(['Autopilot: land on the Moon', () => { this.game.engage(landAp()); this.game.toggleMap(); }]);
+      if (!landed) btns.push(['Autopilot: land on the Moon', () => { this.game.engage(landAp()); this.game.toggleMap(); }]);
     }
     return btns;
   }

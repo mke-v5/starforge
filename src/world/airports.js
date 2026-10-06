@@ -163,19 +163,19 @@ export class Airports {
   // build runway meshes for runways within dist of (lat,lon); drop far ones. Meshes are in Earth-fixed coords.
   updateMeshes(lat, lon, dist, shared) {
     if (!this.ready) return;
-    const want = new Set();
+    const want = new Set(), near = [];
     for (let a = -1; a <= 1; a++) for (let o = -1; o <= 1; o++) {
       const list = this.grid.get((Math.floor(lat) + a) + '|' + (Math.floor(lon) + o));
       if (!list) continue;
-      for (const rw of list) if (gcDist(lat, lon, rw.latC, rw.lonC) < dist) want.add(rw.idx);
+      for (const rw of list) {
+        const d = gcDist(lat, lon, rw.latC, rw.lonC);
+        if (d < dist) { want.add(rw.idx); if (!this.meshes.has(rw.idx)) near.push([d, rw.idx]); }
+      }
     }
     for (const [i, g] of this.meshes) if (!want.has(i)) { this.group.remove(g); g.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); this.meshes.delete(i); }
-    let built = 0;
-    for (const i of want) {
-      if (this.meshes.has(i) || built > 2) continue;
-      const g = this.buildRunway(this.runways[i], shared);
-      this.meshes.set(i, g); this.group.add(g); built++;
-    }
+    // a few at a time, nearest first (the runway under the wheels before the ones across the bay)
+    near.sort((a, b) => a[0] - b[0]);
+    for (const [, i] of near.slice(0, 3)) { const g = this.buildRunway(this.runways[i], shared); this.meshes.set(i, g); this.group.add(g); }
   }
 
   buildRunway(rw, shared) {
@@ -301,7 +301,9 @@ const RWY_VERT = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_vertex>
 varying vec2 vUv; varying vec3 vW; varying vec3 vN;
-void main(){ vUv = uv; vN = mat3(modelMatrix) * normal; vec4 wp = modelMatrix * vec4(position,1.0); vW = wp.xyz;
+void main(){ vUv = uv; vN = mat3(modelMatrix) * normal; vec4 wp = modelMatrix * vec4(position,1.0);
+  wp.xyz *= 0.995;   // a touch more view-ray depth bias than roads (0.4 %), so a road under the runway stays under it
+  vW = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
   #include <logdepthbuf_vertex>
 }`;
@@ -346,16 +348,18 @@ function runwayMaterial(shared, t1, t2, len, w) {
   return new THREE.ShaderMaterial({
     uniforms: { uEnd1: { value: t1 }, uEnd2: { value: t2 }, uLen: { value: len }, uW: { value: w }, uSun: shared.uSun, uCamAlt: shared.uCamAlt, uFogK: shared.uFogK },
     vertexShader: RWY_VERT, fragmentShader: RWY_FRAG,
-    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, ...PAVED,
   });
 }
+// runways and aprons mark their pixels in the stencil buffer; roads and water skip those pixels
+export const PAVED = { stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp };
 
 // A hangar building with apron, built in a local frame (x = right of runway direction, y = up, -z = toward runway direction)
 // A launch pad: concrete square with a flame trench, a lattice service tower with an access arm, floodlights
 // and red obstruction lights. Local frame: y up, the rocket stands at the origin.
 export function buildLaunchPad() {
   const g = new THREE.Group();
-  const conc = new THREE.MeshStandardMaterial({ color: 0x8d9096, roughness: 0.92, metalness: 0.0 });
+  const conc = new THREE.MeshStandardMaterial({ color: 0x8d9096, roughness: 0.92, metalness: 0.0, ...PAVED });
   const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.9 });
   const steel = new THREE.MeshStandardMaterial({ color: 0xc23a2a, roughness: 0.6, metalness: 0.3 });
   const grey = new THREE.MeshStandardMaterial({ color: 0x9aa1aa, roughness: 0.5, metalness: 0.6 });
@@ -390,7 +394,7 @@ export function buildHangar() {
   const wall = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, metalness: 0.4, roughness: 0.55 });
   const roof = new THREE.MeshStandardMaterial({ color: 0x5d6670, metalness: 0.5, roughness: 0.5 });
   const accent = new THREE.MeshStandardMaterial({ color: 0xffb347, emissive: 0x3a2200, metalness: 0.2, roughness: 0.6 });
-  const floor = new THREE.MeshStandardMaterial({ color: 0x6f7378, metalness: 0.0, roughness: 0.9 });
+  const floor = new THREE.MeshStandardMaterial({ color: 0x6f7378, metalness: 0.0, roughness: 0.9, ...PAVED });
   const W = 70, D = 60, H = 18;
   // apron
   const apron = new THREE.Mesh(new THREE.BoxGeometry(240, 0.4, 230), floor);

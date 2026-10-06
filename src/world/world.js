@@ -203,7 +203,7 @@ export class World {
     this.shared.uNightK.value = 0.12 + 0.88 * smoothstep(1500, 25000, ll.h);
     // airports near the camera
     const agl = ll.h - ground;
-    if (this.frame % 15 === 0) this.airports.updateMeshes(ll.lat, ll.lon, agl < 30000 ? 45000 : 0, this.shared);
+    if (this.frame % 15 === 0 || !this.airports.meshes.size) this.airports.updateMeshes(ll.lat, ll.lon, agl < 30000 ? 45000 : 0, this.shared);
     this.airports.setNight(night);
     this.buildings.update(ll.lat, ll.lon, agl, this.earth);
     this.clouds.update(camE0, ll, this.settings.clouds !== '0', night);

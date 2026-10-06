@@ -36,4 +36,19 @@ export default async function (t) {
   t.check(fb.mode === 'flyby' && fb.same && fb.moved && fb.dNow < 4000, `fly-by camera holds still (${fb.d0.toFixed(0)} → ${fb.d1.toFixed(0)} m) then moves ahead`);
   await t.shot('ground-flyby');
   await t.eval(() => { __sf.camMode = 'chase'; });
+  const rw = await runwayFirst(t);
+  t.check(rw.built && rw.stencil, `the runway under the wheels is built first (${rw.n} built), roads masked off it`);
+}
+
+// (a second check) the runway you start on is the first one built, with roads masked off it
+export async function runwayFirst(t) {
+  return t.eval(async () => {
+    const sf = __sf;
+    await __t.start('Kestrel', { type: 'runway', airport: 'SFO', rw: '28R' });
+    await __t.sim(0.1, { dt: 0.05 });
+    const A = sf.world.airports, idx = sf.site.rw.idx;
+    const mesh = A.meshes.get(idx);
+    const mat = mesh && mesh.children[0].material, road = sf.world.buildings.roadMat;
+    return { built: !!mesh, n: A.meshes.size, stencil: !!(mat && mat.stencilWrite && road && road.stencilWrite && road.stencilFunc !== mat.stencilFunc) };
+  });
 }

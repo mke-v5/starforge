@@ -284,7 +284,6 @@ class Game {
     this.prevContacts = 0;
     this.cam.init = false;
     this.camMode = 'chase';
-    this.rec = this.newRecord(site.label || (site.airport ? `${site.airport.iata || site.airport.ident}` : site.name || site.type));
     this.cam.dist = Math.max(12, craft.size * 1.5 + 8);
     this.cam.yaw = 0; this.cam.pitch = craft.vertical ? 0.05 : 0.16;
     this.progress.startFlight({ airport: site.airport, ownPad: site.type === 'padAt', custom: !PRESETS.some((p) => p.make().name === this.design.name) });
@@ -322,6 +321,7 @@ class Game {
     } else if (site.type === 'air') {
       lat = site.lat; lon = site.lon; hdg = site.hdg * D2R; needGround = false;
     } else needGround = false;
+    this.rec = this.newRecord(this.siteLabel(site, lat, lon));
     if (site.type === 'docked' || site.type === 'stationNear') {
       // off the station's aft port, facing it; docked there if the ship has a docking port
       const st = this.station, t = ship.t;
@@ -964,17 +964,18 @@ class Game {
     this.camera.position.set(0, 0, 0); this.camera.up.set(0, 1, 0);
     const d = this.camI.clone().negate().normalize();
     this.camera.lookAt(d);
-    // frame the planet beside the menu on wide screens, low behind it on tall ones
-    const asp = this.camera.aspect, tanV = Math.tan((this.camera.fov * D2R) / 2), tanH = tanV * asp;
+    // frame the planet beside the menu on wide screens, low behind it on tall ones: a lens shift rather than
+    // turning the camera, so the planet stays on the optical axis and round
+    const asp = this.camera.aspect;
     const nx = asp > 1.15 ? clamp(0.25 + (asp - 1.15) * 0.25, 0.25, 0.42) : 0, ny = asp > 1.15 ? -0.04 : -0.55;
-    const dc = new THREE.Vector3(nx * tanH, ny * tanV, -1).normalize();
-    this.camera.quaternion.multiply(new THREE.Quaternion().setFromUnitVectors(dc, new THREE.Vector3(0, 0, -1)));
-    this.camera.near = 1000; this.camera.updateProjectionMatrix();
+    this.camera.near = 1000;
+    this.camera.setViewOffset(1000 * asp, 1000, -nx * 500 * asp, ny * 500, 1000 * asp, 1000);
     this.world.update(this.camI, this.camera, this.eph, dt);
   }
 
   flightFrame(dt, inp, keys, camIn) {
     const ship = this.ship, C = this.controller, craft = this.craft;
+    if (this.camera.view && this.camera.view.enabled) this.camera.clearViewOffset();   // the title's lens shift
     // keys
     for (const k of keys) this.key(k);
     if (this.paused || this.state === 'boot') { this.eph.update(ship.t); this.placeCamera(dt, camIn); this.world.update(this.camI, this.camera, this.eph, dt); this.placeShip(); this.station.update(this.camI, this.eph, this.flightTime); return; }
@@ -1155,6 +1156,23 @@ class Game {
   }
 
   // ---- the flight log: peaks, distance and a track while flying; a summary in the logbook when it ends ----
+  siteLabel(site, lat, lon) {
+    if (site.label) return site.label;
+    const ap = site.airport, code = ap ? ap.iata || ap.ident : '';
+    const near = () => { try { return this.places.near(lat, lon).name; } catch (e) { return `${lat.toFixed(1)}, ${lon.toFixed(1)}`; } };
+    switch (site.type) {
+      case 'runway': return `${code} ${site.rw ? (site.fromLe ? site.rw.le : site.rw.he) : ''}`.trim();
+      case 'hangar': return `${code} hangar`;
+      case 'pad': return `${code} pad`;
+      case 'padAt': return `pad at ${near()}`;
+      case 'air': return `over ${near()}`;
+      case 'moon': return site.name || 'the Moon';
+      case 'orbit': return `${Math.round((site.alt || 400000) / 1000)} km orbit`;
+      case 'lunarOrbit': return 'lunar orbit';
+      case 'docked': case 'stationNear': return 'Meridian Station';
+    }
+    return site.name || site.type;
+  }
   newRecord(from) { return { from, design: this.design.name, start: Date.now(), dist: 0, maxMach: 0, maxAlt: 0, maxV: 0, moon: false, landedAt: null, track: [], acc: 0, gameT: 0 }; }
   record(dt) {
     const R = this.rec, ship = this.ship;
@@ -1180,7 +1198,7 @@ class Game {
   logFlight() {
     const R = this.rec, ship = this.ship;
     this.rec = null;
-    if (!R || !ship || this.flightTime < 15) return;
+    if (!R || !ship || (this.flightTime < 15 && !ship.dead)) return;   // short hops aren't worth a line; crashes are
     const E = ship.env;
     let outcome;
     if (ship.dead) outcome = 'Crashed';

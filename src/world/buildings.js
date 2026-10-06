@@ -52,6 +52,8 @@ void main(){
   #include <colorspace_fragment>
 }`;
 
+// not drawn where a runway or apron already is (they set stencil 1)
+const UNPAVED = { stencilWrite: true, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc, stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilZPass: THREE.KeepStencilOp };
 // Roads: asphalt by class with lane markings (dashed centre line, solid edge lines on big roads); railways as
 // gravel beds with rails. They fade out with distance so the edge of the streamed area never shows.
 const ROAD_VERT = /* glsl */`
@@ -167,8 +169,8 @@ export class Buildings {
     this.fadeU = { value: 4000 };
     const common = { uSun: shared.uSun, uCamAlt: shared.uCamAlt, uFogK: shared.uFogK, uNight: this.nightU, uFade: this.fadeU, uOrigin: { value: new THREE.Vector3() } };
     const vert = ROAD_VERT.replace('#include <common>', '#include <common>\nuniform vec3 uOrigin; uniform float uBias;');
-    this.roadMat = new THREE.ShaderMaterial({ uniforms: { ...common, uBias: { value: 0.004 } }, vertexShader: vert, fragmentShader: ROAD_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide });
-    this.waterMat = new THREE.ShaderMaterial({ uniforms: { ...common, uTime: shared.uTime, uBias: { value: 0.003 } }, vertexShader: vert, fragmentShader: WATER_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    this.roadMat = new THREE.ShaderMaterial({ uniforms: { ...common, uBias: { value: 0.004 } }, vertexShader: vert, fragmentShader: ROAD_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide, ...UNPAVED });
+    this.waterMat = new THREE.ShaderMaterial({ uniforms: { ...common, uTime: shared.uTime, uBias: { value: 0.003 } }, vertexShader: vert, fragmentShader: WATER_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide, ...UNPAVED });
     this.roadsOn = true;
     this.worker = null;
     this.jobs = new Map();

@@ -88,7 +88,7 @@ export function missionCheck(c, design) {
   const moonTwr = landT / (mass * gMoon);
   out.push({
     ok: orbit.ok && dv >= needMoon && moonTwr > 1.3, label: 'Lands on the Moon and comes home',
-    detail: moonTwr <= 1.3 ? `too little thrust for lunar gravity (TWR ${moonTwr.toFixed(1)} there)` : `Δv ${fmt(dv)} of ~${fmt(needMoon)} m/s`,
+    detail: landT <= 0 ? 'needs rocket engines — there’s no air on the Moon' : moonTwr <= 1.3 ? `too little thrust for lunar gravity (TWR ${moonTwr.toFixed(1)} there)` : `Δv ${fmt(dv)} of ~${fmt(needMoon)} m/s`,
   });
 
   // ---- coming back through the air ----

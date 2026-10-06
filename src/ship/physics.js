@@ -536,7 +536,7 @@ export class Ship {
     if (controller) controller.update(this, dt);
     this.contacts = Math.max(1, this.contacts);
     for (const G of this.craft.gears) { G.gear.contact = true; G.gear.deployed = 1; }
-    this.gForce = 1;
+    this.gForce = P.body.mu / (P.body.R * P.body.R) / G0;   // resting on the ground: local gravity
     this.craft.recompute();
     this.upkeep(dt);
     // wake up on throttle, stick input or brake release on wheels

@@ -20,7 +20,6 @@ export default async function (t) {
     __t.inp.pitch = -1;
     await __t.sim(60, { allowDead: true, until: (s) => s.ship.dead });
     __t.inp.pitch = 0;
-    await __t.sim(20, { allowDead: true });
     sf.toTitle();
     // too short to log
     await __t.start('Kestrel', { type: 'air', lat: 37.0, lon: -123.5, alt: 1500, hdg: 90, speed: 200 });
@@ -34,7 +33,7 @@ export default async function (t) {
   t.log(JSON.stringify(r.a[0]));
   t.log(r.rows.join(' | '));
   const f = r.a[0];
-  t.check(r.a.length === 1 && f && f.design === 'Kestrel' && f.outcome === 'Still flying', `a flight is logged when it ends (${f && f.outcome})`);
+  t.check(r.a.length === 1 && f && f.design === 'Kestrel' && f.outcome === 'Still flying' && /^over [A-Z]/.test(f.from), `a flight is logged when it ends (${f && f.from} → ${f && f.outcome})`);
   t.check(f && f.dur >= 115 && f.dur <= 130 && f.dist >= 18 && f.dist <= 40 && f.maxMach > 0.4 && f.maxAlt >= 1, `with its time, distance and peaks (${f && f.dur} s, ${f && f.dist} km, Mach ${f && f.maxMach})`);
   t.check(r.track.pts > 10 && r.track.vis && r.track.n > 10, `the map draws the track (${r.track.pts} points)`);
   t.check(r.b.length === 2 && r.b[0].outcome === 'Crashed', `a crash is logged, a 3-second hop isn’t (${r.b.map((x) => x.outcome).join(', ')})`);

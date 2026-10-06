@@ -68,7 +68,8 @@ const VERT = /* glsl */`
 attribute vec4 aPuff;   // offset from the layer origin (Earth-fixed), size
 attribute vec4 aInfo;   // atlas cell, brightness, -, -
 uniform float uOpacity; uniform vec3 uOrigin; uniform float uRange;
-varying vec2 vUv; varying float vA; varying vec3 vW; varying float vShade; varying vec2 vCell;
+varying vec2 vUv; varying float vA; varying vec3 vW; varying float vShade; varying vec2 vCell; varying float vSunEl;
+uniform vec3 uSun;
 void main(){
   vec4 c = modelMatrix * vec4(aPuff.xyz, 1.0);
   // face the camera but stay upright on the planet (so they tilt with the horizon when the plane banks)
@@ -79,7 +80,7 @@ void main(){
   right = normalize(right);
   vec3 up = cross(right, vd);
   vec3 wp = c.xyz + (right * position.x + up * position.y) * aPuff.w;
-  vW = wp; vUv = uv; vShade = aInfo.y;
+  vW = wp; vUv = uv; vShade = aInfo.y; vSunEl = dot(upW, normalize(uSun));
   vCell = vec2(mod(aInfo.x, 2.0), floor(aInfo.x / 2.0)) * 0.5;
   // fade puffs right up close (the view turns white instead) and far away
   float d = length(c.xyz);
@@ -91,7 +92,7 @@ const FRAG = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_fragment>
 uniform sampler2D uMap; uniform vec3 uSun; uniform float uNight; uniform float uFogK; uniform float uCamAlt;
-varying vec2 vUv; varying float vA; varying vec3 vW; varying float vShade; varying vec2 vCell;
+varying vec2 vUv; varying float vA; varying vec3 vW; varying float vShade; varying vec2 vCell; varying float vSunEl;
 void main(){
   #include <logdepthbuf_fragment>
   vec4 tx = texture2D(uMap, vCell + vUv * 0.5);
@@ -101,8 +102,9 @@ void main(){
   vec3 V = normalize(-vW);
   vec2 q = vUv * 2.0 - 1.0;
   float sunTo = dot(normalize(uSun), -V);                 // sun behind the cloud: a bright rim
-  float day = 1.0 - uNight;
-  vec3 sunCol = mix(vec3(1.0, 0.6, 0.38), vec3(1.0, 0.98, 0.95), smoothstep(-0.05, 0.3, uSun.y * 0.0 + day));
+  // the sun as it stands over this cloud: golden and low at dawn and dusk, gone at night
+  float day = smoothstep(-0.12, 0.04, vSunEl);
+  vec3 sunCol = mix(vec3(1.0, 0.52, 0.3), vec3(1.0, 0.98, 0.95), smoothstep(0.0, 0.3, vSunEl));
   float lit = 0.55 + 0.35 * q.y + 0.2 * max(sunTo, 0.0);
   vec3 col = tx.rgb * vShade * (sunCol * lit * day + vec3(0.06, 0.07, 0.1) * (0.3 + 0.7 * day));
   float fog = 1.0 - exp(-length(vW) * exp(-min(uCamAlt, 3000.0) / 8000.0) * uFogK);

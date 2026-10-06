@@ -1177,6 +1177,8 @@ class Game {
     const g = E.body.mu / Math.pow(E.body.R + E.h, 2);
     x.twr = T / (craft.mass * g);
     const airborne = ship.contacts === 0;
+    x.cloudFog = this.camMode === 'cockpit' || this.camMode === 'chase' ? this.world.clouds.fog : 0;
+    x.night = this.world.shared.night;
     x.stress = craft.wings.reduce((m, P) => Math.max(m, P.alive !== false ? P.wing.load : 0), 0);
     x.stall = airborne && E.q > 50 && E.vSurf > 20 && E.mach < 2.5 && craft.wings.some((P) => P.wing.stalled && P.wing.area > 4);
     x.pullUp = airborne && E.vVert < -25 && E.agl < -E.vVert * 7 && E.agl < 1500;

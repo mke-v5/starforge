@@ -376,6 +376,14 @@ export class Hud {
     if (obh) { if (ob._h !== obh) { ob._h = obh; ob.innerHTML = obh; } ob.hidden = false; } else { ob.hidden = true; ob._h = ''; }
     T.nav.classList.toggle('on', !!extra.dest);
     T.nav.hidden = E.body !== EARTH && !extra.dest;
+    // inside a cloud the view goes white (grey at night)
+    const cf = extra.cloudFog || 0;
+    if (Math.abs(cf - (this._cf || 0)) > 0.02) {
+      this._cf = cf;
+      const fe = document.getElementById('cloudfog');
+      fe.style.opacity = (cf * 0.92).toFixed(2);
+      fe.style.background = extra.night > 0.5 ? '#2a2f38' : '#e9eef4';
+    }
     // imagery credit while the Earth's map tiles are in view
     const att = E.body === EARTH && E.h < 3e6;
     if (this._att !== att) { this._att = att; document.getElementById('h-attrib').hidden = !att; }

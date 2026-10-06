@@ -23,7 +23,7 @@ export const HELP_HTML = `
 <h3>Launch pads</h3>
 <p>Rockets start from a pad beside any airport's runway — or pick <b>Launch → Pad</b>, search any city, and choose <b>Build a launch pad at…</b> to launch from right there (on the sea it floats like a barge).</p>
 <h3>Views</h3>
-<p>The camera button cycles chase, cockpit, free (turns with the ship) and <b>fly-by</b>, which stands beside your flight path and watches you pass. Low over the ground you'll see roads, rivers and lakes from OpenStreetMap; above about 80 km the stars come out even in daylight.</p>
+<p>The camera button cycles chase, cockpit, free (turns with the ship) and <b>fly-by</b>, which stands beside your flight path and watches you pass. Low over the ground you'll see roads, rivers and lakes from OpenStreetMap; above about 80 km the stars come out even in daylight. Below 10 km the weather you saw from space is there in 3D — cumulus decks you can fly over, under and through (the view whites out inside one).</p>
 <p>Flying a rocket by hand, coast up out of the air and the HUD offers to <b>circularize at apoapsis</b> — one tap plans and flies the burn.</p>
 <h3>Heat and damage</h3>
 <p>Coming back from space at 7–11 km/s heats your ship. Fly belly-first at a high angle of attack so the heat-tiled underside and heat shields take it. Parts that overheat burn away. Landing too hard breaks gear; hitting the ground or a building destroys the ship. Fusion drives also run hot — bring radiators.</p>

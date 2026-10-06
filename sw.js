@@ -1,5 +1,5 @@
 // Service worker: app shell cached for offline start, map tiles cached as you fly (bounded).
-const VERSION = 'starforge-v8';
+const VERSION = 'starforge-v9';
 const SHELL = ['./', './index.html', './style.css', './manifest.webmanifest', './icon.svg', './icon-192.png', './vendor/three.module.js', './data/airports.json', './data/cities.json'];
 const TILE_CACHE = 'starforge-tiles';
 const TILE_LIMIT = 1500;

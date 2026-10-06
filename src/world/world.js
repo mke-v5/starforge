@@ -7,6 +7,7 @@ import { Planet } from './planet.js';
 import { Sky } from './sky.js';
 import { Airports, buildHangar, buildLaunchPad } from './airports.js';
 import { Buildings } from './buildings.js';
+import { CloudLayer } from './clouds.js';
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4();
@@ -40,6 +41,8 @@ export class World {
     this.airports.load().catch((e) => console.warn('airports', e));
     this.earth.group.add(this.airports.group);
     this.buildings = new Buildings(this.loader, this.shared);
+    this.clouds = new CloudLayer(this.shared);
+    this.earth.group.add(this.clouds.group);
     this.setQuality(settings.quality || 'medium');
     this.earth.group.add(this.buildings.group);
     this.hangar = null;
@@ -66,6 +69,7 @@ export class World {
     this.shared.uCloudOct.value = { low: 5, medium: 8, high: 11 }[q] || 8;
     this.shared.uDetail.value = q === 'low' ? 0 : 1;
     this.buildings.radius = q === 'high' ? 2 : 1;
+    if (this.clouds) this.clouds.setQuality(q);
     this.quality = q;
   }
 
@@ -157,6 +161,7 @@ export class World {
     const vp = _m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     // camera in Earth-fixed coordinates
     const camE = eph.toFixed(EARTH, camI, _v);
+    const camE0 = (this._camE || (this._camE = new THREE.Vector3())).copy(camE);
     const ll = toLLH(camE, EARTH.R);
     this.camLL = ll;
     this.earth.update(camE, _m2.multiplyMatrices(vp, this.earth.group.matrixWorld), true);
@@ -201,6 +206,7 @@ export class World {
     if (this.frame % 15 === 0) this.airports.updateMeshes(ll.lat, ll.lon, agl < 30000 ? 45000 : 0, this.shared);
     this.airports.setNight(night);
     this.buildings.update(ll.lat, ll.lon, agl, this.earth);
+    this.clouds.update(camE0, ll, this.settings.clouds !== '0', night);
     this.agl = agl;
     return { bright, night, sunEl, agl };
   }

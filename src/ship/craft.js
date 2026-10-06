@@ -213,6 +213,7 @@ export class Craft {
     this.solar = this.parts.reduce((s, P) => s + (P.alive && P.def.solar ? P.def.solar : 0), 0);
     this.reactors = this.parts.filter((P) => P.alive && P.def.reactor);
     this.root = this.parts[0];
+    this.computeStages();
     // extents for camera framing
     const box = new THREE.Box3();
     for (const P of this.parts) if (P.alive) for (const c of P.contacts) box.expandByPoint(c);
@@ -226,14 +227,54 @@ export class Craft {
   amount(k) { let s = 0; for (const P of this.parts) if (P.alive && P.res[k]) s += P.res[k].amt; return s; }
   capacity(k) { let s = 0; for (const P of this.parts) if (P.alive && P.res[k]) s += P.res[k].cap; return s; }
   // remove `kg` of resource k evenly from all tanks; returns amount actually drawn
+  // take kg of resource k: from the tanks that will be dropped soonest first (spread evenly within a stage)
   draw(k, kg) {
     if (kg <= 0) return 0;
     const tanks = this.parts.filter((P) => P.alive && P.res[k] && P.res[k].amt > 0);
-    let total = 0; for (const P of tanks) total += P.res[k].amt;
-    if (total <= 0) return 0;
-    const take = Math.min(kg, total);
-    for (const P of tanks) P.res[k].amt -= take * (P.res[k].amt / total);
-    return take;
+    if (!tanks.length) return 0;
+    let got = 0;
+    while (got < kg - 1e-9 && tanks.length) {
+      const st = Math.min(...tanks.map((P) => P.stage));
+      const now = tanks.filter((P) => P.stage === st);
+      let total = 0; for (const P of now) total += P.res[k].amt;
+      const take = Math.min(kg - got, total);
+      for (const P of now) P.res[k].amt -= take * (P.res[k].amt / total);
+      got += take;
+      if (take >= total - 1e-9) for (const P of now) { P.res[k].amt = 0; tanks.splice(tanks.indexOf(P), 1); }
+    }
+    return got;
+  }
+
+  // ---------- staging ----------
+  // Decouplers fire in groups: those with no other decoupler outboard of them, side (radial) ones before stack
+  // ones. Each part gets P.stage = the group that drops it (1, 2, …; Infinity for the part of the ship that stays).
+  computeStages() {
+    const alive = (P) => P && P.alive;
+    const dec = this.parts.filter((P) => alive(P) && P.def.decoupler);
+    const sub = (P, out = []) => { out.push(P); for (const k of P.kids) if (alive(this.parts[k])) sub(this.parts[k], out); return out; };
+    const groups = [], left = new Set(dec);
+    while (left.size) {
+      const leaves = [...left].filter((D) => !sub(D).some((Q) => Q !== D && left.has(Q)));
+      const radial = leaves.filter((D) => D.def.decoupler.radial);
+      const g = radial.length ? radial : leaves;
+      groups.push(g); for (const D of g) left.delete(D);
+    }
+    for (const P of this.parts) P.stage = Infinity;
+    groups.forEach((g, i) => { for (const D of g) for (const Q of sub(D)) if (Q.stage === Infinity) Q.stage = i + 1; });
+    this.stageGroups = groups;
+    this.stagesLeft = groups.length;
+  }
+  // drop the next stage: returns the parts that came off (empty if there's nothing to stage)
+  separate() {
+    const g = this.stageGroups && this.stageGroups[0];
+    if (!g) return [];
+    const removed = [];
+    const rm = (Q) => { if (!Q.alive) return; Q.alive = false; removed.push(Q); for (const k of Q.kids) rm(this.parts[k]); };
+    for (const D of g) rm(D);
+    for (const Q of removed) if (Q.mesh) Q.mesh.visible = false;
+    this._intake = undefined;
+    this.recompute();
+    return removed;
   }
   refuel() { for (const P of this.parts) for (const k in P.res) P.res[k].amt = P.res[k].cap; this.ec = this.ecCap; this.recompute(); }
 

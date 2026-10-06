@@ -30,6 +30,7 @@ export const MILESTONES = [
   { id: 'ionDrive', name: 'Patience', desc: 'Run an ion drive for ten minutes.' },
   { id: 'antimatter', name: 'Matter, meet antimatter', desc: 'Fire an antimatter torch.' },
   { id: 'shared', name: 'Show and tell', desc: 'Share a ship as a code or link, or import someone else’s.' },
+  { id: 'staged', name: 'Staging', desc: 'Drop a spent stage in flight.' },
 ];
 
 export class Progress {

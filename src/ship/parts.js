@@ -27,6 +27,7 @@ export const CATS = [
   { id: 'gear', name: 'Landing gear' },
   { id: 'aero', name: 'Nose & adapters' },
   { id: 'utility', name: 'Utility' },
+  { id: 'stage', name: 'Staging' },
 ];
 
 const stack = (len, size, top = true, bot = true, sizeTop = size, sizeBot = size) => {
@@ -39,7 +40,8 @@ const stack = (len, size, top = true, bot = true, sizeTop = size, sizeBot = size
 // Volume helper: usable propellant mass for a cylinder
 const cyl = (d, l) => Math.PI * (d / 2) ** 2 * l * 0.85;
 const LF_RHO = 810, OX_RHO = 1140;
-const rocketTank = (d, l) => { const v = cyl(d, l); const lf = v * 0.33 * LF_RHO, ox = v * 0.67 * OX_RHO * 0.92; return { LF: Math.round(lf), OX: Math.round(ox) }; };
+// fuel and oxidizer in the 31:69 mix the rocket engines burn, so neither is left over
+const rocketTank = (d, l) => { const v = cyl(d, l); const lf = v * 0.368 * LF_RHO, ox = v * 0.632 * OX_RHO * 0.92; return { LF: Math.round(lf), OX: Math.round(ox) }; };
 const jetTank = (d, l) => ({ LF: Math.round(cyl(d, l) * LF_RHO * 0.8) });
 
 export const PARTS = [
@@ -92,16 +94,16 @@ export const PARTS = [
     engine: { type: 'hybrid', thrust: 200000, isp: 3400, fuel: { LF: 1 }, maxMach: 5.8, ceiling: 30000, spool: 1.8,
       rocket: { thrust: 300000, ispVac: 450, ispSL: 390, fuel: { LF: 0.31, OX: 0.69 } }, gimbal: 3, heat: 60000 } },
   { id: 'en-comet', cat: 'engine', name: 'Comet rocket', desc: 'Small, reliable kerosene–oxygen rocket.',
-    size: 'S', len: 2.0, mass: 600, maxT: 2000, crash: 7, nodes: stack(2, 'S', true, false), surface: true, mesh: 'rocketS',
+    size: 'S', len: 2.0, mass: 600, maxT: 2000, crash: 7, nodes: stack(2, 'S'), surface: true, mesh: 'rocketS',
     engine: { type: 'rocket', thrust: 90000, ispVac: 340, ispSL: 300, fuel: { LF: 0.31, OX: 0.69 }, spool: 0.25, gimbal: 5, heat: 40000 } },
   { id: 'en-titan', cat: 'engine', name: 'Titan booster', desc: 'Powerful sea-level rocket for heavy lifting.',
-    size: 'M', len: 3.6, mass: 3500, maxT: 2000, crash: 7, nodes: stack(3.6, 'M', true, false), surface: true, mesh: 'rocketM',
+    size: 'M', len: 3.6, mass: 3500, maxT: 2000, crash: 7, nodes: stack(3.6, 'M'), surface: true, mesh: 'rocketM',
     engine: { type: 'rocket', thrust: 900000, ispVac: 330, ispSL: 295, fuel: { LF: 0.31, OX: 0.69 }, spool: 0.4, gimbal: 4, heat: 200000 } },
   { id: 'en-lantern', cat: 'engine', name: 'Lantern vacuum engine', desc: 'Huge nozzle, superb in space, feeble in thick air.',
-    size: 'M', len: 4.0, mass: 1900, maxT: 2000, crash: 6, nodes: stack(4, 'M', true, false), surface: true, mesh: 'rocketVac',
+    size: 'M', len: 4.0, mass: 1900, maxT: 2000, crash: 6, nodes: stack(4, 'M'), surface: true, mesh: 'rocketVac',
     engine: { type: 'rocket', thrust: 280000, ispVac: 385, ispSL: 140, fuel: { LF: 0.31, OX: 0.69 }, spool: 0.3, gimbal: 3, heat: 70000 } },
   { id: 'en-behemoth', cat: 'engine', name: 'Behemoth heavy', desc: '3.75 m main engine with 2.4 MN of thrust.',
-    size: 'L', len: 5.0, mass: 7500, maxT: 2000, crash: 7, nodes: stack(5, 'L', true, false), surface: true, mesh: 'rocketL',
+    size: 'L', len: 5.0, mass: 7500, maxT: 2000, crash: 7, nodes: stack(5, 'L'), surface: true, mesh: 'rocketL',
     engine: { type: 'rocket', thrust: 2400000, ispVac: 345, ispSL: 310, fuel: { LF: 0.31, OX: 0.69 }, spool: 0.5, gimbal: 3, heat: 500000 } },
   { id: 'en-prometheus', cat: 'engine', name: 'Prometheus nuclear', desc: 'Nuclear thermal rocket. Runs on fuel alone with 900 s of efficiency.',
     size: 'M', len: 5.0, mass: 4200, maxT: 2400, crash: 6, nodes: stack(5, 'M', true, false), surface: true, mesh: 'nuclear',
@@ -116,7 +118,7 @@ export const PARTS = [
     size: 'S', len: 3.8, mass: 1500, maxT: 1800, crash: 8, nodes: stack(3.8, 'S', true, false), surface: true, mesh: 'afterburner',
     engine: { type: 'jet', thrust: 80000, isp: 5000, fuel: { LF: 1 }, maxMach: 2.8, ceiling: 21000, spool: 2.0, gimbal: 0, heat: 40000, ab: { thrust: 1.6, isp: 0.25 } } },
   { id: 'en-hydra', cat: 'engine', name: 'Hydra hydrolox engine', desc: 'Liquid hydrogen and oxygen: Isp 455 s in vacuum, the best a chemical rocket gets. Feed it from cryo tanks.',
-    size: 'M', len: 4.2, mass: 2300, maxT: 2000, crash: 7, nodes: stack(4.2, 'M', true, false), surface: true, mesh: 'rocketVac',
+    size: 'M', len: 4.2, mass: 2300, maxT: 2000, crash: 7, nodes: stack(4.2, 'M'), surface: true, mesh: 'rocketVac',
     engine: { type: 'rocket', thrust: 250000, ispVac: 455, ispSL: 360, fuel: { LH2: 0.14, OX: 0.86 }, spool: 0.4, gimbal: 4, heat: 60000 } },
   { id: 'en-ember', cat: 'engine', name: 'Ember antimatter torch', desc: 'A trickle of antimatter heats a torrent of hydrogen: 500 kN at Isp 30,000 s. Needs an antimatter cell, cryo hydrogen and a lot of radiators.',
     size: 'M', len: 6.0, mass: 7800, maxT: 2800, crash: 6, nodes: stack(6, 'M', true, false), surface: true, mesh: 'fusion',
@@ -206,6 +208,11 @@ export const PARTS = [
   { id: 'ut-battery', cat: 'utility', name: 'Battery pack', desc: 'Stores 200 kWh of charge.', size: 'S', len: 0.6, mass: 300, maxT: 1500, ecStore: 200, nodes: stack(0.6, 'S'), surface: true, mesh: 'battery' },
   { id: 'ut-light', cat: 'utility', name: 'Landing light', desc: 'Bright floodlight for night landings.', mass: 15, maxT: 1500, light: true, nodes: [], surface: true, mesh: 'lamp' },
   { id: 'ut-strobe', cat: 'utility', name: 'Nav strobe', desc: 'Blinking position light.', mass: 5, maxT: 1500, strobe: true, nodes: [], surface: true, mesh: 'strobe' },
+  // staging: STAGE (Space) in flight drops everything outboard of the next decouplers; their tanks are drained first
+  { id: 'dc-sep-s', cat: 'stage', name: 'Stage separator S', desc: 'Splits a 1.25 m stack in two. Press STAGE in flight and everything below it falls away — its tanks are used up first.', size: 'S', len: 0.3, mass: 60, maxT: 1800, decoupler: { push: 2.5 }, nodes: stack(0.3, 'S'), surface: false, mesh: 'separator' },
+  { id: 'dc-sep-m', cat: 'stage', name: 'Stage separator M', desc: 'Splits a 2.5 m stack in two: the spent lower stage drops away when you press STAGE.', size: 'M', len: 0.35, mass: 150, maxT: 1800, decoupler: { push: 3 }, nodes: stack(0.35, 'M'), surface: false, mesh: 'separator' },
+  { id: 'dc-sep-l', cat: 'stage', name: 'Stage separator L', desc: 'Splits a 3.75 m stack in two for big boosters.', size: 'L', len: 0.4, mass: 300, maxT: 1800, decoupler: { push: 3 }, nodes: stack(0.4, 'L'), surface: false, mesh: 'separator' },
+  { id: 'dc-radial', cat: 'stage', name: 'Radial decoupler', desc: 'Holds a side booster or drop tank: put it on the side of the core, then the booster on its face. Side boosters drop before the stack they ride on.', len: 0.45, mass: 50, maxT: 1800, crash: 8, decoupler: { push: 3, radial: true }, nodes: [], surface: true, mesh: 'radialdc', com: [0.22, 0, 0] },
   { id: 'ut-dock', cat: 'utility', name: 'Docking port', desc: 'Docks with Meridian Station, where you can refuel. Mount it on the hull facing out (the top or the nose is best) and bring RCS thrusters to steer in.',
     mass: 240, maxT: 1700, crash: 8, dock: { h: 0.75, r: 0.7 }, nodes: [], surface: true, mesh: 'dock', com: [0.35, 0, 0] },
 ];

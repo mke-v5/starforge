@@ -543,6 +543,8 @@ export class Builder {
       ['TWR (Earth)', twr.toFixed(2)],
       ['Δv (main engines)', dvVac > 0 ? `${Math.round(dvVac).toLocaleString('en-US')} m/s` : '—'],
     ];
+    // staged ships: what each stage adds, in the order they burn
+    if (c.stageGroups.length && c.stageDv) c.stageDv.forEach((dv, i, a) => rows.push([i === a.length - 1 ? '↳ last stage' : `↳ ${i + 1}: ${c.stageGroups[i][0].def.decoupler.radial ? 'boosters' : 'lower stage'}`, `${Math.round(dv).toLocaleString('en-US')} m/s`]));
     const jets = c.engines.filter((P) => ['jet', 'scram', 'hybrid'].includes(P.eng.e.type));
     if (jets.length) {
       let mdot = 0; for (const P of jets) { const [t, isp] = c.engineOutput(P, atm0); mdot += t / (isp * G0); }
@@ -571,7 +573,7 @@ export class Builder {
     const gears = c.gears;
     const mc = st.mission = missionCheck(c, this.design);
     const spaceOnly = mc && mc.list.some((m) => /^From orbit/.test(m.label));
-    if (!gears.length && !spaceOnly) warn.push(['No landing gear', '']);
+    if (!gears.length && !spaceOnly && !c.stageGroups.length) warn.push(['No landing gear', '']);
     else if (!this.design.vertical) {
       const wheels = gears.map((P) => P.gear.ext.clone().multiplyScalar(P.gear.g.len + P.gear.g.wheel).add(P.gear.mount));
       const ahead = wheels.filter((w) => w.z < c.com.z - 0.2), behind = wheels.filter((w) => w.z > c.com.z);
@@ -592,6 +594,8 @@ export class Builder {
     if (fusionHeat > 0 && c.radCap < fusionHeat * 0.6) warn.push([`Fusion drive needs radiators (${Math.ceil(fusionHeat * 0.7 / 5e7)}+)`, '']);
     if (!c.parts[0].def.cat || c.parts[0].def.cat !== 'cockpit') warn.push(['The root part should be a cockpit', '']);
     if (c.docks.length && !c.rcsList.length) warn.push(['Add RCS thrusters so the docking port can steer in', '']);
+    if (c.parts.some((P) => P.def.decoupler && !P.kids.length)) warn.push(['A decoupler has nothing attached to drop', '']);
+    if (c.stageGroups.length && !c.engines.some((P) => P.stage === Infinity)) warn.push(['The last stage has no engine of its own', '']);
     if (pw.draw > pw.gen) {
       const mins = c.ecCap > 0 ? (c.ecCap / Math.max(1, pw.draw - pw.gen)) * 60 : 0;
       warn.push([`Electric drives need ${fmtKW(pw.draw)} but the ship makes ${fmtKW(pw.gen)}${mins >= 1 ? ` — batteries last ${Math.round(mins)} min at full thrust` : ''}. Add a reactor.`, pw.gen <= 0 ? 'bad' : '']);

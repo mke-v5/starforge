@@ -566,6 +566,28 @@ const B = {
     for (const y of [-0.25, 0.25]) { const t = new THREE.Mesh(new THREE.TorusGeometry(r * 0.62, 0.07, 8, 32), M.accent); t.rotation.x = Math.PI / 2; t.position.y = y; g.add(t); }
     return g;
   },
+  separator(def, M) {
+    // a thin ring with a dark groove and hazard stripes round it
+    const r = SIZES[def.size] / 2, g = new THREE.Group(), h = def.len;
+    g.add(cylY(r, r, h, M.metal, 40));
+    g.add(ring(r, 0, h * 0.28, M.black));
+    const n = 16;
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2, b = new THREE.Mesh(new THREE.BoxGeometry(r * 0.2, h * 0.3, 0.02), k % 2 ? M.black : M.accent);
+      b.position.set(Math.cos(a) * r * 1.01, h * 0.3, Math.sin(a) * r * 1.01); b.rotation.y = -a + Math.PI / 2; b.rotateZ(0.6);
+      g.add(b);
+    }
+    return g;
+  },
+  radialdc(def, M) {
+    // a short strut along +X with a mounting plate on each end
+    const g = new THREE.Group(), L = def.len;
+    const plate = (x, w) => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.08, w, w * 0.6), M.dark); m.position.x = x; g.add(m); };
+    plate(0.04, 0.7); plate(L - 0.04, 0.8);
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(L - 0.1, 0.32, 0.22), M.metal); beam.position.x = L / 2; g.add(beam);
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.34, 0.24), M.accent); band.position.x = L * 0.62; g.add(band);
+    return g;
+  },
   strobe(def, M) {
     const g = new THREE.Group();
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff3b3b })); s.position.x = 0.08; s.userData.strobe = true; g.add(s);

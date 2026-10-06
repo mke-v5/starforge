@@ -15,6 +15,8 @@ const _e = new THREE.Vector3(), _no = new THREE.Vector3(), _up = new THREE.Vecto
 const _gq = new THREE.Quaternion();
 const _cf = new THREE.Vector3();
 const _qShipInv = new THREE.Quaternion();
+const _sc = new THREE.Vector3(), _sc2 = new THREE.Vector3();
+const PROPELLANTS = new Set(['LF', 'OX', 'LH2', 'FU', 'XE', 'AM']);
 
 export class Ship {
   constructor(craft, world, eph, settings) {
@@ -484,12 +486,62 @@ export class Ship {
 
   breakPart(P, why, speed = 0) {
     if (!P.alive) return;
+    const com0 = this.craft.com.clone();
     const removed = this.craft.destroy(P);
+    if (!this.parked && this.craft.mass >= 1) this.shiftCom(com0);
     this.events.push({ type: 'break', part: P, removed, why, speed });
     if (!this.craft.root.alive || this.craft.mass < 1) {
       this.dead = true;
       this.events.push({ type: 'destroyed', why, part: P });
     }
+  }
+
+  // the centre of mass moved inside the ship (parts came off): r and v follow it so nothing jumps
+  shiftCom(com0) {
+    const dW = _sc.copy(this.craft.com).sub(com0).applyQuaternion(this.q);
+    this.r.add(dW);
+    this.v.add(_sc2.copy(this.w).applyQuaternion(this.q).cross(dW));
+  }
+
+  // the next stage to drop carries tanks and they're dry
+  stageSpent() {
+    const craft = this.craft;
+    if (!craft.stagesLeft) return false;
+    let cap = 0, left = 0;
+    for (const P of craft.parts) {
+      if (!P.alive || P.stage !== 1) continue;
+      for (const k in P.res) if (PROPELLANTS.has(k)) { cap += P.res[k].cap; left += P.res[k].amt; }
+    }
+    return cap > 0 && left <= cap * 0.002;
+  }
+
+  // STAGE: the next decouplers let go; the section outboard of them drops away in one piece, pushed clear
+  stage() {
+    const craft = this.craft;
+    if (this.docked || !craft.stageGroups || !craft.stageGroups.length) return null;
+    const g = craft.stageGroups[0];
+    const push = Math.max(...g.map((D) => D.def.decoupler.push || 2));
+    const com0 = craft.com.clone();
+    const wW = this.w.clone().applyQuaternion(this.q), r0 = this.r.clone(), v0 = this.v.clone();
+    const removed = craft.separate();
+    if (!removed.length) return null;
+    if (this.parked) this.parked = null;
+    let mD = 0; const cD = new THREE.Vector3();
+    for (const Q of removed) { mD += Q.massNow; cD.addScaledVector(Q.com, Q.massNow); }
+    cD.divideScalar(Math.max(1, mD));
+    // where the dropped section is and how it's moving, from the old (whole-ship) state
+    const posW = cD.clone().sub(com0).applyQuaternion(this.q).add(r0);
+    const vDrop = wW.clone().cross(posW.clone().sub(r0)).add(v0);
+    this.shiftCom(com0);
+    // push apart along the line between the two centres, momentum conserved
+    const dir = posW.clone().sub(this.r);
+    if (dir.lengthSq() < 1e-6) dir.set(0, -1, 0).applyQuaternion(this.q);
+    dir.normalize();
+    const mK = craft.mass;
+    vDrop.addScaledVector(dir, push * mK / (mK + mD));
+    this.v.addScaledVector(dir, -push * mD / (mK + mD));
+    this.events.push({ type: 'stage', removed, mass: mD, comB: cD, posW, vDrop, q: this.q.clone(), wW, left: craft.stageGroups.length });
+    return removed;
   }
 
   checkBuildings() {

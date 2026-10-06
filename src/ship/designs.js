@@ -164,6 +164,32 @@ function courier() {
   return b.done();
 }
 
+// Three-stage rocket: two side boosters and the core light together on the pad; the boosters drop first, then
+// the core, and the capsule's service module (vacuum engine, RCS, docking port) finishes the climb to orbit.
+function vesta() {
+  const b = new DesignBuilder('Vesta', { hull: '#eef0f2', accent: '#2f6fd6' }, { vertical: true });
+  const [cap, sm, smEng, sep, t1, t2, core] = b.chain(['ck-aurora', 'rt-m4', 'en-lantern', 'dc-sep-m', 'rt-m8', 'rt-m8', 'en-titan']);
+  // side boosters on radial decouplers, level with the lower core tank, their engines beside the core's
+  const zc = b.d.parts[t2].p[2], R = PART['rt-m8'], E = PART['en-titan'], dcl = PART['dc-radial'].len;
+  const x = 1.25 + dcl + 1.25;
+  const right = (sgn) => {
+    const mirror = sgn < 0;
+    const qd = mirror ? mirrorQuat(qRollFrom(0)) : qRollFrom(0), qs = mirror ? mirrorQuat(Q_FWD) : Q_FWD;
+    const d = b.add('dc-radial', [sgn * 1.25, 0, zc], qd, t2, mirror);
+    const t = b.add('rt-m8', [sgn * x, 0, zc], qs, d, mirror);
+    const e = b.add('en-titan', [sgn * x, 0, zc + R.len / 2 + E.len / 2], qs, t, mirror);
+    return [d, t, e];
+  };
+  const L = right(1), Rt = right(-1);
+  for (let k = 0; k < 3; k++) { b.d.parts[L[k]].sym = Rt[k]; b.d.parts[Rt[k]].sym = L[k]; }
+  // service-module RCS ring and the docking port on the nose
+  const smz = b.d.parts[sm].p[2];
+  for (let i = 0; i < 4; i++) { const a = (i / 4) * Math.PI * 2 + Math.PI / 4; b.add('ct-rcs', [Math.cos(a) * 1.27, Math.sin(a) * 1.27, smz], qRollFrom(a), sm); }
+  const nose = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, -1), Y.clone(), X.clone()));
+  b.add('ut-dock', [0, 0, 0.0], nose, cap);
+  return b.done();
+}
+
 export const PRESETS = [
   { key: 'kestrel', make: kestrel, blurb: 'Nimble jet. Perfect first flight: take off, tour cities, land at any airport.' },
   { key: 'selene', make: selene, blurb: 'Fusion spaceplane. Hangar → orbit → Moon landing → back to a runway. Docks at Meridian Station.' },
@@ -171,4 +197,5 @@ export const PRESETS = [
   { key: 'starhopper', make: starhopper, blurb: 'Vertical fusion starship. Launches from the pad, lands on its legs anywhere.' },
   { key: 'peregrine', make: peregrine, blurb: 'Swing-wing fighter with an afterburner. Wings spread to land, sweep back for Mach 2.5.' },
   { key: 'courier', make: courier, blurb: 'Ion tug for space, powered by a fusion core. Start it in orbit or docked at the station.' },
+  { key: 'vesta', make: vesta, blurb: 'Classic three-stage rocket: side boosters, a core stage and a capsule. Press STAGE as each one burns out.' },
 ];

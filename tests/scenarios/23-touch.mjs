@@ -15,7 +15,8 @@ export default async function (t) {
   await p.mouse.up();
   const thr = await t.eval(() => __sf.controller.input.throttle);
   t.check(thr > 0.95, `throttle slider to full: ${thr.toFixed(2)}`);
-  // wait for take-off speed in real time (the game runs its own loop now)
+  // the take-off roll, fast-forwarded (in real time it crawls on a busy machine), then back to the live loop
+  await t.eval(async () => { await __t.sim(90, { dt: 0.05, until: (sf) => sf.ship.env.vSurf > 75 || sf.ship.dead, allowDead: true }); __t.resumeLoop(); });
   await p.waitForFunction(() => __sf.ship.env.vSurf > 75 || __sf.ship.dead, null, { timeout: 120000 });
   // pull the stick back (down on the screen) and hold
   const st = await box('#stick');

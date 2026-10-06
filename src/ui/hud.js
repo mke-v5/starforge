@@ -52,7 +52,7 @@ export class Hud {
       ['rcs', 'RCS', 'R'], ['lights', 'Lights', 'U'],
       ['engines', 'Eng: all', 'E'], ['mode', 'Auto', 'X'],
       ['auto', 'Auto', 'P'], ['info', 'Info', 'O'],
-      ['dock', 'Dock', 'Y'], ['refuel', 'Refuel', ''], ['nav', 'Nav', '9'],
+      ['dock', 'Dock', 'Y'], ['refuel', 'Refuel', ''], ['nav', 'Nav', '9'], ['stage', 'Stage', 'Space'],
     ];
     this.toggles = {};
     for (const [id, label, key] of defs) {
@@ -314,6 +314,11 @@ export class Hud {
     T.dock.textContent = stx && stx.docked ? 'Undock' : 'Dock';
     T.dock.classList.toggle('on', !!(stx && stx.docked));
     T.refuel.hidden = !(stx && stx.docked);
+    T.stage.hidden = !(craft.stagesLeft > 0) || !!ship.docked;
+    if (craft.stagesLeft > 0) {
+      T.stage.textContent = craft.stagesLeft > 1 ? `Stage · ${craft.stagesLeft}` : 'Stage';
+      T.stage.classList.toggle('on', !ship.docked && ship.stageSpent());   // lit when the next stage is spent
+    }
     const space = E.rho < 0.01 || E.h > 30000;
     const stNear = stx && !stx.docked && stx.d < 100000;
     for (const m in this.sasBtns) {

@@ -1136,6 +1136,7 @@ export function deltaV(craft, atm = false, filter = null) {
     P.eng.mode = saveMode;
   }
   if (mdot <= 0) return 0;
+  if (craft.stageGroups && craft.stageGroups.length) return stagedDv(craft, env, filter, atm);
   const ve = T / mdot;
   // burn until the first resource runs out
   let tMax = Infinity;
@@ -1143,4 +1144,58 @@ export function deltaV(craft, atm = false, filter = null) {
   if (!isFinite(tMax)) return 0;
   const m0 = craft.mass, m1 = m0 - mdot * tMax;
   return ve * Math.log(m0 / Math.max(1, m1));
+}
+
+// Δv of a staged ship: burn each stage's tanks dry (the engines still aboard firing), drop it, go on.
+// Returns the total; craft.stageDv gets the per-stage list (first to burn first).
+function stagedDv(craft, env, filter, atm) {
+  const parts = craft.parts.filter((P) => P.alive);
+  const amt = new Map(parts.map((P) => [P, Object.fromEntries(Object.entries(P.res).map(([k, x]) => [k, x.amt]))]));
+  const order = [...new Set(parts.map((P) => P.stage))].sort((a, b) => a - b);
+  const per = [];
+  let total = 0;
+  for (const st of order) {
+    const aboard = parts.filter((P) => P.stage >= st);
+    let T = 0, mdot = 0; const use = {};
+    for (const P of aboard) {
+      if (!P.eng || !filter(P)) continue;
+      const saveMode = P.eng.mode;
+      if (P.eng.e.type === 'hybrid' && !atm) P.eng.mode = 'rocket';
+      const [t, isp] = craft.engineOutput(P, env);
+      if (t > 0) { T += t; mdot += t / (isp * 9.80665); const mix = craft.fuelMix(P); for (const k in mix) use[k] = (use[k] || 0) + mix[k] * t / (isp * 9.80665); }
+      P.eng.mode = saveMode;
+    }
+    const sum = (list, k) => list.reduce((a, P) => a + (amt.get(P)[k] || 0), 0);
+    const mass = () => aboard.reduce((a, P) => { let m = P.dry; const r = amt.get(P); for (const k in r) if (k !== 'EC') m += r[k]; return a + m; }, 0);
+    let dv = 0;
+    if (mdot > 0) {
+      const mine = parts.filter((P) => P.stage === st);
+      // burn until this stage's tanks are dry (or, for the last stage, the first propellant runs out)
+      let t = st === Infinity ? Infinity : 0, cap = Infinity;
+      for (const k in use) {
+        if (st !== Infinity) { const a = sum(mine, k); if (a > 0) t = Math.max(t, a / use[k]); }
+        else t = Math.min(t, sum(aboard, k) / use[k]);
+        cap = Math.min(cap, sum(aboard, k) / use[k]);
+      }
+      t = Math.min(t, cap);
+      if (isFinite(t) && t > 0) {
+        const m0 = mass();
+        for (const k in use) {
+          let need = use[k] * t;
+          for (const s2 of order) {
+            if (s2 < st || need <= 0) continue;
+            const tanks = aboard.filter((P) => P.stage === s2 && (amt.get(P)[k] || 0) > 0);
+            const have = sum(tanks, k), take = Math.min(need, have);
+            for (const P of tanks) amt.get(P)[k] -= take * (amt.get(P)[k] / have);
+            need -= take;
+          }
+        }
+        dv = (T / mdot) * Math.log(m0 / Math.max(1, m0 - mdot * t));
+      }
+    }
+    per.push(dv);
+    total += dv;
+  }
+  if (!atm) craft.stageDv = per;
+  return total;
 }

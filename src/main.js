@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { EARTH, MOON, D2R, R2D, clamp, smoothstep, llh, enu, toLLH, gcDist, fmtTime } from './core/geo.js';
 import { Ephemeris, nowSimTime, gravity, moonPos, moonVel } from './core/astro.js';
+import { atmosphere } from './core/atmo.js';
 import { loadSettings, load, save } from './core/store.js';
 import { Progress, MILESTONES } from './core/progress.js';
 import { World } from './world/world.js';
@@ -29,6 +30,7 @@ const x0dv = (g) => deltaV(g.craft, false);
 const escH = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const WARPS = [1, 2, 4, 10, 50, 100, 1000, 10000, 100000];
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
+const _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3(), _q2 = new THREE.Quaternion();
 
 class Game {
   constructor() {
@@ -68,7 +70,7 @@ class Game {
     this.camI = new THREE.Vector3(EARTH.R * 3, EARTH.R * 0.6, EARTH.R * 2.5);
     this.engGroup = 'all';
     this.lights = false;
-    this.flightTime = 0;
+    this.flightTime = 0; this.dropped = [];
     this.titleOrbit = 0;
     window.addEventListener('resize', () => this.resize());
     this.resize();
@@ -247,6 +249,8 @@ class Game {
   endFlight() {
     if (this.tutorial && !this._keepTut) this.tutorial.stop();
     if (this.ship) this.logFlight();
+    for (const d of this.dropped || []) this.scene.remove(d.g);
+    this.dropped = [];
     if (this.ship) {
       this.scene.remove(this.craft.group);
       this.craft.dispose();
@@ -280,7 +284,7 @@ class Game {
     this.setupLights(craft);
     this.engGroup = 'all';
     this.applyEngGroup();
-    this.flightTime = 0;
+    this.flightTime = 0; this.dropped = [];
     this.prevContacts = 0;
     this.cam.init = false;
     this.camMode = 'chase';
@@ -659,6 +663,54 @@ class Game {
       case 'dock': this.dockAction(); break;
       case 'refuel': this.refuel(); break;
       case 'nav': this.navAction(); break;
+      case 'stage': this.stageNow(); break;
+    }
+  }
+  // drop the next stage (Space / STAGE)
+  stageNow() {
+    const ship = this.ship;
+    if (!ship || ship.dead) return;
+    if (ship.docked) { this.hud.toast('Undock before staging', 'bad'); return; }
+    if (!ship.stage()) this.hud.toast('Nothing left to stage');
+  }
+  // dropped stages fall on their own (gravity and drag) until they hit the ground or are left far behind
+  updateDropped(step) {
+    const ship = this.ship;
+    for (let i = this.dropped.length - 1; i >= 0; i--) {
+      const d = this.dropped[i];
+      d.age += step;
+      const n = Math.max(1, Math.ceil(step / 0.5)), h = step / n;
+      let gone = false;
+      for (let k = 0; k < n && !gone; k++) {
+        const near = d.p.distanceTo(this.eph.moon) < MOON.soi, body = near ? MOON : EARTH;
+        const g = gravity(d.p, this.eph.moon, _v2);
+        d.v.addScaledVector(g, h);
+        if (!near) {
+          const f = this.eph.toFixed(EARTH, d.p, _v3), ll = toLLH(f, EARTH.R);
+          if (ll.h < 140000) {
+            // drag against the air turning with the Earth
+            const air = atmosphere(ll.h), vAir = this.eph.surfaceVel(EARTH, d.p, _v4);
+            const rel = _v5.copy(d.v).sub(vAir), sp = rel.length();
+            if (sp > 0.1) d.v.addScaledVector(rel, -Math.min(1 / h, 0.5 * air.rho * sp * d.cdA / d.m) * h);
+          }
+          if (ll.h < this.world.groundAt(EARTH, ll.lat, ll.lon) + 1) gone = true;
+        } else {
+          const f = this.eph.toFixed(MOON, d.p, _v3), ll = toLLH(f, MOON.R);
+          if (ll.h < this.world.groundAt(MOON, ll.lat, ll.lon) + 1) gone = true;
+        }
+        d.p.addScaledVector(d.v, h);
+      }
+      const wl = d.w.length();
+      if (wl > 1e-6) d.q.premultiply(_q2.setFromAxisAngle(_v2.copy(d.w).divideScalar(wl), wl * step)).normalize();
+      if (gone) {
+        if (d.v.length() > 30 && d.p.distanceTo(ship.r) < 20000) { this.effects.explode(d.p, d.v.clone().multiplyScalar(0), clamp(Math.sqrt(d.m / 800), 0.8, 4)); this.audio.boom(0.6); }
+        this.scene.remove(d.g); d.g.traverse((o) => { if (o.material && o.material.dispose && o.userData.own) o.material.dispose(); });
+        this.dropped.splice(i, 1);
+        continue;
+      }
+      if (d.age > 1800 || d.p.distanceTo(ship.r) > 400000) { this.scene.remove(d.g); this.dropped.splice(i, 1); continue; }
+      d.g.position.copy(d.p).sub(this.camI);
+      d.g.quaternion.copy(d.q);
     }
   }
   // dock with the station (autopilot) or undock and back away
@@ -1008,6 +1060,11 @@ class Game {
     this.eph.update(ship.t);
     ship.step(dt, C);
     if (holdBrake) C.input.brake = wasBrake;
+    // autopilots stage for you once the next stage's tanks run dry
+    if (C.ap && craft.stagesLeft && !ship.dead && ship.stageSpent()) {
+      this._spentT = (this._spentT || 0) + dt * ship.warp;
+      if (this._spentT > 0.8) { this._spentT = 0; this.stageNow(); }
+    } else this._spentT = 0;
     this.stationFrame(ship);
     this.eph.update(ship.t);
     this.flightTime += dt;
@@ -1029,6 +1086,7 @@ class Game {
     const flux = 1.83e-4 * Math.sqrt(Math.max(0, ship.env.rho)) * Math.pow(ship.env.vSurf, 3) * this.settings.heatScale;
     this.effects.update(dt, craft, ship.env, vb, flux);
     craft.updateVisuals(dt, this.flightTime, ship.ctl);
+    if (this.dropped.length) this.updateDropped(dt * ship.warp);
     this.effects.updateWorld(dt, this.camI, (p) => gravity(p, this.eph.moon, new THREE.Vector3()), (p) => {
       const body = p.distanceTo(this.eph.moon) < MOON.soi ? MOON : EARTH;
       const f = this.eph.toFixed(body, p, new THREE.Vector3());
@@ -1075,6 +1133,7 @@ class Game {
       case 'e': break;
       case 'p': this.action('auto'); break;
       case 'y': this.action('dock'); break;
+      case ' ': this.action('stage'); break;
       case '9': this.action('nav'); break;
       case 'o': this.action('info'); break;
       case 'v': this.action('engines'); break;
@@ -1095,7 +1154,24 @@ class Game {
   handleEvents() {
     const ship = this.ship;
     for (const e of ship.events.splice(0)) {
-      if (e.type === 'break') {
+      if (e.type === 'stage') {
+        // the dropped section: copies of its part meshes, turning about its own centre of mass
+        const g = new THREE.Group(), inner = new THREE.Group();
+        inner.position.copy(e.comB).negate();
+        let A = 0, side = 0;
+        for (const Q of e.removed) {
+          if (Q.mesh) { const m = Q.mesh.clone(); m.visible = true; inner.add(m); }
+          A = Math.max(A, Math.PI * (Q.dia / 2) ** 2); side += Q.len * Q.dia;
+        }
+        g.add(inner);
+        this.scene.add(g);
+        const tumble = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.15);
+        this.dropped.push({ g, p: e.posW.clone(), v: e.vDrop.clone(), q: e.q.clone(), w: e.wW.clone().add(tumble), m: Math.max(50, e.mass), cdA: 0.8 * (A + 0.3 * side), age: 0 });
+        this.audio.thump(0.9);
+        this.hud.toast(e.left ? `Stage separated — ${e.left} more to go` : 'Stage separated', 'good');
+        this.progress.unlock && this.progress.unlock('staged');
+        if (this.engGroup !== 'all' && !this.availableGroups().includes(this.engGroup)) { this.engGroup = 'all'; this.applyEngGroup(); }
+      } else if (e.type === 'break') {
         const P = e.part;
         const pw = ship.bodyToWorld(P.com, new THREE.Vector3());
         this.effects.explode(pw, ship.v, clamp(Math.sqrt(P.def.mass / 800), 0.6, 3));

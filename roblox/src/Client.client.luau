@@ -243,10 +243,15 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	local fwd = cf.LookVector
 	local hdg = math.atan2(fwd.X, -fwd.Z)
 	local yaw = hdg + camYaw
-	local dir = Vector3.new(math.sin(yaw) * math.cos(camPitch), math.sin(camPitch), -math.cos(yaw) * math.cos(camPitch))
+	-- look direction: along the heading, tilted down by camPitch
+	local dir = Vector3.new(math.sin(yaw) * math.cos(camPitch), -math.sin(camPitch), -math.cos(yaw) * math.cos(camPitch))
 	camera.CameraType = Enum.CameraType.Scriptable
-	local camPos = -dir * camDist + Vector3.new(0, camDist * 0.08, 0)
-	camera.CFrame = CFrame.lookAt(camPos, Vector3.new(0, camDist * 0.05, 0))
+	local target = Vector3.new(0, camDist * 0.06, 0)
+	local camPos = target - dir * camDist
+	-- never below the ground
+	local groundY = -(ship.env.agl * S) + 3
+	if camPos.Y < groundY then camPos = Vector3.new(camPos.X, groundY, camPos.Z) end
+	camera.CFrame = CFrame.lookAt(camPos, target)
 	camera.FieldOfView = 70
 
 	-- ground under the ship (near the surface), drawn uniformly scaled about the ship when high up

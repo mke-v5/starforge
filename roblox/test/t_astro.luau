@@ -1,0 +1,10 @@
+local THREE = require("./Three")
+local A = require("./Astro")
+local t = 845000000
+local v = THREE.Vector3.new()
+print("moon", A.moonPos(t, v))
+print("mars", A.marsPos(t, v))
+print("sun", A.sunPos(t, v))
+print("grav", A.gravity(THREE.Vector3.new(7e6, 1e5, -2e5), t, v))
+local e = A.Ephemeris.new():update(t)
+print("marsQ", e.marsQ.x, e.marsQ.y, e.marsQ.z, e.marsQ.w)

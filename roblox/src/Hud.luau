@@ -59,6 +59,9 @@ function Hud.new(player, cb)
 	self.autoKind = "orbit"
 	self.autoBtn = button(side, "Auto: climb to orbit", function() cb.onAuto(self.autoKind) end, 2)
 	self.autoBtn.BackgroundColor3 = Color3.fromRGB(28, 52, 40)
+	self.marsBtn = button(side, "Auto: fly to Mars 🔴", function() cb.onAuto("mars") end, 2)
+	self.marsBtn.BackgroundColor3 = Color3.fromRGB(90, 40, 28)
+	self.marsBtn.Visible = false
 	button(side, "Auto: land", function() cb.onAuto("land") end, 3)
 	button(side, "Autopilot off", function() cb.onAuto("off") end, 4)
 	local sasRow = make("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 5 }, side)
@@ -267,6 +270,8 @@ function Hud:showTop(list, mine, courseName)
 	corner(close, 8)
 	close.Activated:Connect(function() p:Destroy() end)
 end
+
+function Hud:setMars(on) if self.marsBtn.Visible ~= on then self.marsBtn.Visible = on end end
 
 function Hud:setCourse(text) self.courseBtn.Text = text end
 

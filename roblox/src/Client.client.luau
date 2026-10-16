@@ -24,7 +24,7 @@ local Shop = require(SF.Shop)
 local Hangar = require(SF.Hangar)
 local TweenService = game:GetService("TweenService")
 local V3 = THREE.Vector3.new
-local EARTH, MOON, D2R = Geo.EARTH, Geo.MOON, Geo.D2R
+local EARTH, MOON, MARS, D2R = Geo.EARTH, Geo.MOON, Geo.MARS, Geo.D2R
 local S = ShipModel.SCALE
 local K = {}   -- constants (kept in one table: Luau allows only 200 locals per function)
 
@@ -174,6 +174,8 @@ local airMesh = Instance.new("SpecialMesh"); airMesh.MeshType = Enum.MeshType.Sp
 if K.CLOUD_TEXTURE ~= "" then cloudMesh.TextureId = K.CLOUD_TEXTURE end
 local moonBall = anchored("Part", { Name = "MoonBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.Slate, Color = Color3.fromRGB(170, 170, 165), CastShadow = false })
 local moonMesh = Instance.new("SpecialMesh"); moonMesh.MeshType = Enum.MeshType.Sphere; moonMesh.Parent = moonBall
+local marsBall = anchored("Part", { Name = "MarsBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.SmoothPlastic, Color = Color3.fromRGB(196, 104, 64), CastShadow = false })
+local marsMesh = Instance.new("SpecialMesh"); marsMesh.MeshType = Enum.MeshType.Sphere; marsMesh.Parent = marsBall
 local sunBall = anchored("Part", { Name = "SunBall", Shape = Enum.PartType.Ball, Size = Vector3.new(80, 80, 80), Material = Enum.Material.Neon, Color = Color3.fromRGB(255, 244, 214), CastShadow = false })
 local dome = {}
 for i = 1, 6 do dome[i] = anchored("Part", { Name = "Space", Size = Vector3.new(1, 1, 1), Material = Enum.Material.Neon, Color = Color3.new(0, 0, 0), CastShadow = false, Transparency = 1 }) end
@@ -371,14 +373,14 @@ K.CAM_NAMES = { "Chase camera", "Cockpit camera", "Locked chase camera" }
 local function rv3(v) return Vector3.new(v.x, v.y, v.z) end
 
 local messages = {}
-local warpLevels = { 1, 2, 4, 10, 50, 100, 1000, 10000, 100000 }
+local warpLevels = { 1, 2, 4, 10, 50, 100, 1000, 10000, 100000, 1000000 }
 local warpIdx = 1
 
 local hud -- forward
 local airTime = 0
 local dailyAcc = { km = 0, t = 0, wasSpace = false }
 local skyC = Vector3.zero
-local refMoon = nil
+local refMoon, refRock = nil, nil
 local deadFor = 0
 local lastGood = { r = V3(), v = V3(), q = THREE.Quaternion.new() }
 local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
@@ -989,6 +991,55 @@ hud = require(SF.Hud).new(player, {
 			else
 				C:engage(Control.landAp()); toast("Autopilot: landing")
 			end
+		elseif kind == "mars" or kind == "marscruise" then
+			-- the long way: launch window, injection, two corrections, coast, capture into Mars orbit
+			local I = require(SF.Interplanetary)
+			local DAY = 86400
+			local function cruiseWake(s)
+				local p = Orbit.predict(s.r, s.v, s.t, { maxT = 500 * DAY, maxSteps = 20000, oneRev = false, noExtend = true, marsStop = -MARS.R * 0.9 })
+				return p.closeMars.t
+			end
+			local steps = {}
+			if kind == "mars" then
+				table.insert(steps, raiseOrbitStep)
+				table.insert(steps, function() return Control.planBurnAp("Mars injection", function(s) return I.planMarsTransfer(s) end) end)
+				table.insert(steps, function()
+					return Control.waitAp("Leaving Earth", function(s) return s.env.body ~= EARTH end, function(s) return s.t + 6 * 3600 end)
+				end)
+			end
+			table.insert(steps, function() return Control.planBurnAp("Course correction", function(s) return I.planPlanetCorrection(s, MARS, 300e3) end, true) end)
+			table.insert(steps, function()
+				return Control.waitAp("Cruise to Mars", function(s) local ta = cruiseWake(s); return ta - s.t < 20 * DAY or s.env.body == MARS end,
+					function(s) return cruiseWake(s) - 20 * DAY end)
+			end)
+			table.insert(steps, function() return Control.planBurnAp("Final correction", function(s) return I.planPlanetCorrection(s, MARS, 300e3) end, true) end)
+			table.insert(steps, function()
+				return Control.waitAp("Arriving at Mars", function(s) return s.env.body == MARS end, function(s)
+					local p = Orbit.predict(s.r, s.v, s.t, { maxT = 30 * DAY, maxSteps = 6000, oneRev = false, noExtend = true, marsStop = -MARS.R * 0.9 })
+					return if p.marsIn then p.marsIn + 30 else s.t + DAY
+				end)
+			end)
+			table.insert(steps, function() return Control.planBurnAp("Mars orbit capture", function(s) return I.planOrbitCapture(s, MARS) end) end)
+			C:engage(Control.sequenceAp("Trip to Mars", steps))
+			toast(if kind == "mars" then "Autopilot: flying to Mars — finding the next launch window (time warp speeds up the trip)" else "Autopilot: cruising on to Mars")
+		elseif kind == "marsland" then C:engage(Control.landAp()); toast("Autopilot: landing on Mars")
+		elseif kind == "marsorbit" then
+			C:engage(Control.ascentAp()); toast("Autopilot: climbing to Mars orbit")
+		elseif kind == "marshome" then
+			local I = require(SF.Interplanetary)
+			C:engage(Control.sequenceAp("Trip home from Mars", {
+				function() return Control.planBurnAp("Earth injection", function(s) return I.planEarthReturnFromMars(s) end) end,
+				function() return Control.waitAp("Leaving Mars", function(s) return s.env.body ~= MARS end, function(s) return s.t + 6 * 3600 end) end,
+				function() return Control.planBurnAp("Course correction", function(s) return I.planPlanetCorrection(s, EARTH, 300e3) end, true) end,
+				function()
+					return Control.waitAp("Coast to Earth", function(s) return s.env.body == EARTH end, function(s)
+						local p = Orbit.predict(s.r, s.v, s.t, { maxT = 500 * 86400, maxSteps = 20000, oneRev = false, noExtend = true })
+						return if p.earthBack then p.earthBack + 30 else s.t + 86400
+					end)
+				end,
+				function() return Control.planBurnAp("Earth orbit capture", function(s) return I.planOrbitCapture(s, EARTH) end) end,
+			}))
+			toast("Autopilot: flying home from Mars")
 		elseif kind == "moon" then
 			C:engage(Control.sequenceAp("Trip to the Moon", {
 				raiseOrbitStep,
@@ -1097,6 +1148,7 @@ local function canWarp(level)
 	if ship.thrustNow > 0 or ship.ctl.throttle > 0 then return false end
 	if E.body.atmoTop > 0 and E.h < E.body.atmoTop + 2000 then return false end
 	if E.agl < 10000 then return false end
+	if level > 100000 and E.body ~= Geo.SUN then return false end   -- the fastest warp is for crossing between planets
 	return true
 end
 
@@ -1246,14 +1298,16 @@ frame = function(dtRaw)
 	local depth = agl * S
 	local k = if depth > GROUND_D then GROUND_D / depth else 1   -- keep the ground close: low graphics settings cull far parts
 	local onMoon = body == MOON
-	local showGround = (body == EARTH or onMoon) and E.h < 26000
-	local onEarthLow = showGround and not onMoon
+	local onMars = body == MARS
+	local onRock = onMoon or onMars          -- airless-or-not, a world without the spaceport scenery
+	local showGround = (body == EARTH or onRock) and E.h < 26000
+	local onEarthLow = showGround and not onRock
 	-- ship position in the reference tangent plane (east, north metres from the spaceport, or on the Moon
 	-- from a reference point picked when we come down low)
 	local xe, xn
-	if onMoon then
-		local pF = ship:toFixed(MOON, ship.r, ship.t, _t1)
-		if not refMoon or pF:distanceTo(refMoon) > 60000 then refMoon = pF:clone() end
+	if onRock then
+		local pF = ship:toFixed(body, ship.r, ship.t, _t1)
+		if not refMoon or refRock ~= body or pF:distanceTo(refMoon) > 60000 then refMoon = pF:clone(); refRock = body end
 		local up0 = refMoon:clone():normalize()
 		local east0 = V3(0, 1, 0):cross(up0):normalize()
 		local north0 = V3():crossVectors(up0, east0)
@@ -1287,6 +1341,10 @@ frame = function(dtRaw)
 					local i2, j2 = math.floor((xe + wx / (S * k)) / 900), math.floor((xn + wz / (S * k)) / 900)
 					local g = 150 + math.floor(hash2(i2, j2, 5) * 30)
 					col, mat = Color3.fromRGB(g, g, g - 4), Enum.Material.Slate
+				elseif onMars then
+					local i2, j2 = math.floor((xe + wx / (S * k)) / 900), math.floor((xn + wz / (S * k)) / 900)
+					local g = math.floor(hash2(i2, j2, 7) * 28)
+					col, mat = Color3.fromRGB(176 + g, 92 + g // 2, 56 + g // 3), Enum.Material.Sand
 				else
 					col, mat = groundStyle(xe + wx / (S * k), xn + wz / (S * k))
 				end
@@ -1532,21 +1590,25 @@ frame = function(dtRaw)
 	end
 	drawBall(moonBall, moonMesh, MOON, MOON.R, 290)
 	moonBall.Transparency = if onMoon and E.h < 26000 then 1 else 0
+	drawBall(marsBall, marsMesh, MARS, MARS.R, 290)
+	-- (a planet a whole AU away would be far smaller than a pixel: keep it a visible red dot)
+	if marsMesh.Scale.X < 0.6 then marsMesh.Scale = Vector3.one * 0.6 end
+	marsBall.Transparency = if onMars and E.h < 26000 then 1 else 0
 	-- the Sun
 	local sunW = toWorld(eph.sunP:clone():sub(ship.r):normalize())
 	sunBall.CFrame = CFrame.new(skyC + sunW * 300)
 	sunBall.Size = Vector3.new(1, 1, 1) * (300 * 2 * math.tan(0.267 * D2R) * 2.5)
 	-- sky: thin air fades to black space
 	local airK = math.clamp((E.rho / 1.225) ^ 0.35, 0, 1)
-	if body ~= EARTH then airK = 0 end
-	atmosphere.Density = 0.3 * airK
+	if onMars then airK = math.clamp((E.rho / 0.02) ^ 0.35, 0, 1) elseif body ~= EARTH then airK = 0 end
+	atmosphere.Density = (if onMars then 0.45 else 0.3) * airK
 	atmosphere.Offset = 0.15
-	atmosphere.Color = Color3.fromRGB(199, 214, 230)
-	atmosphere.Decay = Color3.fromRGB(120, 150, 190)
+	atmosphere.Color = if onMars then Color3.fromRGB(214, 168, 120) else Color3.fromRGB(199, 214, 230)
+	atmosphere.Decay = if onMars then Color3.fromRGB(150, 92, 60) else Color3.fromRGB(120, 150, 190)
 	atmosphere.Glare = 0.4 * airK
 	atmosphere.Haze = 1.2 * airK
 	-- the sky: Roblox's daytime sky low down, a star field once the air is thin
-	local inSpace = body ~= EARTH or alt > 32000
+	local inSpace = (body ~= EARTH and not (onMars and alt < 30000)) or (body == EARTH and alt > 32000)
 	spaceSky.Parent = if inSpace then Lighting else nil
 	if daySky then daySky.Parent = if inSpace then nil else Lighting end
 	for i = 1, 6 do dome[i].Transparency = 1 end
@@ -1567,8 +1629,19 @@ frame = function(dtRaw)
 		elseif E.body == MOON then
 			if ship.parked or E.agl < 50 then kind, label = "home", "Auto: fly home"
 			else kind, label = "moonland", "Auto: land on the Moon" end
+		elseif E.body == MARS then
+			local rs = Orbit.relState(ship, MARS)
+			local el = Orbit.elements(rs.r, rs.v, rs.mu)
+			if ship.parked or E.agl < 50 then kind, label = "marsorbit", "Auto: climb to Mars orbit"
+			elseif el.e < 1 and el.pe - MARS.R > 120000 then kind, label = "marshome", "Auto: fly home to Earth"
+			else kind, label = "marsland", "Auto: land on Mars" end
+		elseif E.body == Geo.SUN then
+			kind, label = "marscruise", "Auto: continue to Mars"
 		end
 		hud:setAuto(kind, label)
+		-- a second choice in Earth orbit for ships that can make the trip: Mars
+		local marsOk = kind == "moon" and craft:capacity("FU") > 0 and state.done.moonland == true
+		hud:setMars(marsOk)
 	end
 	local _c3 = os.clock()
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)

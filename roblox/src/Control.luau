@@ -878,7 +878,10 @@ function C.landAp(target)
 		-- engine gimbal swing the nose up much faster than the RCS alone
 		if al < 0.95 and al > -0.2 and agl > 60 and craft.vertical then thr = math.max(thr, 0.1 * (1 - smoothstep(0.85, 0.97, al))) end
 		if vz > 3 and agl > 20 then thr = 0 end
-		return { dir = dir, axis = axis, throttle = thr, gear = if agl < 1500 then true else nil, engines = finalEng, status = status }
+		-- on the legs: engines off and brakes on, so leftover thrust can't push the ship along the ground
+		local down = ship.contacts > 0 and agl < 3
+		if down then thr = 0 end
+		return { dir = dir, axis = axis, throttle = thr, gear = if agl < 1500 then true else nil, engines = finalEng, status = status, brake = if down then 1 else nil }
 	end
 	return ap
 end

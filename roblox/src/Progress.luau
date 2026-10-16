@@ -41,6 +41,10 @@ P.MISSIONS = {
 		check = function(c) return c.flags.raceTime ~= nil and c.flags.raceTime < 100 end },
 	{ id = "coastrace", title = "Fly the Coastal Sprint", hint = "Switch the race course (🏁 button) and fly all 12 rings out over the sea", xp = 300, credits = 500,
 		check = function(c) return c.flags.race_coast == true end },
+	{ id = "mars", title = "Fly to Mars", hint = "After landing on the Moon: from Earth orbit in the Selene, press Auto: fly to Mars 🔴 and warp through the months-long trip", xp = 2500, credits = 5000, ship = "selene",
+		check = function(c) return c.E.body == Geo.MARS end },
+	{ id = "marsland", title = "Land on Mars", hint = "From Mars orbit, Auto: land on Mars brings you down through the thin red air", xp = 4000, credits = 8000, ship = "selene",
+		check = function(c) return c.flags.landedBody == Geo.MARS end },
 	{ id = "moonhome", title = "To the Moon and back", hint = "Land on the Moon, then fly home and touch down on Earth in the same flight", xp = 1500, credits = 3000, ship = "selene",
 		check = function(c) return c.flags.wasMoon and c.flags.landedBody == Geo.EARTH end },
 }

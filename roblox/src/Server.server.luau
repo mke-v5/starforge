@@ -121,6 +121,10 @@ local function clean(s)
 	if type(s.owned) == "table" then
 		for k, v in pairs(s.owned) do if type(k) == "string" and #k < 32 and v == true then out.owned[k] = true end end
 	end
+	out.codes = {}
+	if type(s.codes) == "table" then
+		for k, v in pairs(s.codes) do if type(k) == "string" and #k < 24 and v == true then out.codes[k] = true end end
+	end
 	if type(s.done) == "table" then
 		for k, v in pairs(s.done) do if type(k) == "string" and #k < 32 and v == true then out.done[k] = true end end
 	end
@@ -178,6 +182,26 @@ Save.OnServerEvent:Connect(function(player, s)
 		task.spawn(savePlayer, player)
 	end
 end)
+
+-- redeem codes: credits for anyone who types one in (once per player). Add new ones here for updates and
+-- social posts; set a code to nil to retire it.
+local CODES = { LAUNCH = 500, ROCKET = 300, MOONSHOT = 750, STARFORGE = 250 }
+local Redeem = remotes:FindFirstChild("Redeem") or Instance.new("RemoteFunction")
+Redeem.Name = "Redeem"; Redeem.Parent = remotes
+Redeem.OnServerInvoke = function(player, code)
+	if type(code) ~= "string" or #code > 24 then return false, "That code doesn't exist" end
+	code = string.upper((code:gsub("%s", "")))
+	local amount = CODES[code]
+	if not amount then return false, "That code doesn't exist" end
+	while not loaded[player.UserId] do task.wait(0.1) end
+	local s = cache[player.UserId]
+	s.codes = s.codes or {}
+	if s.codes[code] then return false, "You already used that code" end
+	s.codes[code] = true
+	s.credits += amount
+	task.spawn(savePlayer, player)
+	return true, amount, code
+end
 
 Players.PlayerAdded:Connect(function(p) task.spawn(checkPasses, p); loadPlayer(p) end)
 for _, p in ipairs(Players:GetPlayers()) do task.spawn(checkPasses, p); task.spawn(loadPlayer, p) end

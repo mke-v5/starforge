@@ -932,6 +932,20 @@ hud = require(SF.Hud).new(player, {
 			vipOn = function() return (RS:GetAttribute("VipPass") or 0) ~= 0 end,
 			vipOwned = function() return player:GetAttribute("VIP") == true end,
 			buyVip = function() game:GetService("MarketplaceService"):PromptGamePassPurchase(player, RS:GetAttribute("VipPass")) end,
+			redeem = function(code)
+				local r = remotes and remotes:FindFirstChild("Redeem")
+				if not r then return false, "Codes aren't available right now" end
+				local ok, good, amount, name = pcall(function() return r:InvokeServer(code) end)
+				if not ok then return false, "Couldn't reach the server — try again" end
+				if not good then return false, amount end
+				state.credits += amount
+				state.codes = state.codes or {}
+				state.codes[name] = true
+				sfx("chime", 0.8, 1.3)
+				banner("CODE REDEEMED", string.format("+%d credits", amount), 3)
+				save(); flushSave(true)
+				return true, string.format("+%d credits!", amount)
+			end,
 			buy = function(kind, it)
 				if state.credits < it.price then return false, string.format("You need %d more credits", it.price - state.credits) end
 				state.credits -= it.price

@@ -139,6 +139,23 @@ function Shop.open(gui, cb, scale)
 			card(1, { Color3.fromRGB(255, 205, 60), Color3.fromRGB(255, 120, 40) }, "VIP pilot", "2× credits from everything",
 				if owned then "Owned ✓" else "Get VIP", if owned then Color3.fromRGB(120, 130, 140) else AMBER,
 				function() if not owned and cb.buyVip then cb.buyVip() end end)
+		elseif current == "codes" then
+			local c = make("Frame", { BackgroundColor3 = Color3.fromRGB(28, 34, 44), LayoutOrder = 1, ZIndex = 22 }, grid)
+			corner(c, 10)
+			make("TextLabel", { Position = UDim2.new(0, 10, 0, 8), Size = UDim2.new(1, -20, 0, 20), BackgroundTransparency = 1, Text = "Enter a code", TextColor3 = INK, Font = FONT_B, TextSize = 14, ZIndex = 23 }, c)
+			local box = make("TextBox", { Position = UDim2.new(0, 10, 0, 34), Size = UDim2.new(1, -20, 0, 32), BackgroundColor3 = Color3.fromRGB(14, 18, 24), Text = "", PlaceholderText = "CODE", TextColor3 = INK, PlaceholderColor3 = DIM, Font = FONT_B, TextSize = 15, ClearTextOnFocus = false, ZIndex = 23 }, c)
+			corner(box, 6)
+			local b = make("TextButton", { Position = UDim2.new(0, 10, 1, -36), Size = UDim2.new(1, -20, 0, 28), BackgroundColor3 = AMBER, Text = "Redeem", TextColor3 = Color3.new(0.05, 0.05, 0.05), Font = FONT_B, TextSize = 14, ZIndex = 23 }, c)
+			corner(b, 7)
+			b.Activated:Connect(function()
+				if not cb.redeem then return end
+				b.Text = "…"
+				local ok, msg = cb.redeem(box.Text)
+				b.Text = "Redeem"
+				note.Text = msg or ""
+				if ok then box.Text = ""; credits.Text = string.format("%d credits", cb.state().credits) end
+			end)
+			note.Text = "Codes are posted with game updates — follow the group for new ones."
 		else
 			for i, t in ipairs(Shop.TUNE) do
 				local have = (st.tune or 0) >= t.level
@@ -155,7 +172,7 @@ function Shop.open(gui, cb, scale)
 		end
 	end
 	local tabBtns = {}
-	local tabList = { { "paint", "Paint" }, { "trail", "Trails" }, { "tune", "Engines" } }
+	local tabList = { { "paint", "Paint" }, { "trail", "Trails" }, { "tune", "Engines" }, { "codes", "🎁 Codes" } }
 	if cb.vipOn and cb.vipOn() then table.insert(tabList, { "vip", "⭐ VIP" }) end
 	for _, tdef in ipairs(tabList) do
 		local b = make("TextButton", { Size = UDim2.new(0, 110, 1, 0), BackgroundColor3 = Color3.fromRGB(36, 42, 54), Text = tdef[2], TextColor3 = INK, Font = FONT_B, TextSize = 15, ZIndex = 22 }, tabs)

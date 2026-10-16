@@ -233,6 +233,7 @@ local warpIdx = 1
 
 local hud -- forward
 local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
+local dbgTimes = { sim = 0, scen = 0, ghost = 0, hud = 0, frame = 0 }
 
 local function toast(msg)
 	table.insert(messages, { text = msg, t = os.clock() })
@@ -569,6 +570,7 @@ end
 local simTime = 0
 RunService.RenderStepped:Connect(function(dtRaw)
 	if not ship then return end
+	local _frame0 = os.clock()
 	local dt = math.min(dtRaw, 0.05)
 	simTime += dt
 	-- inputs
@@ -591,7 +593,9 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	ship.warp = math.max(1, want)
 	-- simulate
 	eph:update(ship.t)
+	local _c0 = os.clock()
 	ship:step(dt, C)
+	dbgTimes.sim = dbgTimes.sim * 0.9 + (os.clock() - _c0) * 100
 	eph:update(ship.t)
 	for _, e in ipairs(ship.events) do
 		if e.type == "break" then toast(string.format("%s %s", e.part.def.name, if e.why == "overheat" then "overheated" else "broke off"))
@@ -700,7 +704,9 @@ RunService.RenderStepped:Connect(function(dtRaw)
 		hangar.CFrame = base * CFrame.new(-1100 * S * k, 11 * S * k, -120 * S * k)
 	end
 
+	local _c1 = os.clock()
 	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000 and not dbgNoScenery)
+	dbgTimes.scen = dbgTimes.scen * 0.9 + (os.clock() - _c1) * 100
 
 	-- ---------- rings ----------
 	local ringsVisible = showGround and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
@@ -780,8 +786,10 @@ RunService.RenderStepped:Connect(function(dtRaw)
 			hud:setMission(Progress.current(state))
 		end
 	end
+	local _c2 = os.clock()
 	sendPose()
 	drawGhosts(simTime)
+	dbgTimes.ghost = dbgTimes.ghost * 0.9 + (os.clock() - _c2) * 100
 	hud:setProgress(state, Progress.xpForLevel(state.level))
 	if not hud.bannerUntil and #bannerQueue > 0 then
 		local b = table.remove(bannerQueue, 1)
@@ -837,7 +845,10 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	local sunUp = math.asin(math.clamp(sunW.Y, -1, 1))
 	Lighting.ClockTime = 12 - (math.pi / 2 - sunUp) / (math.pi / 2) * 6 * (if sunW.X >= 0 then 1 else -1)
 
+	local _c3 = os.clock()
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
+	dbgTimes.hud = dbgTimes.hud * 0.9 + (os.clock() - _c3) * 100
+	dbgTimes.frame = dbgTimes.frame * 0.9 + (os.clock() - _frame0) * 100
 end)
 
 -- test hook (Studio tools can call it): returns a summary, or runs a simple command
@@ -854,7 +865,7 @@ dbg.OnInvoke = function(cmd, a, b, c)
 	local E = ship.env
 	return { h = E.h, agl = E.agl, v = E.vSurf, mach = E.mach, body = E.body.name, dead = ship.dead, contacts = ship.contacts,
 		flags = flags, level = state.level, xp = state.xp, credits = state.credits, mission = (Progress.current(state) or {}).id,
-		raceNext = race.next, xe = dbgPos[1], xn = dbgPos[2], pitchDeg = math.deg(math.asin(math.clamp(V3(0,0,1):applyQuaternion(ship.q):dot(ship.r:clone():normalize()), -1, 1))), ap = C.ap and C.ap.name, apStatus = C.apStatus, ship = design.key }
+		raceNext = race.next, ms = dbgTimes, xe = dbgPos[1], xn = dbgPos[2], pitchDeg = math.deg(math.asin(math.clamp(V3(0,0,1):applyQuaternion(ship.q):dot(ship.r:clone():normalize()), -1, 1))), ap = C.ap and C.ap.name, apStatus = C.apStatus, ship = design.key }
 end
 dbg.Parent = player:WaitForChild("PlayerScripts")
 startFlight(Designs[1])

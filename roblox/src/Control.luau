@@ -840,7 +840,7 @@ function C.landAp(target)
 
 		-- final: vertical descent, kill horizontal drift, land upright
 		local anet = math.max(0.6, amax * 0.85 - g)
-		local vzT = -clamp(math.sqrt(2 * anet * agl) * 0.35, 1.3, if body == MARS then (if E.rho > 0.003 and #craft.wings > 0 then 28 else 140) elseif body == MOON then 40 else 80)
+		local vzT = -clamp(math.sqrt(2 * anet * agl) * (if body == MOON then 0.35 else 0.5), 1.3, if body == MARS then (if E.rho > 0.003 and #craft.wings > 0 then 28 else 140) elseif body == MOON then 40 else 80)
 		local hor = vH:clone():multiplyScalar(if agl < 30 then -1.0 else -0.6)
 		local maxTilt = if agl < 30 then 0.18 elseif agl < 300 then 0.3 else 0.6
 		local status = if agl > 100 then "Descending" else string.format("Touchdown in %.0f s", math.max(0, agl / math.max(1, -vz)))

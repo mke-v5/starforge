@@ -31,8 +31,16 @@ local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 ----------------------------------------------------------------- world model for the physics
+local PAD = { e = 450, n = 420, r = 40, h = 3 }   -- rocket launch pad (metres from the spaceport centre)
+local SITE_LAT, SITE_LON = 28.61, -80.69
 local world = { nearBuildings = false }
-function world:groundAt(body, lat, lon) return 0 end
+function world:groundAt(body, lat, lon)
+	if body ~= EARTH then return 0 end
+	local n = (lat - SITE_LAT) * 111320
+	local e = (lon - SITE_LON) * 111320 * math.cos(SITE_LAT * D2R)
+	if (e - PAD.e) ^ 2 + (n - PAD.n) ^ 2 < PAD.r * PAD.r then return PAD.h end
+	return 0
+end
 function world:isWater(lat, lon) return false end
 function world:buildingTop() return nil end
 
@@ -67,9 +75,73 @@ local tiles = {}
 for i = 1, NT * NT do
 	tiles[i] = anchored("Part", { Name = "Ground", Size = Vector3.new(TILE, 4, TILE), Material = Enum.Material.Grass, Color = Color3.fromRGB(86, 120, 64), CastShadow = false })
 end
-local runway = anchored("Part", { Name = "Runway", Size = Vector3.new(3000 * S, 1, 60 * S), Material = Enum.Material.Asphalt, Color = Color3.fromRGB(58, 60, 64) })
-local stripe = anchored("Part", { Name = "Stripe", Size = Vector3.new(2900 * S, 1.2, 1 * S), Material = Enum.Material.SmoothPlastic, Color = Color3.fromRGB(235, 235, 235) })
-local hangar = anchored("Part", { Name = "Hangar", Size = Vector3.new(60 * S, 22 * S, 50 * S), Material = Enum.Material.DiamondPlate, Color = Color3.fromRGB(150, 156, 165) })
+-- the spaceport, in metres from its centre: e (east, along the runway), n (north), y (centre height),
+-- size, colour, material; flat things get a layer so they sit just above the ground at any scale
+local props = {}
+local function prop(e, n, y, sx, sy, sz, color, mat, opt)
+	opt = opt or {}
+	table.insert(props, { e = e, n = n, y = y, size = Vector3.new(sx, sy, sz), color = color, mat = mat, layer = opt.layer, shape = opt.shape, rot = opt.rot })
+end
+do
+	local ASPH, WHITE, CONC = Color3.fromRGB(52, 54, 58), Color3.fromRGB(236, 236, 232), Color3.fromRGB(176, 174, 168)
+	for i = 0, 5 do prop(-1250 + i * 500, 0, 0.1, 500, 0.2, 60, ASPH, Enum.Material.Asphalt, { layer = 1 }) end
+	for e = -1440, 1440, 60 do prop(e, 0, 0.25, 30, 0.1, 1, WHITE, Enum.Material.SmoothPlastic, { layer = 2 }) end
+	for i = 0, 5 do
+		prop(-1250 + i * 500, 28.5, 0.25, 500, 0.1, 1, WHITE, Enum.Material.SmoothPlastic, { layer = 2 })
+		prop(-1250 + i * 500, -28.5, 0.25, 500, 0.1, 1, WHITE, Enum.Material.SmoothPlastic, { layer = 2 })
+	end
+	for _, side in ipairs({ -1, 1 }) do
+		for b = -3, 3 do prop(side * 1470, b * 7.5, 0.25, 30, 0.1, 2.5, WHITE, Enum.Material.SmoothPlastic, { layer = 2 }) end
+		-- edge lights
+		for e = 0, 1500, 100 do
+			prop(side * e, 31, 0.4, 0.8, 0.8, 0.8, Color3.fromRGB(255, 236, 170), Enum.Material.Neon, { layer = 3 })
+			prop(side * e, -31, 0.4, 0.8, 0.8, 0.8, Color3.fromRGB(255, 236, 170), Enum.Material.Neon, { layer = 3 })
+		end
+	end
+	-- taxiway, apron, hangar, tower
+	prop(-1100, 60, 0.1, 22, 0.2, 60, ASPH, Enum.Material.Asphalt, { layer = 1 })
+	prop(-1100, 135, 0.1, 160, 0.2, 90, CONC, Enum.Material.Concrete, { layer = 1 })
+	prop(-1100, 165, 11, 60, 22, 40, Color3.fromRGB(150, 156, 165), Enum.Material.DiamondPlate)
+	prop(-1100, 145.2, 9, 44, 18, 0.6, Color3.fromRGB(60, 64, 72), Enum.Material.Metal)
+	prop(-1100, 165, 22.5, 62, 1.2, 42, Color3.fromRGB(255, 160, 60), Enum.Material.SmoothPlastic)
+	prop(-760, 150, 20, 7, 40, 7, CONC, Enum.Material.Concrete)
+	prop(-760, 150, 43, 13, 6, 13, Color3.fromRGB(90, 140, 190), Enum.Material.Glass)
+	prop(-760, 150, 46.6, 14, 1.2, 14, Color3.fromRGB(70, 74, 82), Enum.Material.Metal)
+	-- road from the pad to the runway, the pad and its service tower
+	prop(PAD.e, 200, 0.1, 14, 0.2, 340, ASPH, Enum.Material.Asphalt, { layer = 1 })
+	prop(PAD.e, PAD.n, 1.5, 3, 80, 80, CONC, Enum.Material.Concrete, { shape = Enum.PartType.Cylinder, rot = CFrame.Angles(0, 0, math.pi / 2) })
+	prop(PAD.e, PAD.n, 3.05, 0.1, 30, 30, Color3.fromRGB(60, 60, 62), Enum.Material.Concrete, { shape = Enum.PartType.Cylinder, rot = CFrame.Angles(0, 0, math.pi / 2), layer = 4 })
+	prop(PAD.e + 28, PAD.n, 33, 7, 60, 7, Color3.fromRGB(190, 50, 40), Enum.Material.Metal)
+	prop(PAD.e + 20, PAD.n, 50, 10, 1.5, 2, Color3.fromRGB(190, 50, 40), Enum.Material.Metal)
+	prop(PAD.e + 28, PAD.n, 63.5, 1, 1, 1, Color3.fromRGB(255, 60, 60), Enum.Material.Neon)
+end
+local propParts = {}
+for i, pr in ipairs(props) do
+	propParts[i] = anchored("Part", { Name = "Spaceport", Size = Vector3.one, Color = pr.color, Material = pr.mat, Shape = pr.shape or Enum.PartType.Block, CastShadow = pr.layer == nil })
+end
+local propK = nil
+local propCF = {}
+local function drawProps(xe, xn, k, gy, show)
+	for i, p in ipairs(propParts) do p.Transparency = if show then 0 else 1 end
+	if not show then return end
+	local kq = math.exp(math.floor(math.log(k) / 0.03 + 0.5) * 0.03)
+	local resize = propK ~= kq
+	propK = kq
+	for i, pr in ipairs(props) do
+		local sz = pr.size * (S * kq)
+		local y
+		if pr.layer then
+			sz = Vector3.new(sz.X, math.max(sz.Y, 0.05), sz.Z)
+			y = gy + math.max(pr.y * S * k, pr.layer * 0.12)
+		else
+			y = gy + pr.y * S * k
+		end
+		if resize then propParts[i].Size = sz end
+		local cf = CFrame.new((pr.e - xe) * S * k, y, -(pr.n - xn) * S * k)
+		propCF[i] = if pr.rot then cf * pr.rot else cf
+	end
+	workspace:BulkMoveTo(propParts, propCF, Enum.BulkMoveMode.FireCFrameChanged)
+end
 -- the Earth seen from high up, the Moon, the Sun, and a black dome for space
 local earthBall = anchored("Part", { Name = "EarthBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.SmoothPlastic, Color = Color3.fromRGB(40, 90, 170), CastShadow = false })
 local earthMesh = Instance.new("SpecialMesh"); earthMesh.MeshType = Enum.MeshType.Sphere; earthMesh.Parent = earthBall
@@ -453,7 +525,7 @@ local function startFlight(entry)
 	end
 	local vert = craft.vertical
 	if vert then
-		ship:placeAt(EARTH, SITE.lat, SITE.lon + 0.004, craft.box.max.z - craft.com.z + 0.15, 0, math.pi / 2)
+		ship:placeAt(EARTH, SITE.lat + PAD.n / 111320, SITE.lon + PAD.e / (111320 * math.cos(SITE.lat * D2R)), craft.box.max.z - craft.com.z + 3.15, 0, math.pi / 2)
 	else
 		ship:placeAt(EARTH, SITE.lat, SITE.lon - 0.012, -craft.box.min.y + 0.15, SITE.hdg * D2R, 0)
 	end
@@ -831,7 +903,7 @@ frame = function(dtRaw)
 	engineRocket.PlaybackSpeed = 0.8 + 0.3 * on
 
 	-- ground under the ship (near the surface), drawn uniformly scaled about the ship when high up
-	local agl = E.agl
+	local agl = E.h      -- height above the datum (the ground is flat at 0 apart from the pad)
 	local depth = agl * S
 	local k = if depth > 3000 then 3000 / depth else 1
 	local showGround = body == EARTH and E.h < 60000
@@ -864,18 +936,7 @@ frame = function(dtRaw)
 	end
 	-- the spaceport (runway along the site heading, centred at the site)
 	local near = showGround and math.abs(xe) < 40000 and math.abs(xn) < 40000
-	for _, p in ipairs({ runway, stripe, hangar }) do p.Transparency = if near then 0 else 1 end
-	if near then
-		local hd = SITE.hdg * D2R
-		local rot = CFrame.Angles(0, -(hd - math.pi / 2), 0)
-		local base = CFrame.new(-xe * S * k, gy, xn * S * k) * rot
-		runway.Size = Vector3.new(3000 * S * k, 1, 60 * S * k)
-		runway.CFrame = base * CFrame.new(0, 0.5, 0)
-		stripe.Size = Vector3.new(2900 * S * k, 1.2, 1 * S * k)
-		stripe.CFrame = base * CFrame.new(0, 0.6, 0)
-		hangar.Size = Vector3.new(60 * S * k, 22 * S * k, 50 * S * k)
-		hangar.CFrame = base * CFrame.new(-1100 * S * k, 11 * S * k, -120 * S * k)
-	end
+	drawProps(xe, xn, k, gy, near)
 
 	local _c1 = os.clock()
 	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000 and not dbgNoScenery)

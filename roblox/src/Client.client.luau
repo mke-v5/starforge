@@ -603,6 +603,7 @@ local function openHangar(title)
 		unlocked = function(key) return Progress.unlocked(state, key) end,
 		needLevel = function(key) return Progress.SHIP_LEVEL[key] or 1 end,
 		blurb = function(entry) return entry.blurb or "" end,
+		vertical = function(entry) return entry.design.vertical == true end,
 		size = function(entry) return Craft.new(entry.design).size * S end,
 		build = function(entry)
 			local c = Craft.new(entry.design)

@@ -25,7 +25,7 @@ function Hangar.open(gui, opts)
 	local old = gui:FindFirstChild("HangarScreen")
 	if old then old:Destroy() end
 	local root = make("Frame", { Name = "HangarScreen", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(6, 8, 12), BackgroundTransparency = if opts.title then 0 else 0.15, ZIndex = 30 }, gui)
-	make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 0.45) }) }, root)
+	make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, if opts.title then 0.1 else 0.35) }) }, root)
 	local body = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0, 900, 0, 560), BackgroundTransparency = 1, ZIndex = 31 }, root)
 	local sc = make("UIScale", { Scale = 1 }, body)
 	local function fit()
@@ -62,7 +62,9 @@ function Hangar.open(gui, opts)
 			c.stroke.Thickness = if on then 3 else 1
 		end
 	end
-	for i, entry in ipairs(opts.designs) do
+	local order = table.clone(opts.designs)
+	table.sort(order, function(a, b) return opts.needLevel(a.key) < opts.needLevel(b.key) end)
+	for i, entry in ipairs(order) do
 		local key = entry.key
 		local unlocked = opts.unlocked(key)
 		local card = make("TextButton", { Size = UDim2.new(0, 205, 1, 0), BackgroundColor3 = Color3.fromRGB(22, 28, 38), AutoButtonColor = unlocked, Text = "", LayoutOrder = i, ZIndex = 32 }, row)
@@ -78,7 +80,7 @@ function Hangar.open(gui, opts)
 		local sz = opts.size(entry)
 		local dist = sz * 1.25 + 3
 		cam.CFrame = CFrame.lookAt(Vector3.new(dist * 0.75, dist * 0.42, dist * 0.6), Vector3.zero)
-		table.insert(spinners, { model = model, phase = i * 1.3 })
+		table.insert(spinners, { model = model, phase = i * 1.3, tilt = if opts.vertical and opts.vertical(entry) then CFrame.Angles(math.pi / 2, 0, 0) else CFrame.identity })
 		if not unlocked then vp.ImageColor3 = Color3.fromRGB(70, 70, 80) end
 		make("TextLabel", { Position = UDim2.new(0, 10, 0, 180), Size = UDim2.new(1, -20, 0, 24), BackgroundTransparency = 1, Text = entry.design.name, TextColor3 = if unlocked then INK else DIM, Font = FONT_B, TextSize = 19, ZIndex = 33 }, card)
 		make("TextLabel", { Position = UDim2.new(0, 10, 0, 206), Size = UDim2.new(1, -20, 0, 54), BackgroundTransparency = 1, Text = opts.blurb(entry), TextColor3 = DIM, Font = FONT, TextSize = 13, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 33 }, card)
@@ -102,7 +104,7 @@ function Hangar.open(gui, opts)
 	local conn
 	conn = RunService.RenderStepped:Connect(function()
 		local t = os.clock()
-		for _, s in ipairs(spinners) do s.model:PivotTo(CFrame.Angles(0, t * 0.5 + s.phase, 0)) end
+		for _, s in ipairs(spinners) do s.model:PivotTo(CFrame.Angles(0, t * 0.5 + s.phase, 0) * s.tilt) end
 	end)
 	local function close()
 		if conn then conn:Disconnect(); conn = nil end

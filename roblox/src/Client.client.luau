@@ -318,7 +318,8 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 			poolK[n] = kk; poolO[n] = o.id
 		end
 		bulkParts[n] = p
-		bulkCF[n] = CFrame.new(pos) * CFrame.Angles(0, o.rot, 0)
+		o.rotCF = o.rotCF or CFrame.Angles(0, o.rot, 0)
+		bulkCF[n] = CFrame.new(pos) * o.rotCF
 	end
 	if show and agl < 2500 then
 		local R = 1600
@@ -463,6 +464,7 @@ end
 local engineJet = sound("82496091617037", { Looped = true, Volume = 0 })
 local engineRocket = sound("77862630063982", { Looped = true, Volume = 0 })
 engineJet:Play(); engineRocket:Play()
+K.wind = sound("5113213873", { Looped = true, Volume = 0 }); K.wind:Play()
 K.SOUND_IDS = { boom = "9120769331", chime = "85188102085028", crash = "138533090376585", ring = "138890894929151" }
 local function sfx(name, vol, pitch)
 	local id = K.SOUND_IDS[name]
@@ -1319,6 +1321,9 @@ frame = function(dtRaw)
 	local vol = on * (0.25 + 0.75 * math.max(airS, 0.25))
 	engineJet.Volume = if rocketish then 0 else vol * 0.9
 	engineRocket.Volume = if rocketish then vol else 0
+	-- rushing air: louder with dynamic pressure, higher with speed
+	K.wind.Volume = if ship.dead then 0 else math.clamp(E.q / 25000, 0, 1) * 0.8
+	K.wind.PlaybackSpeed = 0.7 + math.clamp(E.vSurf / 600, 0, 1) * 0.8
 	engineJet.PlaybackSpeed = 0.7 + 0.6 * on
 	engineRocket.PlaybackSpeed = 0.8 + 0.3 * on
 

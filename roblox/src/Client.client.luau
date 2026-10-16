@@ -78,6 +78,15 @@ local moonMesh = Instance.new("SpecialMesh"); moonMesh.MeshType = Enum.MeshType.
 local sunBall = anchored("Part", { Name = "SunBall", Shape = Enum.PartType.Ball, Size = Vector3.new(80, 80, 80), Material = Enum.Material.Neon, Color = Color3.fromRGB(255, 244, 214), CastShadow = false })
 local dome = {}
 for i = 1, 6 do dome[i] = anchored("Part", { Name = "Space", Size = Vector3.new(1, 1, 1), Material = Enum.Material.Neon, Color = Color3.new(0, 0, 0), CastShadow = false, Transparency = 1 }) end
+Lighting.Brightness = 2.6
+Lighting.OutdoorAmbient = Color3.fromRGB(150, 150, 158)
+Lighting.Ambient = Color3.fromRGB(70, 70, 78)
+Lighting.EnvironmentDiffuseScale = 0.6
+Lighting.EnvironmentSpecularScale = 0.6
+local cc = Lighting:FindFirstChild("StarforgeGrade") or Instance.new("ColorCorrectionEffect")
+cc.Name = "StarforgeGrade"; cc.Saturation = 0.12; cc.Contrast = 0.06; cc.Parent = Lighting
+local bloom = Lighting:FindFirstChildOfClass("BloomEffect") or Instance.new("BloomEffect")
+bloom.Intensity = 0.6; bloom.Size = 28; bloom.Threshold = 1.4; bloom.Parent = Lighting
 local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
 atmosphere.Parent = Lighting
 
@@ -230,7 +239,15 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 end
 
 ----------------------------------------------------------------- flight state
-local eph = Astro.Ephemeris.new():update(Astro.nowSimTime())
+-- Flights always start in the late morning at the spaceport (today's date, so the Moon and planets are
+-- where they really are, within a day).
+local function flightStartTime()
+	local t = Astro.nowSimTime()
+	local u = (t + 43200) % 86400                     -- seconds into the UTC day (J2000 starts at noon)
+	local wantUTC = (10.5 - SITE.lon / 15) * 3600     -- 10:30 local solar time
+	return t - u + wantUTC
+end
+local eph = Astro.Ephemeris.new():update(flightStartTime())
 local settings = { heatScale = 1, crashScale = 1, assist = "assisted" }
 local craft, ship, C, view
 local design = Designs[1]
@@ -422,7 +439,7 @@ local function startFlight(entry)
 	if hud then hud:setRace(nil); hud:setShip("Ship: " .. entry.design.name) end
 	state.flights = (state.flights or 0) + 1
 	design = entry
-	eph:update(Astro.nowSimTime())
+	eph:update(flightStartTime())
 	craft = Craft.new(entry.design)
 	craft.thrustMult = Shop.thrustMult(state)
 	local paint = Shop.find(state.paint or "")

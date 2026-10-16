@@ -881,6 +881,17 @@ frame = function(dtRaw)
 	if C.status ~= "" then toast(C.status); C.status = "" end
 
 	-- ---------- render ----------
+	if ship.dead then
+		-- wreck: hold the scene still (the explosion plays), shake the camera, wait for the respawn
+		shake = math.max(0, shake - dt * 3)
+		local c = camera.CFrame
+		local j = Vector3.new(math.noise(simTime * 23, 1), math.noise(simTime * 23, 2), math.noise(simTime * 23, 3)) * shake
+		camera.CFrame = c + j * 0.3
+		if not hud.bannerUntil and #bannerQueue > 0 then local b = table.remove(bannerQueue, 1); hud:showBanner(b[1], b[2], b[3]) end
+		engineJet.Volume = 0; engineRocket.Volume = 0
+		hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
+		return
+	end
 	local E = ship.env
 	local body = E.body
 	setFrame(ship.r)

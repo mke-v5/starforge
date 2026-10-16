@@ -145,8 +145,8 @@ local function kick(a) shake = math.max(shake, a) end
 ----------------------------------------------------------------- ring race over the spaceport
 -- ring centres in metres from the spaceport: east, north, height
 local RING_POS = {
-	{ 2500, 0, 150 }, { 4500, 400, 250 }, { 6200, 1500, 400 }, { 6800, 3300, 500 }, { 5600, 5000, 600 },
-	{ 3200, 5800, 500 }, { 800, 5200, 400 }, { -400, 3400, 300 }, { 200, 1600, 200 }, { 1500, 600, 150 },
+	{ 1900, 0, 70, 75 }, { 3600, 0, 160, 65 }, { 5600, 500, 300 }, { 6900, 1900, 420 }, { 6800, 3700, 520 },
+	{ 5200, 5200, 600 }, { 2800, 5700, 500 }, { 700, 4800, 380 }, { -300, 3000, 260 }, { 300, 1400, 160 },
 }
 local RING_R, SEG = 45, 18
 local rings = {}
@@ -158,13 +158,21 @@ for i, p in ipairs(RING_POS) do
 	local nx, ny, nz = q[1] - a[1], q[3] - a[3], q[2] - a[2]
 	if i == #RING_POS then nx, ny, nz = p[1] - a[1], p[3] - a[3], p[2] - a[2] end
 	local L = math.sqrt(nx * nx + ny * ny + nz * nz)
-	local ring = { e = p[1], n = p[2], h = p[3], nE = nx / L, nU = ny / L, nN = nz / L, parts = {}, side = nil }
+	local ring = { e = p[1], n = p[2], h = p[3], r = p[4] or RING_R, nE = nx / L, nU = ny / L, nN = nz / L, parts = {}, side = nil }
 	for s = 1, SEG do
 		ring.parts[s] = anchored("Part", { Name = "Ring" .. i, Material = Enum.Material.Neon, Color = Color3.fromRGB(80, 220, 255), CastShadow = false, Size = Vector3.one })
 	end
 	rings[i] = ring
 end
 local race = { next = 1, startT = nil, t = 0 }
+local marker = anchored("Part", { Name = "RingMarker", Size = Vector3.one, Transparency = 1 })
+local markerGui = Instance.new("BillboardGui")
+markerGui.Size = UDim2.new(0, 140, 0, 46); markerGui.AlwaysOnTop = true; markerGui.LightInfluence = 0
+markerGui.Adornee = marker; markerGui.Parent = marker
+local markerText = Instance.new("TextLabel")
+markerText.Size = UDim2.new(1, 0, 1, 0); markerText.BackgroundTransparency = 1; markerText.Font = Enum.Font.GothamBold
+markerText.TextSize = 16; markerText.TextColor3 = Color3.fromRGB(90, 255, 140); markerText.TextStrokeTransparency = 0.3
+markerText.Parent = markerGui
 
 -- ring position (metres, east/up/north from the ship's spot over the ground) -> world studs, given the ground scale
 local function placeRing(ring, idx, xe, xn, agl, k, visible)
@@ -173,7 +181,7 @@ local function placeRing(ring, idx, xe, xn, agl, k, visible)
 	local c = Vector3.new((ring.e - xe) * S * k, (ring.h - agl) * S * k, -(ring.n - xn) * S * k)
 	local n = Vector3.new(ring.nE, ring.nU, -ring.nN)
 	local cf = CFrame.lookAt(c, c + n)
-	local R = RING_R * S * k
+	local R = ring.r * S * k
 	local segLen = 2 * math.pi * R / SEG * 1.08
 	local thick = math.max(0.4, (if idx == race.next then 3.5 else 2.2) * S * k)
 	for s, part in ipairs(ring.parts) do
@@ -454,11 +462,17 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	local ringsVisible = showGround and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
 	for i, ring in ipairs(rings) do placeRing(ring, i, xe, xn, agl, k, ringsVisible) end
 	local ringNow = rings[race.next]
+	markerGui.Enabled = ringsVisible and ringNow ~= nil
+	if ringNow and ringsVisible then
+		marker.CFrame = CFrame.new((ringNow.e - xe) * S * k, (ringNow.h - agl + ringNow.r * 1.3) * S * k, -(ringNow.n - xn) * S * k)
+		local dd = math.sqrt((ringNow.e - xe) ^ 2 + (ringNow.n - xn) ^ 2 + (ringNow.h - E.h) ^ 2)
+		markerText.Text = string.format("RING %d\n%s", race.next, Geo.fmtDist(dd))
+	end
 	if ringNow and not ship.dead then
 		local dE, dN, dU = xe - ringNow.e, xn - ringNow.n, E.h - ringNow.h
 		local side = dE * ringNow.nE + dN * ringNow.nN + dU * ringNow.nU
 		local lat2 = dE * dE + dN * dN + dU * dU - side * side
-		if ringNow.side and ringNow.side < 0 and side >= 0 and lat2 < (RING_R * 1.15) ^ 2 then
+		if ringNow.side and ringNow.side < 0 and side >= 0 and lat2 < (ringNow.r * 1.15) ^ 2 then
 			-- through the ring
 			flags.ringsPassed += 1
 			if race.next == 1 then race.startT = simTime end
@@ -580,6 +594,21 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
 end)
 
+-- test hook (Studio tools can call it): returns a summary, or runs a simple command
+local dbg = Instance.new("BindableFunction")
+dbg.Name = "StarforgeDebug"
+dbg.OnInvoke = function(cmd, a, b, c)
+	if cmd == "ap" then hud._cb.onAuto(a)
+	elseif cmd == "ship" then for _, d in ipairs(Designs) do if d.key == a then startFlight(d) end end
+	elseif cmd == "level" then state.level = a
+	elseif cmd == "input" then C.input[a] = b
+	end
+	local E = ship.env
+	return { h = E.h, agl = E.agl, v = E.vSurf, mach = E.mach, body = E.body.name, dead = ship.dead, contacts = ship.contacts,
+		flags = flags, level = state.level, xp = state.xp, credits = state.credits, mission = (Progress.current(state) or {}).id,
+		raceNext = race.next, ap = C.ap and C.ap.name, apStatus = C.apStatus, ship = design.key }
+end
+dbg.Parent = player:WaitForChild("PlayerScripts")
 startFlight(Designs[1])
 hud:setMission(Progress.current(state))
 hud:setProgress(state, Progress.xpForLevel(state.level))

@@ -32,6 +32,7 @@ end
 function Hud.new(player, cb)
 	local self = setmetatable({}, Hud)
 	self.stickX, self.stickY = 0, 0
+	self._cb = cb
 	local gui = make("ScreenGui", { Name = "StarforgeHud", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, player:WaitForChild("PlayerGui"))
 	self.gui = gui
 	-- flight data, top left

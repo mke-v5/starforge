@@ -21,6 +21,7 @@ local Designs = require(SF.DesignsData)
 local ShipModel = require(SF.ShipModel)
 local Progress = require(SF.Progress)
 local Shop = require(SF.Shop)
+local Hangar = require(SF.Hangar)
 local TweenService = game:GetService("TweenService")
 local V3 = THREE.Vector3.new
 local EARTH, MOON, D2R = Geo.EARTH, Geo.MOON, Geo.D2R
@@ -596,6 +597,29 @@ local function drawGhosts(simT)
 end
 
 ----------------------------------------------------------------- HUD
+local function openHangar(title)
+	Hangar.open(hud.gui, {
+		designs = Designs, current = design.key, state = state, title = title, scale = hud.uiScale,
+		unlocked = function(key) return Progress.unlocked(state, key) end,
+		needLevel = function(key) return Progress.SHIP_LEVEL[key] or 1 end,
+		blurb = function(entry) return entry.blurb or "" end,
+		size = function(entry) return Craft.new(entry.design).size * S end,
+		build = function(entry)
+			local c = Craft.new(entry.design)
+			local paint = Shop.find(state.paint or "")
+			if paint and paint.hull then c.colors = { hull = paint.hull, accent = paint.accent } end
+			local v = ShipModel.build(c, entry.design.name)
+			-- turn about the centre of mass
+			v.root.PivotOffset = CFrame.new(Vector3.new(c.com.x, c.com.y, c.com.z) * S)
+			return v.model
+		end,
+		onFly = function(entry)
+			startFlight(entry)
+			hud:setMission(Progress.current(state))
+		end,
+	})
+end
+
 local function designIndex(key) for i, d in ipairs(Designs) do if d.key == key then return i end end return 1 end
 local function lockedHint()
 	local best
@@ -606,7 +630,8 @@ local function lockedHint()
 end
 hud = require(SF.Hud).new(player, {
 	ships = Designs,
-	onNextShip = function()
+	onNextShip = function() openHangar(false) end,
+	_cycleShip = function()
 		local i = designIndex(design.key)
 		for _ = 1, #Designs do
 			i = i % #Designs + 1
@@ -928,7 +953,7 @@ frame = function(dtRaw)
 	drawGhosts(simTime)
 	dbgTimes.ghost = dbgTimes.ghost * 0.9 + (os.clock() - _c2) * 100
 	hud:setProgress(state, Progress.xpForLevel(state.level))
-	if not hud.bannerUntil and #bannerQueue > 0 then
+	if not hud.bannerUntil and #bannerQueue > 0 and not hud.gui:FindFirstChild("HangarScreen") then
 		local b = table.remove(bannerQueue, 1)
 		hud:showBanner(b[1], b[2], b[3])
 	end
@@ -1009,6 +1034,7 @@ end
 dbg.Parent = player:WaitForChild("PlayerScripts")
 startFlight(Designs[1])
 hud:setMission(Progress.current(state))
+openHangar(true)
 hud:setProgress(state, Progress.xpForLevel(state.level))
 if state.flights <= 1 then
 	banner("WELCOME TO STARFORGE", "Complete missions to earn XP, level up and unlock new ships", 5)

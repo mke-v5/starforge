@@ -639,6 +639,40 @@ local function crystalCount()
 	return n
 end
 
+-- landing rating: sink rate and accuracy give 1-3 stars and credits
+local touch = { armed = false, at = nil, auto = false }
+local lastSink = 0
+local function rateLanding(td)
+	local sinkPts = if td.sink <= 1 then 3 elseif td.sink <= 2 then 2 elseif td.sink <= 3.5 then 1 else 0
+	local where, aimPts, off
+	local padOff = math.sqrt((td.xe - PAD.e) ^ 2 + (td.xn - PAD.n) ^ 2)
+	if td.body == EARTH and (craft.vertical or padOff <= PAD.r) then
+		off = padOff
+		aimPts = if off <= 6 then 3 elseif off <= 15 then 2 elseif off <= PAD.r then 1 else 0
+		where = if aimPts > 0 then "on the pad" else string.format("%d m from the pad", math.round(off))
+	elseif td.body == EARTH and math.abs(td.xe) < 1500 and math.abs(td.xn) < 30 then
+		off = math.abs(td.xn)
+		aimPts = if off <= 4 then 3 elseif off <= 10 then 2 else 1
+		where = string.format("%.0f m off the centreline", off)
+	elseif td.body == EARTH then
+		aimPts, where = 0, "off the runway"
+	else
+		aimPts, where = 2, "on the " .. td.body.name
+	end
+	local total = sinkPts + aimPts
+	local stars = if total >= 5 then 3 elseif total >= 3 then 2 else 1
+	local title = if stars == 3 then "PERFECT LANDING" elseif stars == 2 then "NICE LANDING" else "LANDED"
+	local starText = string.rep("★", stars) .. string.rep("☆", 3 - stars)
+	local cr = ({ 20, 50, 120 })[stars]
+	if td.auto then cr = math.floor(cr * 0.25) end
+	addCredits(cr)
+	grant(stars * 10, 0)
+	banner(title .. "  " .. starText, string.format("Touchdown %.1f m/s · %s · +%d credits%s", td.sink, where, cr * creditMult(), if td.auto then " (autopilot)" else ""), 3.5)
+	sfx("chime", 0.6, 0.9 + stars * 0.1)
+	if stars == 3 and not td.auto then daily("perfect", 1) end
+	save()
+end
+
 local function fmtRace(t) return string.format("%d:%05.2f", math.floor(t / 60), t % 60) end
 
 local function startFlight(entry)
@@ -646,6 +680,7 @@ local function startFlight(entry)
 	table.clear(trailPts)
 	resetFlags()
 	dailyAcc.armed = false
+	touch.armed, touch.at, touch.auto = false, nil, false
 	for _, r in ipairs(rings) do r.side = nil end
 	race.next = 1; race.startT = nil
 	if hud then hud:setRace(nil); hud:setShip("Ship: " .. entry.design.name) end
@@ -1318,6 +1353,19 @@ frame = function(dtRaw)
 		if ship.contacts == 0 and E.agl > 20 then dailyAcc.armed = true end
 		if dailyAcc.armed and ship.contacts > 0 and E.vSurf < 3 then dailyAcc.armed = false; daily("landings", 1) end
 		if design.key == "lynx" and E.agl > 10 and E.agl < 40 and E.vSurf < 3 then flags.hoverTime += dt else flags.hoverTime = 0 end
+		-- landing rating: remember the touchdown, score it once the ship has stopped
+		if ship.contacts == 0 then
+			lastSink = E.vVert
+			if E.agl > 30 then touch.armed = true end
+			if C.ap then touch.auto = true end
+		elseif touch.armed and not touch.at then
+			touch.at = { sink = -math.min(lastSink, E.vVert), xe = xe, xn = xn, body = E.body, auto = touch.auto }
+		end
+		if touch.at and ship.contacts > 0 and E.vSurf < 2 and not ship.dead then
+			rateLanding(touch.at)
+			touch.armed, touch.at, touch.auto = false, nil, false
+		end
+		if touch.at and ship.contacts == 0 and E.agl > 15 then touch.at = nil end   -- bounced / touch-and-go
 		local orbitPe = nil
 		if E.h > 100000 then
 			local rs = Orbit.relState(ship, E.body)

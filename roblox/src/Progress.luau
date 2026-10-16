@@ -84,27 +84,33 @@ end
 P.DAILY = {
 	{ id = "crystals10", title = "Collect 10 star crystals", credits = 150, goal = 10, stat = "crystals" },
 	{ id = "race1", title = "Finish a ring race", credits = 120, goal = 1, stat = "races" },
-	{ id = "mach2", title = "Fly faster than Mach 2", credits = 120, goal = 2, stat = "maxMach" },
+	{ id = "mach2", title = "Fly faster than Mach 2", credits = 120, goal = 2, stat = "maxMach", minLevel = 3 },
 	{ id = "land3", title = "Land 3 times", credits = 120, goal = 3, stat = "landings" },
 	{ id = "dist100", title = "Fly 100 km", credits = 150, goal = 100, stat = "km" },
-	{ id = "space1", title = "Reach space", credits = 200, goal = 1, stat = "space" },
-	{ id = "high10", title = "Climb above 10 km", credits = 80, goal = 10, stat = "maxKm" },
+	{ id = "space1", title = "Reach space", credits = 200, goal = 1, stat = "space", minLevel = 3 },
+	{ id = "high10", title = "Climb above 10 km", credits = 80, goal = 10, stat = "maxKm", minLevel = 2 },
+	{ id = "perfect1", title = "Make a perfect landing ★★★", credits = 150, goal = 1, stat = "perfect" },
+	{ id = "perfect3", title = "Make 3 perfect landings", credits = 300, goal = 3, stat = "perfect", minLevel = 3 },
 	{ id = "rings25", title = "Fly through 25 rings", credits = 120, goal = 25, stat = "rings" },
 }
 local function today() return math.floor(os.time() / 86400) end
 function P.daily(state)
 	local d = state.daily
 	if not d or d.day ~= today() then
-		d = { day = today(), stats = {}, done = {} }
+		d = { day = today(), stats = {}, done = {}, lvl = state.level }
 		state.daily = d
 	end
-	-- three challenges for today
+	-- three challenges for today, from the ones open at the level the day started on
+	local pool = {}
+	for _, c in ipairs(P.DAILY) do if (c.minLevel or 1) <= (d.lvl or state.level) then table.insert(pool, c) end end
 	local picks, used = {}, {}
 	local seed = d.day
-	while #picks < 3 do
+	local tries = 0
+	while #picks < math.min(3, #pool) and tries < 200 do
+		tries += 1
 		seed = (seed * 1103515245 + 12345) % 2147483648
-		local i = 1 + seed % #P.DAILY
-		if not used[i] then used[i] = true; table.insert(picks, P.DAILY[i]) end
+		local i = 1 + seed % #pool
+		if not used[i] then used[i] = true; table.insert(picks, pool[i]) end
 	end
 	return d, picks
 end

@@ -155,7 +155,7 @@ function Hud.new(player, cb)
 	end
 	local function rescale()
 		local vp = workspace.CurrentCamera.ViewportSize
-		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), 0.4, 1)
+		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), if UIS.TouchEnabled then 0.62 else 0.4, 1)
 		self.uiScale = sc
 		for _, u in ipairs(scales) do u.Scale = sc end
 		self.bannerScale.Scale = sc
@@ -197,8 +197,9 @@ function Hud:showBanner(title, sub, secs)
 	self.bannerUntil = os.clock() + (secs or 3.5)
 end
 
-function Hud:setProgress(state, xpNeed)
-	self.levelText.Text = string.format('Level %d  ·  <font color="#ffb347">%d credits</font>', state.level, state.credits)
+function Hud:setProgress(state, xpNeed, crystals, crystalTotal)
+	self.levelText.Text = string.format('Level %d  ·  <font color="#ffb347">%d credits</font>%s', state.level, state.credits,
+		if crystals then string.format('  ·  <font color="#ffd23c">◆ %d/%d</font>', crystals, crystalTotal) else "")
 	self.xpFill.Size = UDim2.new(math.clamp(state.xp / xpNeed, 0, 1), 0, 1, 0)
 end
 

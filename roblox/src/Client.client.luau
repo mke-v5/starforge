@@ -539,6 +539,69 @@ local function drawTrail(xe, xn, agl, k, tailE, tailN, tailU, simT, active)
 	if #trailParts2 > 0 then workspace:BulkMoveTo(trailParts2, trailCF, Enum.BulkMoveMode.FireCFrameChanged) end
 end
 
+-- speed streaks: thin wisps in the air rushing past the ship (only in the atmosphere, at speed)
+local STREAKS = 36
+local streaks = {}
+for i = 1, STREAKS do
+	streaks[i] = { part = anchored("Part", { Name = "Streak", Size = Vector3.new(0.15, 0.15, 4), Material = Enum.Material.Neon, Color = Color3.fromRGB(235, 245, 255), Transparency = 1, CastShadow = false }), pos = nil }
+end
+local streakParts, streakCF = {}, {}
+local function drawStreaks(dt, vAirW, strength, box)
+	table.clear(streakParts); table.clear(streakCF)
+	local v = -vAirW
+	local speed = v.Magnitude
+	for i, st in ipairs(streaks) do
+		local p = st.part
+		if strength <= 0.01 or speed < 1 then
+			if p.Transparency < 1 then p.Transparency = 1 end
+			st.pos = nil
+			continue
+		end
+		local dir = v / speed
+		if not st.pos or st.pos.Magnitude > box * 1.2 or (st.pos:Dot(dir) > box * 0.9) then
+			-- respawn ahead of the ship, spread across the flow
+			local r = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5) * 2 * box
+			st.pos = r - dir * (r:Dot(dir)) - dir * box * (0.6 + 0.4 * math.random())
+		end
+		st.pos += v * dt
+		local len = math.clamp(speed * 0.035, 2, 60)
+		p.Size = Vector3.new(0.18, 0.18, len)
+		p.Transparency = 1 - 0.55 * strength
+		table.insert(streakParts, p)
+		table.insert(streakCF, CFrame.lookAt(st.pos, st.pos + dir))
+	end
+	if #streakParts > 0 then workspace:BulkMoveTo(streakParts, streakCF, Enum.BulkMoveMode.FireCFrameChanged) end
+end
+
+-- star crystals: golden collectibles scattered around the spaceport and coast, back every day
+local CRYSTALS = {}
+do
+	local rng = Random.new(20261016)
+	for i = 1, 45 do
+		local ang = rng:NextNumber(0, 2 * math.pi)
+		local dist = 1500 + rng:NextNumber() ^ 1.4 * 22000
+		local h = if i % 5 == 0 then rng:NextNumber(2500, 6000) else rng:NextNumber(60, 1500)
+		table.insert(CRYSTALS, { id = i, e = math.cos(ang) * dist, n = math.sin(ang) * dist, h = h, part = nil })
+	end
+end
+for _, c in ipairs(CRYSTALS) do
+	c.part = anchored("Part", { Name = "Crystal", Size = Vector3.one, Material = Enum.Material.Neon, Color = Color3.fromRGB(255, 205, 60), CastShadow = false, Transparency = 1 })
+end
+local crystalParts, crystalCF = {}, {}
+local CRYSTAL_SIZE, CRYSTAL_GRAB = 14, 45      -- metres
+local function crystalsToday()
+	local day = math.floor(os.time() / 86400)
+	if state.crystalDay ~= day then state.crystalDay = day; state.crystals = {} end
+	state.crystals = state.crystals or {}
+	return state.crystals
+end
+local function crystalCount()
+	local got = crystalsToday()
+	local n = 0
+	for _ in pairs(got) do n += 1 end
+	return n
+end
+
 local function fmtRace(t) return string.format("%d:%05.2f", math.floor(t / 60), t % 60) end
 
 local function startFlight(entry)
@@ -1016,6 +1079,11 @@ frame = function(dtRaw)
 	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000 and not dbgNoScenery)
 	dbgTimes.scen = dbgTimes.scen * 0.9 + (os.clock() - _c1) * 100
 
+	-- air rushing by
+	do
+		local strength = math.clamp((E.vSurf - 90) / 250, 0, 1) * math.clamp(E.rho / 0.3, 0, 1)
+		drawStreaks(dt, toWorld(E.vAir) * S, strength, math.max(60, craft.size * S * 1.5))
+	end
 	-- trail from the ship's tail (the end opposite the nose)
 	do
 		local back = -cf.LookVector * (craft.size * 0.5)
@@ -1069,6 +1137,39 @@ frame = function(dtRaw)
 		end
 	end
 
+	-- ---------- star crystals ----------
+	do
+		local got = crystalsToday()
+		table.clear(crystalParts); table.clear(crystalCF)
+		local visible = showGround and E.h < 12000
+		for _, c in ipairs(CRYSTALS) do
+			local p = c.part
+			local key = tostring(c.id)
+			if not visible or got[key] then p.Transparency = 1; continue end
+			local dE, dN, dU = c.e - xe, c.n - xn, c.h - E.h
+			local d = math.sqrt(dE * dE + dN * dN + dU * dU)
+			if d < CRYSTAL_GRAB and not ship.dead then
+				got[key] = true
+				state.credits += 25
+				sfx("ring", 0.8, 1.6)
+				kick(0.4)
+				toast(string.format("Star crystal! +25 credits  (%d / %d today)", crystalCount(), #CRYSTALS))
+				save()
+				p.Transparency = 1
+				continue
+			end
+			local pos = Vector3.new(dE * S * k, (c.h - agl) * S * k, -dN * S * k)
+			local f = 1
+			if pos.Magnitude > DMAX then f = DMAX / pos.Magnitude; pos *= f end
+			local sz = math.max(0.6, CRYSTAL_SIZE * S * k * f)
+			p.Size = Vector3.new(sz, sz * 1.6, sz)
+			p.Transparency = 0
+			table.insert(crystalParts, p)
+			table.insert(crystalCF, CFrame.new(pos) * CFrame.Angles(0, simTime * 2 + c.id, math.rad(45)))
+		end
+		if #crystalParts > 0 then workspace:BulkMoveTo(crystalParts, crystalCF, Enum.BulkMoveMode.FireCFrameChanged) end
+	end
+
 	-- ---------- missions ----------
 	if not ship.dead then
 		local airborne = ship.contacts == 0 and E.agl > 5
@@ -1107,7 +1208,7 @@ frame = function(dtRaw)
 	sendPose()
 	drawGhosts(simTime)
 	dbgTimes.ghost = dbgTimes.ghost * 0.9 + (os.clock() - _c2) * 100
-	hud:setProgress(state, Progress.xpForLevel(state.level))
+	hud:setProgress(state, Progress.xpForLevel(state.level), crystalCount(), #CRYSTALS)
 	if not hud.bannerUntil and #bannerQueue > 0 and not hud.gui:FindFirstChild("HangarScreen") then
 		local b = table.remove(bannerQueue, 1)
 		hud:showBanner(b[1], b[2], b[3])

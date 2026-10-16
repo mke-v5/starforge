@@ -89,6 +89,11 @@ local function clean(s)
 	out.lastDay = math.clamp(math.floor(tonumber(s.lastDay) or 0), 0, 1e7)
 	if type(s.paint) == "string" and #s.paint < 32 then out.paint = s.paint end
 	if type(s.trail) == "string" and #s.trail < 32 then out.trail = s.trail end
+	out.crystalDay = math.clamp(math.floor(tonumber(s.crystalDay) or 0), 0, 1e7)
+	out.crystals = {}
+	if type(s.crystals) == "table" then
+		for k, v in pairs(s.crystals) do if type(k) == "string" and #k < 6 and v == true then out.crystals[k] = true end end
+	end
 	out.owned = {}
 	if type(s.owned) == "table" then
 		for k, v in pairs(s.owned) do if type(k) == "string" and #k < 32 and v == true then out.owned[k] = true end end

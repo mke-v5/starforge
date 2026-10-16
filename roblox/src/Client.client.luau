@@ -84,6 +84,7 @@ local warpLevels = { 1, 2, 4, 10, 50, 100, 1000, 10000, 100000 }
 local warpIdx = 1
 
 local hud -- forward
+local dbgStick = nil
 
 local function toast(msg)
 	table.insert(messages, { text = msg, t = os.clock() })
@@ -339,6 +340,7 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	C.input.pitch = axisKey(Enum.KeyCode.S, Enum.KeyCode.W) + hud.stickY
 	C.input.roll = axisKey(Enum.KeyCode.D, Enum.KeyCode.A) + hud.stickX
 	C.input.yaw = axisKey(Enum.KeyCode.E, Enum.KeyCode.Q)
+	if dbgStick then C.input.pitch += dbgStick[1]; C.input.roll += dbgStick[2]; C.input.yaw += dbgStick[3] end
 	local thr = axisKey(Enum.KeyCode.LeftShift, Enum.KeyCode.LeftControl)
 	if thr ~= 0 then C.input.throttle = math.clamp(C.input.throttle + thr * dt * 0.6, 0, 1) end
 	-- time warp (automatic up to the autopilot's next action)
@@ -602,6 +604,7 @@ dbg.OnInvoke = function(cmd, a, b, c)
 	elseif cmd == "ship" then for _, d in ipairs(Designs) do if d.key == a then startFlight(d) end end
 	elseif cmd == "level" then state.level = a
 	elseif cmd == "input" then C.input[a] = b
+	elseif cmd == "stick" then dbgStick = if a then { a, b, c or 0 } else nil
 	end
 	local E = ship.env
 	return { h = E.h, agl = E.agl, v = E.vSurf, mach = E.mach, body = E.body.name, dead = ship.dead, contacts = ship.contacts,

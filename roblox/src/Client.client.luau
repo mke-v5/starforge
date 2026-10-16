@@ -337,6 +337,8 @@ local warpIdx = 1
 
 local hud -- forward
 local airTime = 0
+local deadFor = 0
+local lastGood = { r = V3(), v = V3(), q = THREE.Quaternion.new() }
 local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
 local dbgTimes = { sim = 0, scen = 0, ghost = 0, hud = 0, frame = 0 }
 
@@ -844,14 +846,26 @@ frame = function(dtRaw)
 	-- simulate
 	eph:update(ship.t)
 	local _c0 = os.clock()
+	lastGood.r:copy(ship.r); lastGood.v:copy(ship.v); lastGood.q:copy(ship.q)
 	ship:step(dt, C)
+	-- a crash can leave the state unusable (no parts, no mass): keep the last good pose
+	if ship.r.x ~= ship.r.x or ship.q.x ~= ship.q.x or ship.v.x ~= ship.v.x then
+		ship.r:copy(lastGood.r); ship.v:set(0, 0, 0); ship.q:copy(lastGood.q); ship.w:set(0, 0, 0)
+		ship:updateEnv(ship.t)
+	end
+	if ship.dead then
+		deadFor += dt
+		if deadFor > 4 then startFlight(design); return end
+	else
+		deadFor = 0
+	end
 	dbgTimes.sim = dbgTimes.sim * 0.9 + (os.clock() - _c0) * 100
 	eph:update(ship.t)
 	for _, e in ipairs(ship.events) do
 		if e.type == "break" then toast(string.format("%s %s", e.part.def.name, if e.why == "overheat" then "overheated" else "broke off"))
 		elseif e.type == "destroyed" then
 			toast("Ship destroyed — press R to restart")
-			banner("CRASHED", "Press R (or the Ship button) to fly again", 3)
+			banner("CRASHED", "Back on the runway in a moment…", 3)
 			local ex = Instance.new("Explosion")
 			ex.Position = Vector3.zero; ex.BlastPressure = 0; ex.BlastRadius = 30 + craft.size * S; ex.DestroyJointRadiusPercent = 0
 			ex.ExplosionType = Enum.ExplosionType.NoCraters

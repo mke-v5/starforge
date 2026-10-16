@@ -372,6 +372,7 @@ local deadFor = 0
 local lastGood = { r = V3(), v = V3(), q = THREE.Quaternion.new() }
 local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
 local dbgTimes = { sim = 0, scen = 0, ghost = 0, hud = 0, frame = 0 }
+local function dbgTick(name, t0) dbgTimes[name] = (dbgTimes[name] or 0) * 0.9 + (os.clock() - t0) * 100 end
 
 local function toast(msg)
 	table.insert(messages, { text = msg, t = os.clock() })
@@ -1030,6 +1031,7 @@ frame = function(dtRaw)
 	table.clear(ship.events)
 	if C.status ~= "" then toast(C.status); C.status = "" end
 
+	local _crd = os.clock()
 	-- ---------- render ----------
 	if ship.dead then
 		-- wreck: hold the scene still (the explosion plays), shake the camera, wait for the respawn
@@ -1140,10 +1142,12 @@ frame = function(dtRaw)
 	local near = onEarthLow and math.abs(xe) < 40000 and math.abs(xn) < 40000
 	drawProps(xe, xn, k, gy, near)
 
+	dbgTick("render", _crd)
 	local _c1 = os.clock()
 	drawScenery(xe, xn, agl, k, gy, onEarthLow and not dbgNoScenery)
 	dbgTimes.scen = dbgTimes.scen * 0.9 + (os.clock() - _c1) * 100
 
+	local _cf = os.clock()
 	-- air rushing by
 	do
 		local strength = math.clamp((E.vSurf - 90) / 250, 0, 1) * math.clamp(E.rho / 0.3, 0, 1)
@@ -1156,6 +1160,7 @@ frame = function(dtRaw)
 		drawTrail(xe, xn, agl, k, xe + back.X, xn - back.Z, E.h + back.Y, simTime, emitting)
 	end
 
+	dbgTick("fx", _cf); local _cr = os.clock()
 	-- ---------- rings ----------
 	local ringsVisible = onEarthLow and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
 	for i, ring in ipairs(rings) do placeRing(ring, i, xe, xn, agl, k, ringsVisible) end
@@ -1213,6 +1218,7 @@ frame = function(dtRaw)
 		end
 	end
 
+	dbgTick("rings", _cr); local _cc = os.clock()
 	-- ---------- star crystals ----------
 	do
 		local got = crystalsToday()
@@ -1247,6 +1253,7 @@ frame = function(dtRaw)
 		if #crystalParts > 0 then workspace:BulkMoveTo(crystalParts, crystalCF, Enum.BulkMoveMode.FireCFrameChanged) end
 	end
 
+	dbgTick("crys", _cc); local _cm = os.clock()
 	-- ---------- missions ----------
 	if not ship.dead then
 		local airborne = ship.contacts == 0 and E.agl > 5
@@ -1301,6 +1308,7 @@ frame = function(dtRaw)
 			hud:setMission(Progress.current(state))
 		end
 	end
+	dbgTick("miss", _cm)
 	local _c2 = os.clock()
 	sendPose()
 	drawGhosts(simTime)

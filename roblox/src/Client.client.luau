@@ -220,52 +220,6 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 	if n > 0 then workspace:BulkMoveTo(bulkParts, bulkCF, Enum.BulkMoveMode.FireCFrameChanged) end
 end
 
------------------------------------------------------------------ engine trail (bought in the shop)
-local TRAIL_N = 90
-local trailPts = {}      -- { e, n, h, t }
-local trailParts = {}
-for i = 1, TRAIL_N do trailParts[i] = anchored("Part", { Name = "Trail", Size = Vector3.one, Material = Enum.Material.Neon, CastShadow = false, Transparency = 1 }) end
-local lastTrail = 0
-local trailParts2, trailCF = {}, {}
-local function drawTrail(xe, xn, agl, k, tailE, tailN, tailU, simT, active)
-	local def = Shop.find(state.trail or "")
-	if not def or not def.color then
-		if #trailPts > 0 then table.clear(trailPts); for _, p in ipairs(trailParts) do p.Transparency = 1 end end
-		return
-	end
-	if active and simT - lastTrail > 0.07 then
-		lastTrail = simT
-		table.insert(trailPts, { tailE, tailN, tailU, simT })
-		if #trailPts > TRAIL_N then table.remove(trailPts, 1) end
-	end
-	table.clear(trailParts2); table.clear(trailCF)
-	local life = 6
-	local w = def.width * S * k
-	for i = 1, TRAIL_N do
-		local p = trailParts[i]
-		local a, b = trailPts[i], trailPts[i + 1]
-		if not a then p.Transparency = 1; continue end
-		local bE, bN, bU = if b then b[1] else tailE, if b then b[2] else tailN, if b then b[3] else tailU
-		local p0 = Vector3.new((a[1] - xe) * S * k, (a[3] - agl) * S * k, -(a[2] - xn) * S * k)
-		local p1 = Vector3.new((bE - xe) * S * k, (bU - agl) * S * k, -(bN - xn) * S * k)
-		local len = (p1 - p0).Magnitude
-		local age = simT - a[4]
-		if len < 0.01 or len > 400 * S * k or age > life then p.Transparency = 1; continue end
-		local f = age / life
-		p.Transparency = 0.15 + 0.85 * f
-		local col
-		if def.color == "rainbow" then col = Color3.fromHSV((a[4] * 0.25) % 1, 0.85, 1)
-		else col = Shop.hex(def.color) end
-		p.Color = col
-		p.Material = if def.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
-		local ww = w * (1 + f * (if def.neon then 0.3 else 2.5))
-		p.Size = Vector3.new(ww, ww, len + ww * 0.5)
-		table.insert(trailParts2, p)
-		table.insert(trailCF, CFrame.lookAt((p0 + p1) / 2, p1))
-	end
-	if #trailParts2 > 0 then workspace:BulkMoveTo(trailParts2, trailCF, Enum.BulkMoveMode.FireCFrameChanged) end
-end
-
 ----------------------------------------------------------------- flight state
 local eph = Astro.Ephemeris.new():update(Astro.nowSimTime())
 local settings = { heatScale = 1, crashScale = 1, assist = "assisted" }
@@ -401,6 +355,52 @@ local function placeRing(ring, idx, xe, xn, agl, k, visible)
 			part.CFrame = cf * CFrame.Angles(0, 0, ang) * CFrame.new(0, R, 0)
 		end
 	end
+end
+
+----------------------------------------------------------------- engine trail (bought in the shop)
+local TRAIL_N = 90
+local trailPts = {}      -- { e, n, h, t }
+local trailParts = {}
+for i = 1, TRAIL_N do trailParts[i] = anchored("Part", { Name = "Trail", Size = Vector3.one, Material = Enum.Material.Neon, CastShadow = false, Transparency = 1 }) end
+local lastTrail = 0
+local trailParts2, trailCF = {}, {}
+local function drawTrail(xe, xn, agl, k, tailE, tailN, tailU, simT, active)
+	local def = Shop.find(state.trail or "")
+	if not def or not def.color then
+		if #trailPts > 0 then table.clear(trailPts); for _, p in ipairs(trailParts) do p.Transparency = 1 end end
+		return
+	end
+	if active and simT - lastTrail > 0.07 then
+		lastTrail = simT
+		table.insert(trailPts, { tailE, tailN, tailU, simT })
+		if #trailPts > TRAIL_N then table.remove(trailPts, 1) end
+	end
+	table.clear(trailParts2); table.clear(trailCF)
+	local life = 6
+	local w = def.width * S * k
+	for i = 1, TRAIL_N do
+		local p = trailParts[i]
+		local a, b = trailPts[i], trailPts[i + 1]
+		if not a then p.Transparency = 1; continue end
+		local bE, bN, bU = if b then b[1] else tailE, if b then b[2] else tailN, if b then b[3] else tailU
+		local p0 = Vector3.new((a[1] - xe) * S * k, (a[3] - agl) * S * k, -(a[2] - xn) * S * k)
+		local p1 = Vector3.new((bE - xe) * S * k, (bU - agl) * S * k, -(bN - xn) * S * k)
+		local len = (p1 - p0).Magnitude
+		local age = simT - a[4]
+		if len < 0.01 or len > 400 * S * k or age > life then p.Transparency = 1; continue end
+		local f = age / life
+		p.Transparency = 0.15 + 0.85 * f
+		local col
+		if def.color == "rainbow" then col = Color3.fromHSV((a[4] * 0.25) % 1, 0.85, 1)
+		else col = Shop.hex(def.color) end
+		p.Color = col
+		p.Material = if def.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+		local ww = w * (1 + f * (if def.neon then 0.3 else 2.5))
+		p.Size = Vector3.new(ww, ww, len + ww * 0.5)
+		table.insert(trailParts2, p)
+		table.insert(trailCF, CFrame.lookAt((p0 + p1) / 2, p1))
+	end
+	if #trailParts2 > 0 then workspace:BulkMoveTo(trailParts2, trailCF, Enum.BulkMoveMode.FireCFrameChanged) end
 end
 
 local function fmtRace(t) return string.format("%d:%05.2f", math.floor(t / 60), t % 60) end
@@ -663,8 +663,14 @@ local function canWarp(level)
 end
 
 local simTime = 0
+local frame
+local lastErr = 0
 RunService.RenderStepped:Connect(function(dtRaw)
 	if not ship then return end
+	local ok, err = pcall(frame, dtRaw)
+	if not ok and os.clock() - lastErr > 2 then lastErr = os.clock(); warn("[Starforge] frame error: " .. tostring(err)) end
+end)
+frame = function(dtRaw)
 	local _frame0 = os.clock()
 	local dt = math.min(dtRaw, 0.05)
 	simTime += dt
@@ -951,7 +957,7 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
 	dbgTimes.hud = dbgTimes.hud * 0.9 + (os.clock() - _c3) * 100
 	dbgTimes.frame = dbgTimes.frame * 0.9 + (os.clock() - _frame0) * 100
-end)
+end
 
 -- test hook (Studio tools can call it): returns a summary, or runs a simple command
 local dbg = Instance.new("BindableFunction")

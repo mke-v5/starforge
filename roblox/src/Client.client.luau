@@ -961,6 +961,8 @@ dbg.OnInvoke = function(cmd, a, b, c)
 	elseif cmd == "ship" then for _, d in ipairs(Designs) do if d.key == a then startFlight(d) end end
 	elseif cmd == "level" then state.level = a
 	elseif cmd == "noscenery" then dbgNoScenery = a
+	elseif cmd == "cb" then hud._cb[a](b)
+	elseif cmd == "credits" and game:GetService("RunService"):IsStudio() then state.credits = a
 	elseif cmd == "input" then C.input[a] = b
 	elseif cmd == "stick" then dbgStick = if a then { a, b, c or 0 } else nil
 	end

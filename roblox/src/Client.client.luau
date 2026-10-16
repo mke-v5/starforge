@@ -53,7 +53,7 @@ function world:buildingTop() return nil end
 
 -- Low graphics settings stop drawing parts a few hundred studs away, so everything is kept close:
 -- the ground at most GROUND_D below (scaled about the ship when higher), far objects pulled in to DMAX.
-local GROUND_D, DMAX = 180, 430
+local GROUND_D, DMAX = 170, 380
 local SITE = { name = "Starforge Spaceport", lat = 28.61, lon = -80.69, hdg = 90 }   -- Florida coast, runway pointing east
 -- the spaceport runway in the form the runway autopilot expects
 local RUNWAY = { latC = SITE.lat, lonC = SITE.lon, cosC = math.cos(SITE.lat * D2R), dx = math.sin(SITE.hdg * D2R), dy = math.cos(SITE.hdg * D2R), len = 3000, e1 = 0, e2 = 0 }
@@ -559,7 +559,7 @@ local function startFlight(entry)
 	camDist = math.max(40, craft.size * S * 1.6)
 	camYaw, camPitch = 0, 0.18
 	warpIdx = 1
-	toast("Ready on the runway: " .. entry.design.name .. ". Shift/Ctrl throttle, W/S pitch, A/D roll, Q/E yaw.")
+	toast((if craft.vertical then "Ready on the launch pad: " else "Ready on the runway: ") .. entry.design.name .. ". Shift/Ctrl throttle, W/S pitch, A/D roll, Q/E yaw.")
 end
 
 ----------------------------------------------------------------- frames
@@ -950,7 +950,7 @@ frame = function(dtRaw)
 	local agl = E.h      -- height above the datum (the ground is flat at 0 apart from the pad)
 	local depth = agl * S
 	local k = if depth > GROUND_D then GROUND_D / depth else 1   -- keep the ground close: low graphics settings cull far parts
-	local showGround = body == EARTH and E.h < 60000
+	local showGround = body == EARTH and E.h < 26000
 	-- ship position in the reference tangent plane (east, north metres from the spaceport)
 	local rel = ship:toFixed(EARTH, ship.r, ship.t, _t1):sub(refFixed)
 	local up0 = refFixed:clone():normalize()
@@ -1097,22 +1097,22 @@ frame = function(dtRaw)
 	local alt = E.h
 	-- the Earth: shown above the near ground, fading in as it gets high
 	local hEarth = ship.r:length() - EARTH.R
-	if hEarth > 20000 or body ~= EARTH then
+	if hEarth > 18000 or body ~= EARTH then
 		-- the surface sits a fixed distance below the ship, scaled so the Earth's angular size is right
 		local dist = ship.r:length()
-		local kk = 380 / (dist - EARTH.R)
+		local kk = 330 / (dist - EARTH.R)
 		local c = V3(0, 0, 0):sub(ship.r)
 		earthBall.CFrame = CFrame.new(toWorldScaled(c, kk))
 		earthMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk)
-		earthBall.Transparency = if body == EARTH then math.clamp(1 - (hEarth - 20000) / 30000, 0, 1) else 0
+		earthBall.Transparency = if body == EARTH then math.clamp(1 - (hEarth - 18000) / 7000, 0, 1) else 0
 	else
 		earthBall.Transparency = 1
 	end
-	drawBall(moonBall, moonMesh, MOON, MOON.R, 470)
+	drawBall(moonBall, moonMesh, MOON, MOON.R, 400)
 	-- the Sun
 	local sunW = toWorld(eph.sunP:clone():sub(ship.r):normalize())
-	sunBall.CFrame = CFrame.new(sunW * 470)
-	sunBall.Size = Vector3.new(1, 1, 1) * (470 * 2 * math.tan(0.267 * D2R) * 2.5)
+	sunBall.CFrame = CFrame.new(sunW * 400)
+	sunBall.Size = Vector3.new(1, 1, 1) * (400 * 2 * math.tan(0.267 * D2R) * 2.5)
 	-- sky: thin air fades to black space
 	local airK = math.clamp((E.rho / 1.225) ^ 0.35, 0, 1)
 	if body ~= EARTH then airK = 0 end
@@ -1122,9 +1122,9 @@ frame = function(dtRaw)
 	atmosphere.Decay = Color3.fromRGB(120, 150, 190)
 	atmosphere.Glare = 0.4 * airK
 	atmosphere.Haze = 1.2 * airK
-	local spaceA = 1 - math.clamp((alt - 30000) / 40000, 0, 1)
+	local spaceA = 1 - math.clamp((alt - 22000) / 30000, 0, 1)
 	if body ~= EARTH then spaceA = 0 end
-	local R0 = 490
+	local R0 = 420
 	local faces = { { Vector3.new(R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) }, { Vector3.new(-R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) },
 		{ Vector3.new(0, R0, 0), Vector3.new(2 * R0, 10, 2 * R0) }, { Vector3.new(0, -R0, 0), Vector3.new(2 * R0, 10, 2 * R0) },
 		{ Vector3.new(0, 0, R0), Vector3.new(2 * R0, 2 * R0, 10) }, { Vector3.new(0, 0, -R0), Vector3.new(2 * R0, 2 * R0, 10) } }

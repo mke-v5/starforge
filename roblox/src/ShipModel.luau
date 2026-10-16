@@ -254,7 +254,7 @@ function M.build(craft, name)
 	end
 	-- engine flames (shown with throttle)
 	for i, f in pairs(view.flames) do
-		local fl = part("Part", { Name = "Flame", Shape = Enum.PartType.Cylinder, Material = Enum.Material.Neon, Color = f.color, Transparency = 1, CastShadow = false, Size = Vector3.new(1, f.dia, f.dia) }, model)
+		local fl = part("Part", { Name = "Flame", Anchored = true, Shape = Enum.PartType.Cylinder, Material = Enum.Material.Neon, Color = f.color, Transparency = 1, CastShadow = false, Size = Vector3.new(1, f.dia, f.dia) }, model)
 		local light = Instance.new("PointLight")
 		light.Color = f.color; light.Range = 30; light.Brightness = 0; light.Parent = fl
 		f.part = fl; f.light = light

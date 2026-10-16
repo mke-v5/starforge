@@ -85,6 +85,8 @@ local tiles = {}
 for i = 1, NT * NT do
 	tiles[i] = anchored("Part", { Name = "Ground", Size = Vector3.new(TILE, 4, TILE), Material = Enum.Material.Grass, Color = Color3.fromRGB(86, 120, 64), CastShadow = false })
 end
+local tileCF = {}
+for i = 1, #tiles do tileCF[i] = CFrame.new() end
 -- the spaceport, in metres from its centre: e (east, along the runway), n (north), y (centre height),
 -- size, colour, material; flat things get a layer so they sit just above the ground at any scale
 local props = {}
@@ -130,9 +132,13 @@ for i, pr in ipairs(props) do
 	propParts[i] = anchored("Part", { Name = "Spaceport", Size = Vector3.one, Color = pr.color, Material = pr.mat, Shape = pr.shape or Enum.PartType.Block, CastShadow = pr.layer == nil })
 end
 local propK = nil
+local propShown = nil
 local propCF = {}
 local function drawProps(xe, xn, k, gy, show)
-	for i, p in ipairs(propParts) do p.Transparency = if show then 0 else 1 end
+	if propShown ~= show then
+		propShown = show
+		for _, p in ipairs(propParts) do p.Transparency = if show then 0 else 1 end
+	end
 	if not show then return end
 	local kq = math.exp(math.floor(math.log(k) / 0.03 + 0.5) * 0.03)
 	local resize = propK ~= kq
@@ -503,15 +509,23 @@ local function placeRing(ring, idx, xe, xn, agl, k, visible)
 	local R = ring.r * S * k * f
 	local segLen = 2 * math.pi * R / SEG * 1.08
 	local thick = math.max(0.5, (if idx == race.next then 3.5 else 2.2) * S * k * f)
-	for s, part in ipairs(ring.parts) do
-		part.Transparency = if show then (if idx == race.next then 0 else 0.35) else 1
-		if show then
-			local ang = (s - 0.5) / SEG * 2 * math.pi
-			part.Color = col
-			part.Size = Vector3.new(segLen, thick, thick)
-			part.CFrame = cf * CFrame.Angles(0, 0, ang) * CFrame.new(0, R, 0)
-		end
+	-- only touch properties that changed (property writes are what costs), and move all segments in one go
+	local tr = if show then (if idx == race.next then 0 else 0.35) else 1
+	if ring.tr ~= tr then ring.tr = tr; for _, part in ipairs(ring.parts) do part.Transparency = tr end end
+	if not show then return end
+	if ring.col ~= col then ring.col = col; for _, part in ipairs(ring.parts) do part.Color = col end end
+	local sz = Vector3.new(segLen, thick, thick)
+	if not ring.sz or math.abs(ring.sz.X - segLen) > 0.01 * segLen or math.abs(ring.sz.Y - thick) > 0.01 * thick then
+		ring.sz = sz
+		for _, part in ipairs(ring.parts) do part.Size = sz end
 	end
+	local cfs = ring.cfs or table.create(SEG)
+	ring.cfs = cfs
+	for s2 = 1, SEG do
+		local ang = (s2 - 0.5) / SEG * 2 * math.pi
+		cfs[s2] = cf * CFrame.Angles(0, 0, ang) * CFrame.new(0, R, 0)
+	end
+	workspace:BulkMoveTo(ring.parts, cfs, Enum.BulkMoveMode.FireCFrameChanged)
 end
 
 ----------------------------------------------------------------- engine trail (bought in the shop)
@@ -1120,11 +1134,12 @@ frame = function(dtRaw)
 		for j = 1, NT do
 			idx += 1
 			local p = tiles[idx]
-			p.Transparency = if showGround then 0 else 1
+			local tr = if showGround then 0 else 1
+			if p.Transparency ~= tr then p.Transparency = tr end
 			if showGround then
 				local wx, wz = (i - (NT + 1) / 2) * T - ox, (j - (NT + 1) / 2) * T - oz
-				p.Size = Vector3.new(T, 4, T)
-				p.CFrame = CFrame.new(wx, gy - 2, -wz)
+				if p.Size.X ~= T then p.Size = Vector3.new(T, 4, T) end
+				tileCF[idx] = CFrame.new(wx, gy - 2, -wz)
 				local col, mat
 				if onMoon then
 					local i2, j2 = math.floor((xe + wx / (S * k)) / 900), math.floor((xn + wz / (S * k)) / 900)
@@ -1138,6 +1153,7 @@ frame = function(dtRaw)
 			end
 		end
 	end
+	if showGround then workspace:BulkMoveTo(tiles, tileCF, Enum.BulkMoveMode.FireCFrameChanged) end
 	-- the spaceport (runway along the site heading, centred at the site)
 	local near = onEarthLow and math.abs(xe) < 40000 and math.abs(xn) < 40000
 	drawProps(xe, xn, k, gy, near)

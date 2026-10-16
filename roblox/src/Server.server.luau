@@ -10,7 +10,26 @@ local Load = remotes:FindFirstChild("Load") or Instance.new("RemoteFunction")
 Load.Name = "Load"; Load.Parent = remotes
 local Save = remotes:FindFirstChild("Save") or Instance.new("RemoteEvent")
 Save.Name = "Save"; Save.Parent = remotes
+local Pose = remotes:FindFirstChild("Pose") or Instance.new("UnreliableRemoteEvent")
+Pose.Name = "Pose"; Pose.Parent = remotes
+local Left = remotes:FindFirstChild("Left") or Instance.new("RemoteEvent")
+Left.Name = "Left"; Left.Parent = remotes
 remotes.Parent = RS
+
+-- relay ship poses to everyone else (light checks so a bad client can't send junk)
+local function num3(t, n)
+	if type(t) ~= "table" then return false end
+	for i = 1, n do if type(t[i]) ~= "number" or t[i] ~= t[i] or math.abs(t[i]) > 1e10 then return false end end
+	return true
+end
+Pose.OnServerEvent:Connect(function(player, pose)
+	if type(pose) ~= "table" or type(pose.k) ~= "string" or #pose.k > 24 then return end
+	if not (num3(pose.p, 3) and num3(pose.v, 3) and num3(pose.q, 4)) then return end
+	local clean = { k = pose.k, p = pose.p, v = pose.v, q = pose.q, f = math.clamp(tonumber(pose.f) or 0, 0, 2), d = pose.d == true }
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= player then Pose:FireClient(other, player.UserId, clean) end
+	end
+end)
 
 local store
 pcall(function() store = DataStoreService:GetDataStore("StarforgeV1") end)
@@ -87,6 +106,7 @@ end)
 Players.PlayerAdded:Connect(loadPlayer)
 for _, p in ipairs(Players:GetPlayers()) do task.spawn(loadPlayer, p) end
 Players.PlayerRemoving:Connect(function(p)
+	Left:FireAllClients(p.UserId)
 	savePlayer(p)
 	cache[p.UserId] = nil; loaded[p.UserId] = nil; lastWrite[p.UserId] = nil
 end)

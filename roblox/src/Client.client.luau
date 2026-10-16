@@ -245,9 +245,9 @@ end
 local function toWorld(v) return Vector3.new(v:dot(fE), v:dot(fU), -v:dot(fN)) end
 local function toWorldScaled(v, k) return Vector3.new(v:dot(fE) * k, v:dot(fU) * k, -v:dot(fN) * k) end
 
-local function shipCFrame()
+local function shipCFrame(qq)
 	-- rotation: body axes in frame I -> world
-	local q = ship.q
+	local q = qq or ship.q
 	local bx = V3(1, 0, 0):applyQuaternion(q)
 	local by = V3(0, 1, 0):applyQuaternion(q)
 	local bz = V3(0, 0, 1):applyQuaternion(q)
@@ -283,6 +283,93 @@ UIS.InputChanged:Connect(function(io)
 	end
 end)
 local function axisKey(pos, neg) return (if keys[pos] then 1 else 0) - (if keys[neg] then 1 else 0) end
+
+----------------------------------------------------------------- other players' ships
+-- Each client sends its pose in Earth-fixed coordinates a few times a second; the server relays it.
+-- Other ships are drawn where they are relative to us, with a name tag that stays visible from far away.
+local ghosts = {}
+local poseEvent = remotes and remotes:FindFirstChild("Pose")
+local leftEvent = remotes and remotes:FindFirstChild("Left")
+local lastPose = 0
+local _gq, _gq2, _gv = THREE.Quaternion.new(), THREE.Quaternion.new(), V3()
+local function sendPose()
+	if not poseEvent or os.clock() - lastPose < 0.12 then return end
+	lastPose = os.clock()
+	if ship.env.body ~= EARTH then return end
+	local pF = ship:toFixed(EARTH, ship.r, ship.t, V3())
+	ship:bodyFrameQ(EARTH, ship.t, _gq)
+	_gq2:copy(_gq):invert()
+	local qF = _gq2:clone():multiply(ship.q)
+	local vF = ship.v:clone():sub(ship:surfaceVel(EARTH, ship.r, ship.t, _gv)):applyQuaternion(_gq2)
+	local fl, n = 0, 0
+	for _, P in ipairs(craft.engines) do if P.alive then fl += P.eng.flame; n += 1 end end
+	poseEvent:FireServer({ k = design.key, p = { pF.x, pF.y, pF.z }, v = { vF.x, vF.y, vF.z }, q = { qF.x, qF.y, qF.z, qF.w }, f = if n > 0 then fl / n else 0, d = ship.dead })
+end
+local function dropGhost(id)
+	local g = ghosts[id]
+	if not g then return end
+	if g.view then g.view.model:Destroy() end
+	if g.tag then g.tag:Destroy() end
+	ghosts[id] = nil
+end
+if poseEvent then
+	poseEvent.OnClientEvent:Connect(function(userId, pose)
+		if userId == player.UserId or type(pose) ~= "table" then return end
+		local g = ghosts[userId]
+		if not g then
+			local pl = Players:GetPlayerByUserId(userId)
+			g = { name = if pl then pl.DisplayName else "Pilot" }
+			local tag = anchored("Part", { Name = "PilotTag", Size = Vector3.one, Transparency = 1 })
+			local bb = Instance.new("BillboardGui")
+			bb.Size = UDim2.new(0, 160, 0, 40); bb.AlwaysOnTop = true; bb.LightInfluence = 0; bb.Adornee = tag; bb.Parent = tag
+			local lb = Instance.new("TextLabel")
+			lb.Size = UDim2.new(1, 0, 1, 0); lb.BackgroundTransparency = 1; lb.Font = Enum.Font.GothamBold; lb.TextSize = 14
+			lb.TextColor3 = Color3.fromRGB(255, 200, 120); lb.TextStrokeTransparency = 0.3; lb.Parent = bb
+			g.tag, g.label = tag, lb
+			ghosts[userId] = g
+		end
+		if g.key ~= pose.k then
+			for _, d in ipairs(Designs) do
+				if d.key == pose.k then
+					if g.view then g.view.model:Destroy() end
+					g.craft = Craft.new(d.design)
+					g.view = ShipModel.build(g.craft, "Pilot_" .. userId)
+					g.view.model.Parent = scene
+					g.key = pose.k
+					g.shipName = d.design.name
+				end
+			end
+		end
+		g.pose = pose; g.at = os.clock()
+	end)
+end
+if leftEvent then leftEvent.OnClientEvent:Connect(dropGhost) end
+
+local function drawGhosts(simT)
+	local myPF = nil
+	for id, g in pairs(ghosts) do
+		if os.clock() - (g.at or 0) > 10 then dropGhost(id); continue end
+		if not g.pose or not g.view then continue end
+		local P = g.pose
+		local age = math.min(os.clock() - g.at, 1)
+		local pF = V3(P.p[1] + P.v[1] * age, P.p[2] + P.v[2] * age, P.p[3] + P.v[3] * age)
+		local pI = ship:toI(EARTH, pF, ship.t, V3())
+		local d = pI:sub(ship.r)
+		local dist = d:length()
+		local show = ship.env.body == EARTH and dist < 6000 and not P.d
+		g.view.model.Parent = if show then scene else nil
+		if show then
+			ship:bodyFrameQ(EARTH, ship.t, _gq)
+			local qI = _gq:clone():multiply(THREE.Quaternion.new(P.q[1], P.q[2], P.q[3], P.q[4]))
+			for _, part in ipairs(g.craft.engines) do part.eng.flame = P.f end
+			ShipModel.update(g.view, g.craft, CFrame.new(toWorld(d) * S) * shipCFrame(qI), simT)
+		end
+		local dir = toWorld(d) / math.max(dist, 1)
+		g.tag.CFrame = CFrame.new(dir * math.min(dist * S, 12000) + Vector3.new(0, 8, 0))
+		g.label.Text = string.format("%s\n%s · %s", g.name, g.shipName or "", Geo.fmtDist(dist))
+		g.label.Visible = ship.env.body == EARTH and dist < 200000
+	end
+end
 
 ----------------------------------------------------------------- HUD
 local function designIndex(key) for i, d in ipairs(Designs) do if d.key == key then return i end end return 1 end
@@ -539,6 +626,8 @@ RunService.RenderStepped:Connect(function(dtRaw)
 			hud:setMission(Progress.current(state))
 		end
 	end
+	sendPose()
+	drawGhosts(simTime)
 	hud:setProgress(state, Progress.xpForLevel(state.level))
 	if not hud.bannerUntil and #bannerQueue > 0 then
 		local b = table.remove(bannerQueue, 1)

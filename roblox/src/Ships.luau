@@ -13,7 +13,7 @@ end
 local EXTRA = {
 	{
 		key = "viper",
-		blurb = "Twin-pod racing jet. Three engines, huge acceleration — built to win the ring race.",
+		blurb = "Five-engine racing jet. Three times the Kestrel's thrust — supersonic, and built to win races.",
 		design = {
 			name = "Viper",
 			colors = { hull = "#c4232b", accent = "#f4f4f4" },
@@ -34,6 +34,8 @@ local EXTRA = {
 				part("gr-light", { 2.1, -0.3, 8.2 }, Q_DN_R, 4, 13),           -- 12
 				part("gr-light", { -2.1, -0.3, 8.2 }, Q_DN_L, 5, 12, true),    -- 13
 				part("ut-strobe", { 0, 0.62, 9 }, Q_UP, 2),                     -- 14
+				part("en-pod", { 2.8, -0.45, 8.6 }, Q_AX, 4, 16),              -- 15
+				part("en-pod", { -2.8, -0.45, 8.6 }, Q_AX, 5, 15, true),       -- 16
 			},
 		},
 	},

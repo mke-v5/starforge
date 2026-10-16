@@ -33,10 +33,10 @@ function Hud.new(player, cb)
 	local self = setmetatable({}, Hud)
 	self.stickX, self.stickY = 0, 0
 	self._cb = cb
-	local gui = make("ScreenGui", { Name = "StarforgeHud", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, player:WaitForChild("PlayerGui"))
+	local gui = make("ScreenGui", { Name = "StarforgeHud", ResetOnSpawn = false, IgnoreGuiInset = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, player:WaitForChild("PlayerGui"))
 	self.gui = gui
 	-- flight data, top left
-	local info = make("Frame", { Position = UDim2.new(0, 12, 0, 52), Size = UDim2.new(0, 270, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = PANEL, BackgroundTransparency = 0.3 }, gui)
+	local info = make("Frame", { Position = UDim2.new(0, 12, 0, 12), Size = UDim2.new(0, 270, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = PANEL, BackgroundTransparency = 0.3 }, gui)
 	corner(info, 10)
 	make("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10) }, info)
 	make("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, info)
@@ -46,7 +46,7 @@ function Hud.new(player, cb)
 		self.lines[i] = make("TextLabel", { Size = UDim2.new(1, 0, 0, 19), BackgroundTransparency = 1, Text = "", TextColor3 = INK, Font = FONT, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = i, RichText = true }, info)
 	end
 	-- buttons, right
-	local side = make("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 52), Size = UDim2.new(0, 170, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
+	local side = make("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 12), Size = UDim2.new(0, 170, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
 	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, -2).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
 	button(side, "🏆 Top pilots", function() if cb.onTop then cb.onTop() end end, -1)
@@ -158,14 +158,16 @@ function Hud.new(player, cb)
 		if c:IsA("GuiObject") and c ~= root then c.Parent = root end
 	end
 	local function rescale()
-		local vp = workspace.CurrentCamera.ViewportSize
-		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), if UIS.TouchEnabled then 0.5 else 0.4, 1)
+		-- (the area below Roblox's top bar, so the panels never sit under its menu buttons)
+		local vp = gui.AbsoluteSize
+		if vp.X < 10 then vp = workspace.CurrentCamera.ViewportSize end
+		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 700), if UIS.TouchEnabled then 0.5 else 0.4, 1)
 		self.uiScale = sc
 		root.Size = UDim2.new(1 / sc, 0, 1 / sc, 0)
 		rootScale.Scale = sc
 	end
 	rescale()
-	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(rescale)
+	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(rescale)
 	return self
 end
 

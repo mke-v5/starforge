@@ -5,7 +5,7 @@ local Physics = require("./Physics")
 local Control = require("./Control")
 local Astro = require("./Astro")
 local Geo = require("./Geo")
-local Designs = require("./DesignsData")
+local Designs = require("./Ships")
 local S = {}
 S.THREE, S.Geo, S.Control, S.Astro = THREE, Geo, Control, Astro
 function S.setup(key, opts)

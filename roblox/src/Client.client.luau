@@ -17,7 +17,7 @@ local Craft = require(SF.Craft)
 local Physics = require(SF.Physics)
 local Control = require(SF.Control)
 local Orbit = require(SF.Orbit)
-local Designs = require(SF.DesignsData)
+local Designs = require(SF.Ships)
 local ShipModel = require(SF.ShipModel)
 local Progress = require(SF.Progress)
 local Shop = require(SF.Shop)
@@ -1186,6 +1186,7 @@ frame = function(dtRaw)
 			if race.next > #rings then
 				local t = ship.t - race.startT
 				flags.raceDone = true
+				flags.raceTime = t
 				daily("races", 1)
 				local best = state.bestRace
 				local record = not best or t < best
@@ -1290,6 +1291,7 @@ frame = function(dtRaw)
 			toast("Sonic boom!")
 		end
 		ship.lastMach = E.mach
+		if E.body == MOON and flags.landedBody == MOON then flags.wasMoon = true end
 		local m = Progress.check(state, { E = E, key = design.key, flags = flags, orbitPe = orbitPe, ship = ship, craft = craft })
 		if m then
 			sfx("chime", 0.9)

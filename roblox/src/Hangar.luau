@@ -26,11 +26,11 @@ function Hangar.open(gui, opts)
 	if old then old:Destroy() end
 	local root = make("Frame", { Name = "HangarScreen", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(6, 8, 12), BackgroundTransparency = if opts.title then 0 else 0.15, ZIndex = 30 }, gui)
 	make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, if opts.title then 0.1 else 0.35) }) }, root)
-	local body = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0, 900, 0, 560), BackgroundTransparency = 1, ZIndex = 31 }, root)
+	local body = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0, 1040, 0, 560), BackgroundTransparency = 1, ZIndex = 31 }, root)
 	local sc = make("UIScale", { Scale = 1 }, body)
 	local function fit()
 		local vp = workspace.CurrentCamera.ViewportSize
-		sc.Scale = math.min(vp.X / 940, vp.Y / 600, 1.15)
+		sc.Scale = math.min(vp.X / 1080, vp.Y / 600, 1.15)
 	end
 	fit()
 	local fitConn = workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
@@ -67,7 +67,8 @@ function Hangar.open(gui, opts)
 	for i, entry in ipairs(order) do
 		local key = entry.key
 		local unlocked = opts.unlocked(key)
-		local card = make("TextButton", { Size = UDim2.new(0, 205, 1, 0), BackgroundColor3 = Color3.fromRGB(22, 28, 38), AutoButtonColor = unlocked, Text = "", LayoutOrder = i, ZIndex = 32 }, row)
+		local cw = math.min(205, math.floor((1040 - 14 * (#order - 1)) / #order))
+		local card = make("TextButton", { Size = UDim2.new(0, cw, 1, 0), BackgroundColor3 = Color3.fromRGB(22, 28, 38), AutoButtonColor = unlocked, Text = "", LayoutOrder = i, ZIndex = 32 }, row)
 		corner(card, 14)
 		local stroke = make("UIStroke", { Thickness = 1, Color = Color3.fromRGB(60, 70, 84), ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, card)
 		local vp = make("ViewportFrame", { Position = UDim2.new(0, 6, 0, 6), Size = UDim2.new(1, -12, 0, 170), BackgroundColor3 = Color3.fromRGB(46, 58, 78), BackgroundTransparency = 0,

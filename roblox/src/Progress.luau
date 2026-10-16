@@ -4,7 +4,7 @@ local Geo = require(script.Parent.Geo)
 local P = {}
 
 -- ships unlock with level
-P.SHIP_LEVEL = { kestrel = 1, lynx = 2, starhopper = 3, selene = 5 }
+P.SHIP_LEVEL = { kestrel = 1, lynx = 2, starhopper = 3, viper = 4, selene = 5 }
 
 -- each mission: id, title, hint, xp, credits, ship (suggested), check(ctx) -> true when done
 -- ctx = { E (env), ship, craft, key (ship key), flags = { airborne, landedRunway, ringsPassed, raceDone, hoverTime, landedBody } }
@@ -35,6 +35,10 @@ P.MISSIONS = {
 		check = function(c) return c.E.body == Geo.MOON end },
 	{ id = "moonland", title = "Land on the Moon", hint = "Auto: land brings you down on the lift thrusters", xp = 1000, credits = 2000, ship = "selene",
 		check = function(c) return c.flags.landedBody == Geo.MOON end },
+	{ id = "race100", title = "Race under 1:40", hint = "Finish the ring race in less than 1 min 40 s — the Viper (level 4) is built for it", xp = 300, credits = 500, ship = "viper",
+		check = function(c) return c.flags.raceTime ~= nil and c.flags.raceTime < 100 end },
+	{ id = "moonhome", title = "To the Moon and back", hint = "Land on the Moon, then fly home and touch down on Earth in the same flight", xp = 1500, credits = 3000, ship = "selene",
+		check = function(c) return c.flags.wasMoon and c.flags.landedBody == Geo.EARTH end },
 }
 
 function P.xpForLevel(level) return 150 * level end

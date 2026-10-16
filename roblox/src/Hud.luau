@@ -148,18 +148,21 @@ function Hud.new(player, cb)
 	-- controls help
 	make("TextLabel", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(0, 700, 0, 18), BackgroundTransparency = 1, TextColor3 = DIM, Font = FONT, TextSize = 13,
 		Text = "Shift/Ctrl throttle · Z full · X cut · W/S pitch · A/D roll · Q/E yaw · G gear · B brakes · , . warp · R restart · right-drag camera · wheel zoom", Visible = not UIS.TouchEnabled }, gui)
-	-- shrink everything on small screens (phones)
+	-- shrink everything on small screens (phones). UIScale shrinks about an object's centre, which would
+	-- slide corner-anchored panels off the screen, so the whole HUD lives in one full-screen frame that is
+	-- made 1/scale times larger and then scaled down: every panel keeps its corner.
 	self.uiScale = 1
-	local scales = {}
+	local root = make("Frame", { Name = "HudRoot", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1 }, gui)
+	local rootScale = make("UIScale", { Scale = 1 }, root)
 	for _, c in ipairs(gui:GetChildren()) do
-		if c:IsA("GuiObject") and c ~= self.banner then table.insert(scales, make("UIScale", { Scale = 1 }, c)) end
+		if c:IsA("GuiObject") and c ~= root then c.Parent = root end
 	end
 	local function rescale()
 		local vp = workspace.CurrentCamera.ViewportSize
-		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), if UIS.TouchEnabled then 0.62 else 0.4, 1)
+		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), if UIS.TouchEnabled then 0.5 else 0.4, 1)
 		self.uiScale = sc
-		for _, u in ipairs(scales) do u.Scale = sc end
-		self.bannerScale.Scale = sc
+		root.Size = UDim2.new(1 / sc, 0, 1 / sc, 0)
+		rootScale.Scale = sc
 	end
 	rescale()
 	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(rescale)
@@ -193,8 +196,8 @@ function Hud:showBanner(title, sub, secs)
 	self.banner.Visible = true
 	self.bannerTitle.Text = title
 	self.bannerSub.Text = sub or ""
-	self.bannerScale.Scale = 0.6 * self.uiScale
-	game:GetService("TweenService"):Create(self.bannerScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = self.uiScale }):Play()
+	self.bannerScale.Scale = 0.6
+	game:GetService("TweenService"):Create(self.bannerScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 	self.bannerUntil = os.clock() + (secs or 3.5)
 end
 

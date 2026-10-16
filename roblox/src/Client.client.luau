@@ -51,6 +51,9 @@ function world:isWater(lat, lon)
 end
 function world:buildingTop() return nil end
 
+-- Low graphics settings stop drawing parts a few hundred studs away, so everything is kept close:
+-- the ground at most GROUND_D below (scaled about the ship when higher), far objects pulled in to DMAX.
+local GROUND_D, DMAX = 180, 430
 local SITE = { name = "Starforge Spaceport", lat = 28.61, lon = -80.69, hdg = 90 }   -- Florida coast, runway pointing east
 -- the spaceport runway in the form the runway autopilot expects
 local RUNWAY = { latC = SITE.lat, lonC = SITE.lon, cosC = math.cos(SITE.lat * D2R), dx = math.sin(SITE.hdg * D2R), dy = math.cos(SITE.hdg * D2R), len = 3000, e1 = 0, e2 = 0 }
@@ -271,17 +274,26 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 	local n = 0
 	local kq = math.exp(math.floor(math.log(k) / 0.03 + 0.5) * 0.03)   -- sizes change in 3% steps
 	local function put(o)
+		local pos = Vector3.new((o.e - xe) * S * k, gy + o.y * S * k, -(o.n - xn) * S * k)
+		local d = pos.Magnitude
+		local fq = 1
+		if d > DMAX then
+			if d > DMAX * 40 then return end
+			fq = math.exp(math.floor(math.log(DMAX / d) / 0.04 + 0.5) * 0.04)
+			pos *= fq
+		end
 		n += 1
 		local p = poolPart(n)
-		if poolK[n] ~= kq or poolO[n] ~= o.id then
+		local kk = kq * fq
+		if poolK[n] ~= kk or poolO[n] ~= o.id then
 			if p.Shape ~= o.shape then p.Shape = o.shape end
-			p.Size = o.size * (S * kq)
+			p.Size = o.size * (S * kk)
 			p.Color = o.color; p.Material = o.mat
 			p.Transparency = if o.cloud then 0.18 else 0
-			poolK[n] = kq; poolO[n] = o.id
+			poolK[n] = kk; poolO[n] = o.id
 		end
 		bulkParts[n] = p
-		bulkCF[n] = CFrame.new((o.e - xe) * S * k, gy + o.y * S * k, -(o.n - xn) * S * k) * CFrame.Angles(0, o.rot, 0)
+		bulkCF[n] = CFrame.new(pos) * CFrame.Angles(0, o.rot, 0)
 	end
 	if show and agl < 2500 then
 		local R = 1600
@@ -300,7 +312,7 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 		end
 	end
 	if show then
-		local R = 11000
+		local R = 8000
 		for ci = math.floor((xe - R) / CLOUD_CELL), math.floor((xe + R) / CLOUD_CELL) do
 			for cj = math.floor((xn - R) / CLOUD_CELL), math.floor((xn + R) / CLOUD_CELL) do
 				for idx, o in ipairs(cloudObjects(ci, cj)) do
@@ -448,9 +460,11 @@ local function placeRing(ring, idx, xe, xn, agl, k, visible)
 	local c = Vector3.new((ring.e - xe) * S * k, (ring.h - agl) * S * k, -(ring.n - xn) * S * k)
 	local n = Vector3.new(ring.nE, ring.nU, -ring.nN)
 	local cf = CFrame.lookAt(c, c + n)
-	local R = ring.r * S * k
+	local f = 1
+	if c.Magnitude > DMAX then f = DMAX / c.Magnitude; c *= f; cf = CFrame.lookAt(c, c + n) end
+	local R = ring.r * S * k * f
 	local segLen = 2 * math.pi * R / SEG * 1.08
-	local thick = math.max(0.4, (if idx == race.next then 3.5 else 2.2) * S * k)
+	local thick = math.max(0.5, (if idx == race.next then 3.5 else 2.2) * S * k * f)
 	for s, part in ipairs(ring.parts) do
 		part.Transparency = if show then (if idx == race.next then 0 else 0.35) else 1
 		if show then
@@ -600,7 +614,7 @@ UIS.InputChanged:Connect(function(io)
 		camYaw -= io.Delta.X * 0.006
 		camPitch = math.clamp(camPitch + io.Delta.Y * 0.004, -1.2, 1.4)
 	elseif io.UserInputType == Enum.UserInputType.MouseWheel then
-		camDist = math.clamp(camDist * (1 - io.Position.Z * 0.12), 15, 4000)
+		camDist = math.clamp(camDist * (1 - io.Position.Z * 0.12), 15, 260)
 	end
 end)
 local function axisKey(pos, neg) return (if keys[pos] then 1 else 0) - (if keys[neg] then 1 else 0) end
@@ -677,7 +691,7 @@ local function drawGhosts(simT)
 		local pI = ship:toI(EARTH, pF, ship.t, V3())
 		local d = pI:sub(ship.r)
 		local dist = d:length()
-		local show = ship.env.body == EARTH and dist < 6000 and not P.d
+		local show = ship.env.body == EARTH and dist * S < DMAX and not P.d
 		g.view.model.Parent = if show then scene else nil
 		if show then
 			ship:bodyFrameQ(EARTH, ship.t, _gq)
@@ -686,7 +700,7 @@ local function drawGhosts(simT)
 			ShipModel.update(g.view, g.craft, CFrame.new(toWorld(d) * S) * shipCFrame(qI), simT)
 		end
 		local dir = toWorld(d) / math.max(dist, 1)
-		g.tag.CFrame = CFrame.new(dir * math.min(dist * S, 12000) + Vector3.new(0, 8, 0))
+		g.tag.CFrame = CFrame.new(dir * math.min(dist * S, DMAX) + Vector3.new(0, 8, 0))
 		g.label.Text = string.format("%s\n%s · %s", g.name, g.shipName or "", Geo.fmtDist(dist))
 		g.label.Visible = ship.env.body == EARTH and dist < 200000
 	end
@@ -935,7 +949,7 @@ frame = function(dtRaw)
 	-- ground under the ship (near the surface), drawn uniformly scaled about the ship when high up
 	local agl = E.h      -- height above the datum (the ground is flat at 0 apart from the pad)
 	local depth = agl * S
-	local k = if depth > 3000 then 3000 / depth else 1
+	local k = if depth > GROUND_D then GROUND_D / depth else 1   -- keep the ground close: low graphics settings cull far parts
 	local showGround = body == EARTH and E.h < 60000
 	-- ship position in the reference tangent plane (east, north metres from the spaceport)
 	local rel = ship:toFixed(EARTH, ship.r, ship.t, _t1):sub(refFixed)
@@ -985,7 +999,9 @@ frame = function(dtRaw)
 	local ringNow = rings[race.next]
 	markerGui.Enabled = ringsVisible and ringNow ~= nil
 	if ringNow and ringsVisible then
-		marker.CFrame = CFrame.new((ringNow.e - xe) * S * k, (ringNow.h - agl + ringNow.r * 1.3) * S * k, -(ringNow.n - xn) * S * k)
+		local mp = Vector3.new((ringNow.e - xe) * S * k, (ringNow.h - agl + ringNow.r * 1.3) * S * k, -(ringNow.n - xn) * S * k)
+		if mp.Magnitude > DMAX then mp *= DMAX / mp.Magnitude end
+		marker.CFrame = CFrame.new(mp)
 		local dd = math.sqrt((ringNow.e - xe) ^ 2 + (ringNow.n - xn) ^ 2 + (ringNow.h - E.h) ^ 2)
 		markerText.Text = string.format("RING %d\n%s", race.next, Geo.fmtDist(dd))
 	end
@@ -1082,10 +1098,9 @@ frame = function(dtRaw)
 	-- the Earth: shown above the near ground, fading in as it gets high
 	local hEarth = ship.r:length() - EARTH.R
 	if hEarth > 20000 or body ~= EARTH then
-		local maxD = math.clamp(hEarth * S * 0.02 + 3000 + (EARTH.R * 0.0), 3000, 60000)
-		-- keep the surface at least 2500 studs below the ship
+		-- the surface sits a fixed distance below the ship, scaled so the Earth's angular size is right
 		local dist = ship.r:length()
-		local kk = math.max(2500, maxD) / (dist - EARTH.R) * (1)
+		local kk = 380 / (dist - EARTH.R)
 		local c = V3(0, 0, 0):sub(ship.r)
 		earthBall.CFrame = CFrame.new(toWorldScaled(c, kk))
 		earthMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk)
@@ -1093,23 +1108,23 @@ frame = function(dtRaw)
 	else
 		earthBall.Transparency = 1
 	end
-	drawBall(moonBall, moonMesh, MOON, MOON.R, 50000)
+	drawBall(moonBall, moonMesh, MOON, MOON.R, 470)
 	-- the Sun
 	local sunW = toWorld(eph.sunP:clone():sub(ship.r):normalize())
-	sunBall.CFrame = CFrame.new(sunW * 6000)
-	sunBall.Size = Vector3.new(1, 1, 1) * (6000 * 2 * math.tan(0.267 * D2R) * 2)
+	sunBall.CFrame = CFrame.new(sunW * 470)
+	sunBall.Size = Vector3.new(1, 1, 1) * (470 * 2 * math.tan(0.267 * D2R) * 2.5)
 	-- sky: thin air fades to black space
 	local airK = math.clamp((E.rho / 1.225) ^ 0.35, 0, 1)
 	if body ~= EARTH then airK = 0 end
-	atmosphere.Density = 0.1 * airK
+	atmosphere.Density = 0.3 * airK
 	atmosphere.Offset = 0.15
 	atmosphere.Color = Color3.fromRGB(199, 214, 230)
 	atmosphere.Decay = Color3.fromRGB(120, 150, 190)
 	atmosphere.Glare = 0.4 * airK
-	atmosphere.Haze = 0.8 * airK
+	atmosphere.Haze = 1.2 * airK
 	local spaceA = 1 - math.clamp((alt - 30000) / 40000, 0, 1)
 	if body ~= EARTH then spaceA = 0 end
-	local R0 = 70000
+	local R0 = 490
 	local faces = { { Vector3.new(R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) }, { Vector3.new(-R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) },
 		{ Vector3.new(0, R0, 0), Vector3.new(2 * R0, 10, 2 * R0) }, { Vector3.new(0, -R0, 0), Vector3.new(2 * R0, 10, 2 * R0) },
 		{ Vector3.new(0, 0, R0), Vector3.new(2 * R0, 2 * R0, 10) }, { Vector3.new(0, 0, -R0), Vector3.new(2 * R0, 2 * R0, 10) } }

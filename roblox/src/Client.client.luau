@@ -155,10 +155,12 @@ end
 -- the Earth seen from high up, the Moon, the Sun, and a black dome for space
 local earthBall = anchored("Part", { Name = "EarthBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.SmoothPlastic, Color = Color3.fromRGB(40, 90, 170), CastShadow = false })
 local earthMesh = Instance.new("SpecialMesh"); earthMesh.MeshType = Enum.MeshType.Sphere; earthMesh.Parent = earthBall
--- a cloud map (public-domain Blue Marble clouds) tinted ocean blue; swap in a full Earth map when one is uploaded
-local EARTH_TEXTURE = "rbxassetid://81641963023005"
-earthMesh.TextureId = EARTH_TEXTURE
-earthMesh.VertexColor = Vector3.new(0.45, 0.7, 1.15)
+-- set EARTH_TEXTURE to an uploaded Earth map to texture the globe; a cloud layer (public-domain Blue Marble
+-- clouds, transparent between the clouds) turns just above it
+local EARTH_TEXTURE = ""
+if EARTH_TEXTURE ~= "" then earthMesh.TextureId = EARTH_TEXTURE end
+local cloudBall = anchored("Part", { Name = "EarthClouds", Size = Vector3.new(1, 1, 1), Transparency = 1, CastShadow = false })
+local cloudMesh = Instance.new("SpecialMesh"); cloudMesh.MeshType = Enum.MeshType.Sphere; cloudMesh.TextureId = "rbxassetid://81641963023005"; cloudMesh.Parent = cloudBall
 local moonBall = anchored("Part", { Name = "MoonBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.Slate, Color = Color3.fromRGB(170, 170, 165), CastShadow = false })
 local moonMesh = Instance.new("SpecialMesh"); moonMesh.MeshType = Enum.MeshType.Sphere; moonMesh.Parent = moonBall
 local sunBall = anchored("Part", { Name = "SunBall", Shape = Enum.PartType.Ball, Size = Vector3.new(80, 80, 80), Material = Enum.Material.Neon, Color = Color3.fromRGB(255, 244, 214), CastShadow = false })
@@ -1118,10 +1120,14 @@ frame = function(dtRaw)
 		ship:bodyFrameQ(EARTH, ship.t, _q)
 		local ex, ey, ez = toWorld(V3(1, 0, 0):applyQuaternion(_q)), toWorld(V3(0, 1, 0):applyQuaternion(_q)), toWorld(V3(0, 0, 1):applyQuaternion(_q))
 		earthBall.CFrame = CFrame.fromMatrix(skyC + toWorldScaled(c, kk), ex, ey, ez)
+		cloudBall.CFrame = earthBall.CFrame * CFrame.Angles(0, ship.t * 2e-5, 0)
+		cloudMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk * 1.003)
 		earthMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk)
 		earthBall.Transparency = if body == EARTH then math.clamp(1 - (hEarth - 18000) / 7000, 0, 1) else 0
+		cloudBall.Transparency = earthBall.Transparency
 	else
 		earthBall.Transparency = 1
+		cloudBall.Transparency = 1
 	end
 	drawBall(moonBall, moonMesh, MOON, MOON.R, 310)
 	-- the Sun

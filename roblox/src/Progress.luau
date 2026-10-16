@@ -62,12 +62,14 @@ function P.reward(state, xp, credits)
 	return ups
 end
 
--- checks the current mission; returns the mission if it was just completed
+-- checks every unfinished mission (they can be done in any order; the card shows the first one left);
+-- returns a mission if it was just completed
 function P.check(state, ctx)
-	local m = P.current(state)
-	if m and m.check(ctx) then
-		state.done[m.id] = true
-		return m
+	for _, m in ipairs(P.MISSIONS) do
+		if not state.done[m.id] and m.check(ctx) then
+			state.done[m.id] = true
+			return m
+		end
 	end
 	return nil
 end

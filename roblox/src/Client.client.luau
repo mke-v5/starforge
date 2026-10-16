@@ -784,6 +784,18 @@ hud = require(SF.Hud).new(player, {
 			else
 				C:engage(Control.landAp()); toast("Autopilot: landing")
 			end
+		elseif kind == "moon" then
+			C:engage(Control.sequenceAp("Trip to the Moon", {
+				function() return Control.planBurnAp("Moon transfer", function(s) return Orbit.planMoonTransfer(s, 100000) end) end,
+				function() return Control.planBurnAp("Course correction", function(s) return Orbit.planCorrection(s, MOON, 100000) end, true) end,
+				function() return Control.waitAp("Coast to the Moon", function(s) return s.env.body == MOON and Orbit.relState(s, MOON).r:length() - MOON.R < 3e6 end, function(s) return nil end) end,
+				function() return Control.planBurnAp("Lunar orbit capture", function(s) return Orbit.planCapture(s, 100000) end) end,
+			}))
+			toast("Autopilot: flying to the Moon (time warp speeds up the coast)")
+		elseif kind == "moonland" then C:engage(Control.landAp()); toast("Autopilot: landing on the Moon")
+		elseif kind == "home" then
+			C:engage(Control.flyHomeAp(ship, { A = airports, rw = RUNWAY, name = SITE.name, vertical = craft.vertical }))
+			toast("Autopilot: flying home to the spaceport")
 		elseif kind == "off" then C:cancelAp(); toast("Autopilot off") end
 	end,
 	onSas = function(mode) if ship then C:setSas(mode); toast("SAS: " .. mode) end end,
@@ -1161,6 +1173,22 @@ frame = function(dtRaw)
 	local sunUp = math.asin(math.clamp(sunW.Y, -1, 1))
 	Lighting.ClockTime = 12 - (math.pi / 2 - sunUp) / (math.pi / 2) * 6 * (if sunW.X >= 0 then 1 else -1)
 
+	do
+		-- what the main autopilot button offers right now
+		local kind, label = "orbit", "Auto: climb to orbit"
+		if E.body == EARTH then
+			if E.h > 100000 then
+				local rs = Orbit.relState(ship, EARTH)
+				local el = Orbit.elements(rs.r, rs.v, rs.mu)
+				if el.e < 1 and el.pe - EARTH.R > 120000 and el.ap - EARTH.R < 5e6 then kind, label = "moon", "Auto: fly to the Moon"
+				elseif el.ap - EARTH.R > 5e6 then kind, label = "home", "Auto: fly home" end
+			end
+		elseif E.body == MOON then
+			if ship.parked or E.agl < 50 then kind, label = "home", "Auto: fly home"
+			else kind, label = "moonland", "Auto: land on the Moon" end
+		end
+		hud:setAuto(kind, label)
+	end
 	local _c3 = os.clock()
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
 	dbgTimes.hud = dbgTimes.hud * 0.9 + (os.clock() - _c3) * 100

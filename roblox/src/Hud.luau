@@ -51,7 +51,10 @@ function Hud.new(player, cb)
 	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, -2).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
 	button(side, "🏆 Top pilots", function() if cb.onTop then cb.onTop() end end, -1)
 	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function() cb.onNextShip() end, 1)
-	button(side, "Auto: climb to orbit", function() cb.onAuto("orbit") end, 2)
+	-- the main autopilot button offers the next sensible step (climb to orbit, go to the Moon, fly home…)
+	self.autoKind = "orbit"
+	self.autoBtn = button(side, "Auto: climb to orbit", function() cb.onAuto(self.autoKind) end, 2)
+	self.autoBtn.BackgroundColor3 = Color3.fromRGB(28, 52, 40)
 	button(side, "Auto: land", function() cb.onAuto("land") end, 3)
 	button(side, "Autopilot off", function() cb.onAuto("off") end, 4)
 	local sasRow = make("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 5 }, side)
@@ -165,6 +168,12 @@ end
 local function dist(m) return Geo.fmtDist(m) end
 
 function Hud:setShip(text) self.shipBtn.Text = text end
+
+function Hud:setAuto(kind, label)
+	if self.autoKind == kind then return end
+	self.autoKind = kind
+	self.autoBtn.Text = label
+end
 
 function Hud:setMission(m, extra)
 	if not m then

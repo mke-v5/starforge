@@ -53,7 +53,7 @@ function world:buildingTop() return nil end
 
 -- Low graphics settings stop drawing parts a few hundred studs away, so everything is kept close:
 -- the ground at most GROUND_D below (scaled about the ship when higher), far objects pulled in to DMAX.
-local GROUND_D, DMAX = 170, 380
+local GROUND_D, DMAX = 160, 320
 local SITE = { name = "Starforge Spaceport", lat = 28.61, lon = -80.69, hdg = 90 }   -- Florida coast, runway pointing east
 -- the spaceport runway in the form the runway autopilot expects
 local RUNWAY = { latC = SITE.lat, lonC = SITE.lon, cosC = math.cos(SITE.lat * D2R), dx = math.sin(SITE.hdg * D2R), dy = math.cos(SITE.hdg * D2R), len = 3000, e1 = 0, e2 = 0 }
@@ -349,6 +349,7 @@ local warpIdx = 1
 
 local hud -- forward
 local airTime = 0
+local skyC = Vector3.zero
 local deadFor = 0
 local lastGood = { r = V3(), v = V3(), q = THREE.Quaternion.new() }
 local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
@@ -921,6 +922,7 @@ frame = function(dtRaw)
 	camera.CameraType = Enum.CameraType.Scriptable
 	local target = Vector3.new(0, camDist * 0.06, 0)
 	local camPos = target - dir * camDist
+	skyC = camPos   -- sky objects (space, Sun, Moon, Earth from orbit) are centred on the camera
 	-- never below the ground
 	local groundY = -(ship.env.agl * S) + 3
 	if camPos.Y < groundY then camPos = Vector3.new(camPos.X, groundY, camPos.Z) end
@@ -1091,7 +1093,7 @@ frame = function(dtRaw)
 		local dist = d:length()
 		local kk = maxD / dist
 		local pos = toWorldScaled(d, kk)
-		part.CFrame = CFrame.new(pos)
+		part.CFrame = CFrame.new(skyC + pos)
 		mesh.Scale = Vector3.new(2, 2, 2) * (R * kk)
 	end
 	local alt = E.h
@@ -1100,19 +1102,19 @@ frame = function(dtRaw)
 	if hEarth > 18000 or body ~= EARTH then
 		-- the surface sits a fixed distance below the ship, scaled so the Earth's angular size is right
 		local dist = ship.r:length()
-		local kk = 330 / (dist - EARTH.R)
+		local kk = 290 / (dist - EARTH.R)
 		local c = V3(0, 0, 0):sub(ship.r)
-		earthBall.CFrame = CFrame.new(toWorldScaled(c, kk))
+		earthBall.CFrame = CFrame.new(skyC + toWorldScaled(c, kk))
 		earthMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk)
 		earthBall.Transparency = if body == EARTH then math.clamp(1 - (hEarth - 18000) / 7000, 0, 1) else 0
 	else
 		earthBall.Transparency = 1
 	end
-	drawBall(moonBall, moonMesh, MOON, MOON.R, 400)
+	drawBall(moonBall, moonMesh, MOON, MOON.R, 310)
 	-- the Sun
 	local sunW = toWorld(eph.sunP:clone():sub(ship.r):normalize())
-	sunBall.CFrame = CFrame.new(sunW * 400)
-	sunBall.Size = Vector3.new(1, 1, 1) * (400 * 2 * math.tan(0.267 * D2R) * 2.5)
+	sunBall.CFrame = CFrame.new(skyC + sunW * 300)
+	sunBall.Size = Vector3.new(1, 1, 1) * (300 * 2 * math.tan(0.267 * D2R) * 2.5)
 	-- sky: thin air fades to black space
 	local airK = math.clamp((E.rho / 1.225) ^ 0.35, 0, 1)
 	if body ~= EARTH then airK = 0 end
@@ -1124,12 +1126,12 @@ frame = function(dtRaw)
 	atmosphere.Haze = 1.2 * airK
 	local spaceA = 1 - math.clamp((alt - 22000) / 30000, 0, 1)
 	if body ~= EARTH then spaceA = 0 end
-	local R0 = 420
+	local R0 = 330
 	local faces = { { Vector3.new(R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) }, { Vector3.new(-R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) },
 		{ Vector3.new(0, R0, 0), Vector3.new(2 * R0, 10, 2 * R0) }, { Vector3.new(0, -R0, 0), Vector3.new(2 * R0, 10, 2 * R0) },
 		{ Vector3.new(0, 0, R0), Vector3.new(2 * R0, 2 * R0, 10) }, { Vector3.new(0, 0, -R0), Vector3.new(2 * R0, 2 * R0, 10) } }
 	for i = 1, 6 do
-		dome[i].Size = faces[i][2]; dome[i].CFrame = CFrame.new(faces[i][1]); dome[i].Transparency = spaceA
+		dome[i].Size = faces[i][2]; dome[i].CFrame = CFrame.new(skyC + faces[i][1]); dome[i].Transparency = spaceA
 	end
 	-- the Sun's height sets the time of day for Roblox's lighting
 	local sunUp = math.asin(math.clamp(sunW.Y, -1, 1))

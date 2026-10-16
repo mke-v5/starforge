@@ -33,6 +33,9 @@ local camera = workspace.CurrentCamera
 ----------------------------------------------------------------- world model for the physics
 local PAD = { e = 450, n = 420, r = 40, h = 3 }   -- rocket launch pad (metres from the spaceport centre)
 local SITE_LAT, SITE_LON = 28.61, -80.69
+-- the coastline east of the spaceport (metres east of the centre, as a function of metres north)
+local function coastE(n) return 4800 + 600 * math.sin(n / 3500) + 300 * math.sin(n / 900 + 1.3) end
+local function isWaterAt(e, n) return e > coastE(n) end
 local world = { nearBuildings = false }
 function world:groundAt(body, lat, lon)
 	if body ~= EARTH then return 0 end
@@ -41,7 +44,11 @@ function world:groundAt(body, lat, lon)
 	if (e - PAD.e) ^ 2 + (n - PAD.n) ^ 2 < PAD.r * PAD.r then return PAD.h end
 	return 0
 end
-function world:isWater(lat, lon) return false end
+function world:isWater(lat, lon)
+	local n = (lat - SITE_LAT) * 111320
+	local e = (lon - SITE_LON) * 111320 * math.cos(SITE_LAT * D2R)
+	return isWaterAt(e, n)
+end
 function world:buildingTop() return nil end
 
 local SITE = { name = "Starforge Spaceport", lat = 28.61, lon = -80.69, hdg = 90 }   -- Florida coast, runway pointing east
@@ -165,8 +172,6 @@ atmosphere.Parent = Lighting
 ----------------------------------------------------------------- scenery: coast, fields, a town, trees and clouds
 -- Everything is generated from the position (metres east/north of the spaceport), so it is the same for every
 -- player and every visit. Objects come from a pool of parts that is re-assigned as you fly.
-local function coastE(n) return 4800 + 600 * math.sin(n / 3500) + 300 * math.sin(n / 900 + 1.3) end
-local function isWaterAt(e, n) return e > coastE(n) end
 local function hash2(i, j, salt)
 	local h = bit32.bxor(bit32.bxor((i * 73856093) % 4294967296, (j * 19349663) % 4294967296), (salt * 83492791) % 4294967296)
 	return (h % 1000003) / 1000003

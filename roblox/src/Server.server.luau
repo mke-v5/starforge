@@ -94,6 +94,12 @@ local function clean(s)
 	if type(s.crystals) == "table" then
 		for k, v in pairs(s.crystals) do if type(k) == "string" and #k < 6 and v == true then out.crystals[k] = true end end
 	end
+	if type(s.daily) == "table" and type(s.daily.stats) == "table" and type(s.daily.done) == "table" then
+		local d = { day = math.floor(tonumber(s.daily.day) or 0), stats = {}, done = {} }
+		for k, v in pairs(s.daily.stats) do if type(k) == "string" and #k < 16 and type(v) == "number" and v == v then d.stats[k] = math.clamp(v, 0, 1e7) end end
+		for k, v in pairs(s.daily.done) do if type(k) == "string" and #k < 16 and v == true then d.done[k] = true end end
+		out.daily = d
+	end
 	out.owned = {}
 	if type(s.owned) == "table" then
 		for k, v in pairs(s.owned) do if type(k) == "string" and #k < 32 and v == true then out.owned[k] = true end end

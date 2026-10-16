@@ -365,6 +365,7 @@ local warpIdx = 1
 
 local hud -- forward
 local airTime = 0
+local dailyAcc = { km = 0, t = 0, wasSpace = false }
 local skyC = Vector3.zero
 local refMoon = nil
 local deadFor = 0
@@ -406,6 +407,22 @@ resetFlags()
 local bannerQueue = {}
 local function banner(title, sub, secs) table.insert(bannerQueue, { title, sub, secs }) end
 -- give xp and credits; announces level-ups and what they unlock
+local function daily(stat, value, isMax)
+	for _, c in ipairs(Progress.dailyStat(state, stat, value, isMax)) do
+		banner("DAILY CHALLENGE", string.format("%s   +%d credits", c.title, c.credits), 3.5)
+		save()
+	end
+end
+local function dailyText()
+	local d, picks = Progress.daily(state)
+	local parts = {}
+	for _, c in ipairs(picks) do
+		local v = d.stats[c.stat] or 0
+		if d.done[c.id] then table.insert(parts, '<font color="#7dffa0">✓ ' .. c.title .. '</font>')
+		else table.insert(parts, string.format('%s <font color="#9aa4b0">(%s/%d)</font>', c.title, if v % 1 == 0 then tostring(v) else string.format("%.1f", v), c.goal)) end
+	end
+	return '<font color="#ffb347">TODAY</font>  ' .. table.concat(parts, "  ·  ")
+end
 local function grant(xp, credits)
 	local ups = Progress.reward(state, xp, credits)
 	for _, lv in ipairs(ups) do
@@ -981,7 +998,7 @@ frame = function(dtRaw)
 			kick(6)
 		elseif e.type == "landed" then
 			toast("Landed on the " .. (if e.body == EARTH then "ground" else e.body.name))
-			if flags.airborne then flags.landedBody = e.body end
+			if flags.airborne then flags.landedBody = e.body; daily("landings", 1) end
 		elseif e.type == "warpStop" then warpIdx = 1 end
 	end
 	table.clear(ship.events)
@@ -1133,6 +1150,7 @@ frame = function(dtRaw)
 			-- through the ring
 			flags.ringsPassed += 1
 			state.credits += 5
+			daily("rings", 1)
 			if race.next == 1 then race.startT = simTime end
 			race.next += 1
 			sfx("ring", 0.7, 1 + race.next * 0.04)
@@ -1140,6 +1158,7 @@ frame = function(dtRaw)
 			if race.next > #rings then
 				local t = simTime - race.startT
 				flags.raceDone = true
+				daily("races", 1)
 				local best = state.bestRace
 				local record = not best or t < best
 				if record then state.bestRace = t end
@@ -1176,6 +1195,7 @@ frame = function(dtRaw)
 				sfx("ring", 0.8, 1.6)
 				kick(0.4)
 				toast(string.format("Star crystal! +25 credits  (%d / %d today)", crystalCount(), #CRYSTALS))
+				daily("crystals", 1)
 				save()
 				p.Transparency = 1
 				continue
@@ -1201,6 +1221,17 @@ frame = function(dtRaw)
 			if airTime > 15 then airTime -= 15; state.credits += 2; save() end
 		end
 		if E.h > 10000 then flags.wasHigh = true end
+		dailyAcc.km += E.vSurf * dt * ship.warp / 1000
+		dailyAcc.t += dt
+		if dailyAcc.t > 0.5 then
+			dailyAcc.t = 0
+			if E.rho > 0.01 then daily("maxMach", math.floor(E.mach * 10) / 10, true) end
+			if E.body == EARTH then daily("maxKm", math.floor(E.h / 100) / 10, true) end
+			if dailyAcc.km >= 1 then local w = math.floor(dailyAcc.km); dailyAcc.km -= w; daily("km", w) end
+			if E.body == EARTH and E.h > 100000 and not dailyAcc.wasSpace then dailyAcc.wasSpace = true; daily("space", 1) end
+			if E.h < 80000 then dailyAcc.wasSpace = false end
+			hud:setDaily(dailyText())
+		end
 		if flags.airborne and ship.contacts > 0 and E.vSurf < 3 and E.body == EARTH and math.abs(xn) < 60 and math.abs(xe) < 1600 then
 			flags.landedRunway = true
 		end

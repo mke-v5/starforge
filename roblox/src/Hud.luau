@@ -123,6 +123,7 @@ function Hud.new(player, cb)
 	self.cardTitle = make("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = "", TextColor3 = AMBER, Font = FONT_B, TextSize = 18, LayoutOrder = 1, TextWrapped = true }, card)
 	self.cardHint = make("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "", TextColor3 = INK, Font = FONT, TextSize = 14, LayoutOrder = 2, TextWrapped = true }, card)
 	self.cardReward = make("TextLabel", { Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = "", TextColor3 = DIM, Font = FONT, TextSize = 13, LayoutOrder = 3 }, card)
+	self.dailyText = make("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "", TextColor3 = INK, Font = FONT, TextSize = 13, LayoutOrder = 4, TextWrapped = true, RichText = true }, card)
 	self.card = card
 	-- level, xp and credits under the title
 	self.levelText = make("TextLabel", { Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = "", TextColor3 = INK, Font = FONT_B, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 0, RichText = true }, info)
@@ -229,6 +230,8 @@ function Hud:showTop(list, mine)
 	corner(close, 8)
 	close.Activated:Connect(function() p:Destroy() end)
 end
+
+function Hud:setDaily(text) if self.dailyText.Text ~= text then self.dailyText.Text = text end end
 
 function Hud:setRace(text)
 	self.race.Visible = text ~= nil

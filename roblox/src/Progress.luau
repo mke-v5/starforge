@@ -74,6 +74,50 @@ function P.check(state, ctx)
 	return nil
 end
 
+-- daily challenges: three a day, picked from this pool by the date; progress counters reset each day
+P.DAILY = {
+	{ id = "crystals10", title = "Collect 10 star crystals", credits = 150, goal = 10, stat = "crystals" },
+	{ id = "race1", title = "Finish a ring race", credits = 120, goal = 1, stat = "races" },
+	{ id = "mach2", title = "Fly faster than Mach 2", credits = 120, goal = 2, stat = "maxMach" },
+	{ id = "land3", title = "Land 3 times", credits = 120, goal = 3, stat = "landings" },
+	{ id = "dist100", title = "Fly 100 km", credits = 150, goal = 100, stat = "km" },
+	{ id = "space1", title = "Reach space", credits = 200, goal = 1, stat = "space" },
+	{ id = "high10", title = "Climb above 10 km", credits = 80, goal = 10, stat = "maxKm" },
+	{ id = "rings25", title = "Fly through 25 rings", credits = 120, goal = 25, stat = "rings" },
+}
+local function today() return math.floor(os.time() / 86400) end
+function P.daily(state)
+	local d = state.daily
+	if not d or d.day ~= today() then
+		d = { day = today(), stats = {}, done = {} }
+		state.daily = d
+	end
+	-- three challenges for today
+	local picks, used = {}, {}
+	local seed = d.day
+	while #picks < 3 do
+		seed = (seed * 1103515245 + 12345) % 2147483648
+		local i = 1 + seed % #P.DAILY
+		if not used[i] then used[i] = true; table.insert(picks, P.DAILY[i]) end
+	end
+	return d, picks
+end
+-- add to (or raise) a daily counter; returns any challenges just finished
+function P.dailyStat(state, stat, value, isMax)
+	local d, picks = P.daily(state)
+	local cur = d.stats[stat] or 0
+	d.stats[stat] = if isMax then math.max(cur, value) else cur + value
+	local finished = {}
+	for _, c in ipairs(picks) do
+		if not d.done[c.id] and (d.stats[c.stat] or 0) >= c.goal then
+			d.done[c.id] = true
+			state.credits += c.credits
+			table.insert(finished, c)
+		end
+	end
+	return finished
+end
+
 function P.unlocked(state, key) return state.level >= (P.SHIP_LEVEL[key] or 1) end
 
 return P

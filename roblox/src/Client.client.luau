@@ -1071,8 +1071,12 @@ frame = function(dtRaw)
 	-- sky: thin air fades to black space
 	local airK = math.clamp((E.rho / 1.225) ^ 0.35, 0, 1)
 	if body ~= EARTH then airK = 0 end
-	atmosphere.Density = 0.3 * airK
-	atmosphere.Haze = 2 * airK
+	atmosphere.Density = 0.1 * airK
+	atmosphere.Offset = 0.15
+	atmosphere.Color = Color3.fromRGB(199, 214, 230)
+	atmosphere.Decay = Color3.fromRGB(120, 150, 190)
+	atmosphere.Glare = 0.4 * airK
+	atmosphere.Haze = 0.8 * airK
 	local spaceA = 1 - math.clamp((alt - 30000) / 40000, 0, 1)
 	if body ~= EARTH then spaceA = 0 end
 	local R0 = 70000

@@ -39,6 +39,8 @@ P.MISSIONS = {
 		check = function(c) return c.flags.landedBody == Geo.MOON end },
 	{ id = "race100", title = "Race under 1:40", hint = "Finish the ring race in less than 1 min 40 s — the Viper (level 4) is built for it", xp = 300, credits = 500, ship = "viper",
 		check = function(c) return c.flags.raceTime ~= nil and c.flags.raceTime < 100 end },
+	{ id = "coastrace", title = "Fly the Coastal Sprint", hint = "Switch the race course (🏁 button) and fly all 12 rings out over the sea", xp = 300, credits = 500,
+		check = function(c) return c.flags.race_coast == true end },
 	{ id = "moonhome", title = "To the Moon and back", hint = "Land on the Moon, then fly home and touch down on Earth in the same flight", xp = 1500, credits = 3000, ship = "selene",
 		check = function(c) return c.flags.wasMoon and c.flags.landedBody == Geo.EARTH end },
 }

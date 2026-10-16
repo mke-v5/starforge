@@ -53,6 +53,7 @@ function Hud.new(player, cb)
 	local touch = UIS0.TouchEnabled and not UIS0.KeyboardEnabled
 	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, -2).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
 	local topBtn = button(side, "🏆 Top pilots", function() if cb.onTop then cb.onTop() end end, -1)
+	self.courseBtn = button(side, "🏁 Spaceport Loop", function() if cb.onCourse then cb.onCourse() end end, 0)
 	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function() cb.onNextShip() end, 1)
 	-- the main autopilot button offers the next sensible step (climb to orbit, go to the Moon, fly home…)
 	self.autoKind = "orbit"
@@ -78,7 +79,7 @@ function Hud.new(player, cb)
 	local wu = button(warpRow, "warp ▶", function() cb.onWarp(1) end); wu.Size = UDim2.new(0.5, -2, 1, 0)
 	-- phones: keep the column short (the throttle sits under it); the rarer buttons fold behind "More"
 	if touch then
-		local extra = { topBtn, sasRow, warpRow }
+		local extra = { topBtn, self.courseBtn, sasRow, warpRow }
 		for _, o in ipairs(extra) do o.Visible = false end
 		local more
 		more = button(side, "More ▾", function()
@@ -240,7 +241,7 @@ function Hud:setGift(text)
 end
 
 -- leaderboard panel: list of { name, t }
-function Hud:showTop(list, mine)
+function Hud:showTop(list, mine, courseName)
 	local old = self.gui:FindFirstChild("TopPanel")
 	if old then old:Destroy() return end
 	local p = make("Frame", { Name = "TopPanel", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0, 360, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
@@ -250,7 +251,7 @@ function Hud:showTop(list, mine)
 	make("UIScale", { Scale = self.uiScale or 1 }, p)
 	make("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 18), PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 16) }, p)
 	make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, p)
-	make("TextLabel", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, Text = "🏆 FASTEST RING RACE", TextColor3 = AMBER, Font = FONT_B, TextSize = 20, LayoutOrder = 0, ZIndex = 21 }, p)
+	make("TextLabel", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, Text = "🏆 " .. string.upper(courseName or "Ring race"), TextColor3 = AMBER, Font = FONT_B, TextSize = 20, LayoutOrder = 0, ZIndex = 21 }, p)
 	if #list == 0 then
 		make("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = "No times yet — be the first!", TextColor3 = DIM, Font = FONT, TextSize = 15, LayoutOrder = 1, ZIndex = 21 }, p)
 	end
@@ -260,11 +261,13 @@ function Hud:showTop(list, mine)
 			Text = string.format("%s  %s  <font color=\"#9dffb0\">%d:%05.2f</font>", medal, e.name, math.floor(e.t / 60), e.t % 60), TextColor3 = INK, Font = FONT, TextSize = 16 }, p)
 	end
 	make("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = 99, ZIndex = 21,
-		Text = if mine then string.format("Your best: %d:%05.2f", math.floor(mine / 60), mine % 60) else "Fly the glowing rings over the spaceport to set a time", TextColor3 = DIM, Font = FONT, TextSize = 14, TextWrapped = true }, p)
+		Text = if mine then string.format("Your best: %d:%05.2f", math.floor(mine / 60), mine % 60) else "Fly through the glowing rings in order to set a time", TextColor3 = DIM, Font = FONT, TextSize = 14, TextWrapped = true }, p)
 	local close = make("TextButton", { Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = Color3.fromRGB(36, 42, 54), Text = "Close", TextColor3 = INK, Font = FONT_B, TextSize = 15, LayoutOrder = 100, ZIndex = 21 }, p)
 	corner(close, 8)
 	close.Activated:Connect(function() p:Destroy() end)
 end
+
+function Hud:setCourse(text) self.courseBtn.Text = text end
 
 function Hud:setDaily(text) if self.dailyText.Text ~= text then self.dailyText.Text = text end end
 

@@ -467,29 +467,51 @@ end
 local shake = 0          -- camera shake amplitude (studs), decays
 local function kick(a) shake = math.max(shake, a) end
 
------------------------------------------------------------------ ring race over the spaceport
--- ring centres in metres from the spaceport: east, north, height
-local RING_POS = {
-	{ 1900, 0, 70, 75 }, { 3600, 0, 160, 65 }, { 5600, 500, 300 }, { 6900, 1900, 420 }, { 6800, 3700, 520 },
-	{ 5200, 5200, 600 }, { 2800, 5700, 500 }, { 700, 4800, 380 }, { -300, 3000, 260 }, { 300, 1400, 160 },
+----------------------------------------------------------------- ring races
+-- ring centres in metres from the spaceport: east, north, height (, radius)
+local COURSES = {
+	{ id = "spaceport", name = "Spaceport Loop", r = 45, pos = {
+		{ 1900, 0, 70, 75 }, { 3600, 0, 160, 65 }, { 5600, 500, 300 }, { 6900, 1900, 420 }, { 6800, 3700, 520 },
+		{ 5200, 5200, 600 }, { 2800, 5700, 500 }, { 700, 4800, 380 }, { -300, 3000, 260 }, { 300, 1400, 160 },
+	} },
+	-- a long, fast loop out over the sea and back: big rings for fast jets
+	{ id = "coast", name = "Coastal Sprint", r = 70, pos = {
+		{ 2500, -300, 150 }, { 6000, -2500, 300 }, { 10000, -5000, 500 }, { 15000, -6000, 800 }, { 20000, -4000, 1200 },
+		{ 23000, 0, 1500 }, { 21000, 5000, 1200 }, { 16000, 8000, 900 }, { 10000, 9000, 600 }, { 5000, 7000, 400 },
+		{ 1500, 3500, 250 }, { 0, 800, 150, 80 },
+	} },
 }
-local RING_R, SEG = 45, 18
-local rings = {}
-for i, p in ipairs(RING_POS) do
-	local q = RING_POS[i + 1] or RING_POS[1]
-	local prev = RING_POS[i - 1]
-	-- facing: along the course (from the previous ring to the next)
-	local a = prev or { 0, 0, 100 }
-	local nx, ny, nz = q[1] - a[1], q[3] - a[3], q[2] - a[2]
-	if i == #RING_POS then nx, ny, nz = p[1] - a[1], p[3] - a[3], p[2] - a[2] end
-	local L = math.sqrt(nx * nx + ny * ny + nz * nz)
-	local ring = { e = p[1], n = p[2], h = p[3], r = p[4] or RING_R, nE = nx / L, nU = ny / L, nN = nz / L, parts = {}, side = nil }
-	for s = 1, SEG do
-		ring.parts[s] = anchored("Part", { Name = "Ring" .. i, Material = Enum.Material.Neon, Color = Color3.fromRGB(80, 220, 255), CastShadow = false, Size = Vector3.one })
+local SEG = 18
+for _, course in ipairs(COURSES) do
+	local P = course.pos
+	course.rings = {}
+	for i, p in ipairs(P) do
+		local q = P[i + 1] or P[1]
+		local prev = P[i - 1]
+		-- facing: along the course (from the previous ring to the next)
+		local a = prev or { 0, 0, 100 }
+		local nx, ny, nz = q[1] - a[1], q[3] - a[3], q[2] - a[2]
+		if i == #P then nx, ny, nz = p[1] - a[1], p[3] - a[3], p[2] - a[2] end
+		local L = math.sqrt(nx * nx + ny * ny + nz * nz)
+		local ring = { e = p[1], n = p[2], h = p[3], r = p[4] or course.r, nE = nx / L, nU = ny / L, nN = nz / L, parts = {}, side = nil }
+		for s = 1, SEG do
+			ring.parts[s] = anchored("Part", { Name = "Ring" .. i, Material = Enum.Material.Neon, Color = Color3.fromRGB(80, 220, 255), CastShadow = false, Size = Vector3.one, Transparency = 1 })
+		end
+		ring.tr = 1
+		course.rings[i] = ring
 	end
-	rings[i] = ring
 end
+local courseIdx = 1
+local rings = COURSES[1].rings
 local race = { next = 1, startT = nil, t = 0 }
+local function courseBest(id)
+	if id == "spaceport" then return state.bestRace end
+	return state.bestRaces and state.bestRaces[id]
+end
+local function setCourseBest(id, t)
+	if id == "spaceport" then state.bestRace = t
+	else state.bestRaces = state.bestRaces or {}; state.bestRaces[id] = t end
+end
 local marker = anchored("Part", { Name = "RingMarker", Size = Vector3.one, Transparency = 1 })
 local markerGui = Instance.new("BillboardGui")
 markerGui.Size = UDim2.new(0, 140, 0, 46); markerGui.AlwaysOnTop = true; markerGui.LightInfluence = 0
@@ -957,11 +979,26 @@ hud = require(SF.Hud).new(player, {
 	onSas = function(mode) if ship then C:setSas(mode); toast("SAS: " .. mode) end end,
 	onTop = function()
 		local list = {}
+		local course = COURSES[courseIdx]
 		if remotes and remotes:FindFirstChild("Top") then
-			local ok, res = pcall(function() return remotes.Top:InvokeServer() end)
+			local ok, res = pcall(function() return remotes.Top:InvokeServer(course.id) end)
 			if ok and type(res) == "table" then list = res end
 		end
-		hud:showTop(list, state.bestRace)
+		hud:showTop(list, courseBest(course.id), course.name)
+	end,
+	onCourse = function()
+		-- hide this course's rings, switch to the next one and start it from ring 1
+		for _, r in ipairs(rings) do
+			r.side = nil
+			if r.tr ~= 1 then r.tr = 1; for _, part in ipairs(r.parts) do part.Transparency = 1 end end
+		end
+		courseIdx = courseIdx % #COURSES + 1
+		rings = COURSES[courseIdx].rings
+		race.next = 1; race.startT = nil
+		hud:setRace(nil)
+		hud:setCourse("🏁 " .. COURSES[courseIdx].name)
+		local b = courseBest(COURSES[courseIdx].id)
+		toast(string.format("Race course: %s · %d rings%s", COURSES[courseIdx].name, #rings, if b then " · your best " .. fmtRace(b) else ""))
 	end,
 	onShop = function()
 		Shop.open(hud.gui, {
@@ -1257,14 +1294,17 @@ frame = function(dtRaw)
 			kick(0.6)
 			if race.next > #rings then
 				local t = ship.t - race.startT
+				local cid = COURSES[courseIdx].id
 				flags.raceDone = true
-				flags.raceTime = t
+				if cid == "spaceport" then flags.raceTime = t end
+				flags["race_" .. cid] = true
 				daily("races", 1)
-				local best = state.bestRace
+				local best = courseBest(cid)
 				local record = not best or t < best
-				if record then state.bestRace = t end
-				banner(if record then "NEW RECORD!" else "RACE COMPLETE", string.format("Time %s%s", fmtRace(t), if best then "  ·  best " .. fmtRace(math.min(best, t)) else ""), 4)
-				grant(if record then 40 else 15, if record then 150 else 50)
+				if record then setCourseBest(cid, t) end
+				banner(if record then "NEW RECORD!" else "RACE COMPLETE", string.format("%s  ·  %s%s", COURSES[courseIdx].name, fmtRace(t), if best then "  ·  best " .. fmtRace(math.min(best, t)) else ""), 4)
+				local bonus = if cid == "coast" then 2 else 1
+				grant((if record then 40 else 15) * bonus, (if record then 150 else 50) * bonus)
 				save()
 				race.next = 1; race.startT = nil
 				hud:setRace(nil)

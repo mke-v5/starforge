@@ -53,11 +53,13 @@ MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, id, b
 end)
 RS:SetAttribute("VipPass", GAMEPASS.VIP)
 
-local raceStore
-pcall(function() raceStore = DataStoreService:GetOrderedDataStore("RaceTimesV1") end)
-
--- global best race times (hundredths of a second, lower is better), cached for a minute
-local topCache, topAt = {}, -1e9
+-- global best race times per course (hundredths of a second, lower is better), cached for a minute
+local COURSE_STORE = { spaceport = "RaceTimesV1", coast = "RaceTimes_coast" }
+local raceStores = {}
+for id, name in pairs(COURSE_STORE) do
+	pcall(function() raceStores[id] = DataStoreService:GetOrderedDataStore(name) end)
+end
+local topCache, topAt = {}, {}
 local nameCache = {}
 local function nameOf(userId)
 	if nameCache[userId] then return nameCache[userId] end
@@ -65,27 +67,31 @@ local function nameOf(userId)
 	nameCache[userId] = if ok then n else "Pilot"
 	return nameCache[userId]
 end
-Top.OnServerInvoke = function()
-	if os.clock() - topAt < 60 then return topCache end
-	topAt = os.clock()
-	if not raceStore then return topCache end
-	local ok, pages = pcall(function() return raceStore:GetSortedAsync(true, 10) end)
-	if not ok then return topCache end
+Top.OnServerInvoke = function(_, course)
+	if type(course) ~= "string" or not COURSE_STORE[course] then course = "spaceport" end
+	if os.clock() - (topAt[course] or -1e9) < 60 then return topCache[course] or {} end
+	topAt[course] = os.clock()
+	local store = raceStores[course]
+	if not store then return topCache[course] or {} end
+	local ok, pages = pcall(function() return store:GetSortedAsync(true, 10) end)
+	if not ok then return topCache[course] or {} end
 	local list = {}
 	for _, e in ipairs(pages:GetCurrentPage()) do
 		local id = tonumber(string.sub(e.key, 2))
 		table.insert(list, { name = if id then nameOf(id) else "Pilot", t = e.value / 100 })
 	end
-	topCache = list
+	topCache[course] = list
 	return list
 end
-local function submitRace(player, t)
-	if not raceStore then return end
+local function submitRace(player, t, course)
+	course = course or "spaceport"
+	local store = raceStores[course]
+	if not store then return end
 	local v = math.floor(t * 100)
 	pcall(function()
-		raceStore:UpdateAsync("u" .. player.UserId, function(old) if old and old <= v then return nil end return v end)
+		store:UpdateAsync("u" .. player.UserId, function(old) if old and old <= v then return nil end return v end)
 	end)
-	topAt = -1e9
+	topAt[course] = -1e9
 end
 
 local cache = {}     -- userId -> state
@@ -120,6 +126,13 @@ local function clean(s)
 	out.owned = {}
 	if type(s.owned) == "table" then
 		for k, v in pairs(s.owned) do if type(k) == "string" and #k < 32 and v == true then out.owned[k] = true end end
+	end
+	out.bestRaces = {}
+	if type(s.bestRaces) == "table" then
+		for k, v in pairs(s.bestRaces) do
+			local n = tonumber(v)
+			if type(k) == "string" and COURSE_STORE[k] and n and n > 30 and n < 36000 then out.bestRaces[k] = n end
+		end
 	end
 	out.codes = {}
 	if type(s.codes) == "table" then
@@ -172,7 +185,11 @@ Save.OnServerEvent:Connect(function(player, s)
 	s = clean(s)
 	if not s then return end
 	local prev = cache[player.UserId]
-	if s.bestRace and (not prev or not prev.bestRace or s.bestRace < prev.bestRace - 0.005) then task.spawn(submitRace, player, s.bestRace) end
+	if s.bestRace and (not prev or not prev.bestRace or s.bestRace < prev.bestRace - 0.005) then task.spawn(submitRace, player, s.bestRace, "spaceport") end
+	for id, t in pairs(s.bestRaces) do
+		local old = prev and prev.bestRaces and prev.bestRaces[id]
+		if not old or t < old - 0.005 then task.spawn(submitRace, player, t, id) end
+	end
 	cache[player.UserId] = s
 	stats(player, s)
 	-- write at most every 30 s per player; the rest goes out when they leave

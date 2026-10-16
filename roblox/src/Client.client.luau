@@ -122,7 +122,7 @@ local function cellObjects(ci, cj)
 		end
 	else
 		local dense = hash2(math.floor(e0 / 1500), math.floor(n0 / 1500), 3)
-		local count = if dense > 0.55 then rng:NextInteger(4, 9) else rng:NextInteger(0, 2)
+		local count = if dense > 0.6 then rng:NextInteger(3, 6) else rng:NextInteger(0, 1)
 		for _ = 1, count do
 			local e, n = e0 + rng:NextNumber(0, CELL), n0 + rng:NextNumber(0, CELL)
 			if free(e, n) then
@@ -188,7 +188,7 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 		bulkCF[n] = CFrame.new((o.e - xe) * S * k, gy + o.y * S * k, -(o.n - xn) * S * k) * CFrame.Angles(0, o.rot, 0)
 	end
 	if show and agl < 2500 then
-		local R = 2600
+		local R = 1600
 		local ci0, cj0 = math.floor((xe - R) / CELL), math.floor((xn - R) / CELL)
 		local ci1, cj1 = math.floor((xe + R) / CELL), math.floor((xn + R) / CELL)
 		for ci = ci0, ci1 do
@@ -197,19 +197,19 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 				if dx * dx + dy * dy < R * R then
 					for idx, o in ipairs(cellObjects(ci, cj)) do
 						o.id = o.id or (ci * 1000 + cj) * 16 + idx
-						if n < 900 then put(o) end
+						if n < 380 then put(o) end
 					end
 				end
 			end
 		end
 	end
 	if show then
-		local R = 14000
+		local R = 11000
 		for ci = math.floor((xe - R) / CLOUD_CELL), math.floor((xe + R) / CLOUD_CELL) do
 			for cj = math.floor((xn - R) / CLOUD_CELL), math.floor((xn + R) / CLOUD_CELL) do
 				for idx, o in ipairs(cloudObjects(ci, cj)) do
 					o.id = o.id or -((ci * 1000 + cj) * 16 + idx) - 1
-					if n < 1100 then put(o) end
+					if n < 520 then put(o) end
 				end
 			end
 		end
@@ -232,7 +232,7 @@ local warpLevels = { 1, 2, 4, 10, 50, 100, 1000, 10000, 100000 }
 local warpIdx = 1
 
 local hud -- forward
-local dbgStick, dbgPos = nil, { 0, 0 }
+local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
 
 local function toast(msg)
 	table.insert(messages, { text = msg, t = os.clock() })
@@ -700,7 +700,7 @@ RunService.RenderStepped:Connect(function(dtRaw)
 		hangar.CFrame = base * CFrame.new(-1100 * S * k, 11 * S * k, -120 * S * k)
 	end
 
-	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000)
+	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000 and not dbgNoScenery)
 
 	-- ---------- rings ----------
 	local ringsVisible = showGround and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
@@ -847,6 +847,7 @@ dbg.OnInvoke = function(cmd, a, b, c)
 	if cmd == "ap" then hud._cb.onAuto(a)
 	elseif cmd == "ship" then for _, d in ipairs(Designs) do if d.key == a then startFlight(d) end end
 	elseif cmd == "level" then state.level = a
+	elseif cmd == "noscenery" then dbgNoScenery = a
 	elseif cmd == "input" then C.input[a] = b
 	elseif cmd == "stick" then dbgStick = if a then { a, b, c or 0 } else nil
 	end

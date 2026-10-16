@@ -137,6 +137,7 @@ function O.predict(r0, v0, t0, opts)
 		if dm < closeMoon.d then closeMoon = { d = dm, t = t, r = V3(dx, dy, dz), v = nil, vI = V3(s[4], s[5], s[6]) } end
 		if de < earthPe.d then
 			earthPe.d = de; earthPe.t = t; earthPeIdx = #earthPts / 3
+			earthPe.x, earthPe.y, earthPe.z = s[1], s[2], s[3]
 			earthPe.hx = s[2] * s[6] - s[3] * s[5]; earthPe.hy = s[3] * s[4] - s[1] * s[6]; earthPe.hz = s[1] * s[5] - s[2] * s[4]
 		end
 		if lastBody ~= nil and body ~= lastBody then

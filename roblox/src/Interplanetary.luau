@@ -166,9 +166,11 @@ function I.aimPlanet(st, frameBody, target, goal, dv0, maxT, onProgress, perf, b
 			p = if pr.closeMars.r then pr.closeMars.r:clone() else V3(1e13, 0, 0)
 			d = pr.closeMars.d
 		else
-			local s3, i = pr.earthPts, pr.earthPeIdx or 0
-			p = if #s3 > 0 then V3(s3[i * 3 + 1], s3[i * 3 + 2], s3[i * 3 + 3]) else V3(1e13, 0, 0)
-			d = pr.earthPe.d
+			-- (the closest point to the Earth, wherever it is — a miss far outside its sphere of influence
+			-- still gives the solver a direction to work with)
+			local pe = pr.earthPe
+			p = if pe.x then V3(pe.x, pe.y, pe.z) else V3(1e13, 0, 0)
+			d = pe.d
 		end
 		return { p = p, d = d, f = d - goal, pr = pr, energy = energy }
 	end
@@ -247,7 +249,7 @@ end
 function I.planEarthReturnFromMars(ship, onProgress, opts)
 	opts = opts or {}
 	if ship.env.body ~= MARS then return nil end
-	return planDeparture(ship, MARS, EARTH, "Trans-Earth injection", opts.alt or 250e3, opts, onProgress)
+	return planDeparture(ship, MARS, EARTH, "Trans-Earth injection", opts.alt or 250e3, { waitWeight = opts.waitWeight or 2, arrWeight = opts.arrWeight, finite = opts.finite }, onProgress)
 end
 
 -- Course correction toward a planet: the cheapest small burn (now, or days later) that puts the closest

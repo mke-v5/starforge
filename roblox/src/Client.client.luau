@@ -1034,6 +1034,13 @@ hud = require(SF.Hud).new(player, {
 			C:engage(Control.ascentAp()); toast("Autopilot: climbing to Mars orbit")
 		elseif kind == "marshome" then
 			local I = require(SF.Interplanetary)
+			local cacheT, cacheV = -1e18, 0
+			local function earthWake(s)
+				if math.abs(s.t - cacheT) < 3600 then return cacheV end
+				local p = Orbit.predict(s.r, s.v, s.t, { maxT = 500 * 86400, maxSteps = 20000, oneRev = false, noExtend = true, earthStop = -EARTH.R * 0.9 })
+				cacheT, cacheV = s.t, p.earthPe.t
+				return cacheV
+			end
 			C:engage(Control.sequenceAp("Trip home from Mars", {
 				function() return Control.planBurnAp("Earth injection", function(s) return I.planEarthReturnFromMars(s) end) end,
 				function()
@@ -1044,9 +1051,14 @@ hud = require(SF.Hud).new(player, {
 				end,
 				function() return Control.planBurnAp("Course correction", function(s) return I.planPlanetCorrection(s, EARTH, 300e3) end, true) end,
 				function()
-					return Control.waitAp("Coast to Earth", function(s) return s.env.body == EARTH end, function(s)
-						local p = Orbit.predict(s.r, s.v, s.t, { maxT = 500 * 86400, maxSteps = 20000, oneRev = false, noExtend = true })
-						return if p.earthBack then p.earthBack + 30 else s.t + 86400
+					return Control.waitAp("Cruise to Earth", function(s) return earthWake(s) - s.t < 10 * 86400 or s.env.body == EARTH end,
+						function(s) return earthWake(s) - 10 * 86400 end)
+				end,
+				function() return Control.planBurnAp("Final correction", function(s) return I.planPlanetCorrection(s, EARTH, 300e3) end, true) end,
+				function()
+					return Control.waitAp("Arriving at Earth", function(s) return s.env.body == EARTH end, function(s)
+						local p = Orbit.predict(s.r, s.v, s.t, { maxT = 15 * 86400, maxSteps = 6000, oneRev = false, noExtend = true })
+						return if p.earthBack then p.earthBack + 30 else s.t + 6 * 3600
 					end)
 				end,
 				function() return Control.planBurnAp("Earth orbit capture", function(s) return I.planOrbitCapture(s, EARTH) end) end,

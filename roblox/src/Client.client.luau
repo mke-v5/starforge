@@ -161,6 +161,9 @@ if EARTH_TEXTURE ~= "" then earthMesh.TextureId = EARTH_TEXTURE end
 local cloudBall = anchored("Part", { Name = "EarthClouds", Size = Vector3.new(1, 1, 1), Transparency = 1, CastShadow = false })
 local cloudMesh = Instance.new("SpecialMesh"); cloudMesh.MeshType = Enum.MeshType.Sphere; cloudMesh.Parent = cloudBall
 local CLOUD_TEXTURE = ""     -- an uploaded cloud map with transparency (none yet)
+-- a thin glowing shell for the atmosphere seen edge-on from space
+local airBall = anchored("Part", { Name = "EarthAir", Size = Vector3.new(1, 1, 1), Material = Enum.Material.ForceField, Color = Color3.fromRGB(120, 190, 255), Transparency = 1, CastShadow = false })
+local airMesh = Instance.new("SpecialMesh"); airMesh.MeshType = Enum.MeshType.Sphere; airMesh.Parent = airBall
 if CLOUD_TEXTURE ~= "" then cloudMesh.TextureId = CLOUD_TEXTURE end
 local moonBall = anchored("Part", { Name = "MoonBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.Slate, Color = Color3.fromRGB(170, 170, 165), CastShadow = false })
 local moonMesh = Instance.new("SpecialMesh"); moonMesh.MeshType = Enum.MeshType.Sphere; moonMesh.Parent = moonBall
@@ -1124,12 +1127,16 @@ frame = function(dtRaw)
 		earthBall.CFrame = CFrame.fromMatrix(skyC + toWorldScaled(c, kk), ex, ey)
 		cloudBall.CFrame = earthBall.CFrame * CFrame.Angles(0, ship.t * 2e-5, 0)
 		cloudMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk * 1.003)
+		airBall.CFrame = earthBall.CFrame
+		airMesh.Scale = Vector3.new(2, 2, 2) * ((EARTH.R + 60000) * kk)
 		earthMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk)
 		earthBall.Transparency = if body == EARTH then math.clamp(1 - (hEarth - 18000) / 7000, 0, 1) else 0
 		cloudBall.Transparency = if CLOUD_TEXTURE ~= "" then earthBall.Transparency else 1
+		airBall.Transparency = if body == EARTH and hEarth > 30000 then 0 else 1
 	else
 		earthBall.Transparency = 1
 		cloudBall.Transparency = 1
+		airBall.Transparency = 1
 	end
 	drawBall(moonBall, moonMesh, MOON, MOON.R, 310)
 	-- the Sun

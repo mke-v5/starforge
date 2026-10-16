@@ -366,6 +366,7 @@ local warpIdx = 1
 local hud -- forward
 local airTime = 0
 local skyC = Vector3.zero
+local refMoon = nil
 local deadFor = 0
 local lastGood = { r = V3(), v = V3(), q = THREE.Quaternion.new() }
 local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
@@ -1043,13 +1044,27 @@ frame = function(dtRaw)
 	local agl = E.h      -- height above the datum (the ground is flat at 0 apart from the pad)
 	local depth = agl * S
 	local k = if depth > GROUND_D then GROUND_D / depth else 1   -- keep the ground close: low graphics settings cull far parts
-	local showGround = body == EARTH and E.h < 26000
-	-- ship position in the reference tangent plane (east, north metres from the spaceport)
-	local rel = ship:toFixed(EARTH, ship.r, ship.t, _t1):sub(refFixed)
-	local up0 = refFixed:clone():normalize()
-	local east0 = V3(-math.sin(SITE.lon * D2R), 0, -math.cos(SITE.lon * D2R))
-	local north0 = V3():crossVectors(up0, east0)
-	local xe, xn = rel:dot(east0), rel:dot(north0)
+	local onMoon = body == MOON
+	local showGround = (body == EARTH or onMoon) and E.h < 26000
+	local onEarthLow = showGround and not onMoon
+	-- ship position in the reference tangent plane (east, north metres from the spaceport, or on the Moon
+	-- from a reference point picked when we come down low)
+	local xe, xn
+	if onMoon then
+		local pF = ship:toFixed(MOON, ship.r, ship.t, _t1)
+		if not refMoon or pF:distanceTo(refMoon) > 60000 then refMoon = pF:clone() end
+		local up0 = refMoon:clone():normalize()
+		local east0 = V3(0, 1, 0):cross(up0):normalize()
+		local north0 = V3():crossVectors(up0, east0)
+		local rel = pF:clone():sub(refMoon)
+		xe, xn = rel:dot(east0), rel:dot(north0)
+	else
+		local rel = ship:toFixed(EARTH, ship.r, ship.t, _t1):sub(refFixed)
+		local up0 = refFixed:clone():normalize()
+		local east0 = V3(-math.sin(SITE.lon * D2R), 0, -math.cos(SITE.lon * D2R))
+		local north0 = V3():crossVectors(up0, east0)
+		xe, xn = rel:dot(east0), rel:dot(north0)
+	end
 	dbgPos[1], dbgPos[2] = xe, xn
 	local gy = -(depth * k)
 	local T = TILE
@@ -1065,18 +1080,25 @@ frame = function(dtRaw)
 				local wx, wz = (i - (NT + 1) / 2) * T - ox, (j - (NT + 1) / 2) * T - oz
 				p.Size = Vector3.new(T, 4, T)
 				p.CFrame = CFrame.new(wx, gy - 2, -wz)
-				local col, mat = groundStyle(xe + wx / (S * k), xn + wz / (S * k))
+				local col, mat
+				if onMoon then
+					local i2, j2 = math.floor((xe + wx / (S * k)) / 900), math.floor((xn + wz / (S * k)) / 900)
+					local g = 150 + math.floor(hash2(i2, j2, 5) * 30)
+					col, mat = Color3.fromRGB(g, g, g - 4), Enum.Material.Slate
+				else
+					col, mat = groundStyle(xe + wx / (S * k), xn + wz / (S * k))
+				end
 				if p.Color ~= col then p.Color = col end
 				if p.Material ~= mat then p.Material = mat end
 			end
 		end
 	end
 	-- the spaceport (runway along the site heading, centred at the site)
-	local near = showGround and math.abs(xe) < 40000 and math.abs(xn) < 40000
+	local near = onEarthLow and math.abs(xe) < 40000 and math.abs(xn) < 40000
 	drawProps(xe, xn, k, gy, near)
 
 	local _c1 = os.clock()
-	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000 and not dbgNoScenery)
+	drawScenery(xe, xn, agl, k, gy, onEarthLow and not dbgNoScenery)
 	dbgTimes.scen = dbgTimes.scen * 0.9 + (os.clock() - _c1) * 100
 
 	-- air rushing by
@@ -1092,7 +1114,7 @@ frame = function(dtRaw)
 	end
 
 	-- ---------- rings ----------
-	local ringsVisible = showGround and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
+	local ringsVisible = onEarthLow and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
 	for i, ring in ipairs(rings) do placeRing(ring, i, xe, xn, agl, k, ringsVisible) end
 	local ringNow = rings[race.next]
 	markerGui.Enabled = ringsVisible and ringNow ~= nil
@@ -1141,7 +1163,7 @@ frame = function(dtRaw)
 	do
 		local got = crystalsToday()
 		table.clear(crystalParts); table.clear(crystalCF)
-		local visible = showGround and E.h < 12000
+		local visible = onEarthLow and E.h < 12000
 		for _, c in ipairs(CRYSTALS) do
 			local p = c.part
 			local key = tostring(c.id)
@@ -1220,7 +1242,7 @@ frame = function(dtRaw)
 		local c = ship:bodyCenter(bodyB, ship.t, _t2)
 		local d = c:clone():sub(ship.r)
 		local dist = d:length()
-		local kk = maxD / dist
+		local kk = maxD / math.max(dist - R, 1)    -- the surface sits maxD away, so close up it becomes the ground
 		local pos = toWorldScaled(d, kk)
 		part.CFrame = CFrame.new(skyC + pos)
 		mesh.Scale = Vector3.new(2, 2, 2) * (R * kk)
@@ -1251,7 +1273,8 @@ frame = function(dtRaw)
 		cloudBall.Transparency = 1
 		airBall.Transparency = 1
 	end
-	drawBall(moonBall, moonMesh, MOON, MOON.R, 310)
+	drawBall(moonBall, moonMesh, MOON, MOON.R, 290)
+	moonBall.Transparency = if onMoon and E.h < 26000 then 1 else 0
 	-- the Sun
 	local sunW = toWorld(eph.sunP:clone():sub(ship.r):normalize())
 	sunBall.CFrame = CFrame.new(skyC + sunW * 300)

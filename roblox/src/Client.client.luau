@@ -1185,6 +1185,8 @@ frame = function(dtRaw)
 		if left > 30 then want = math.max(want, best) end
 		while want > 1 and want * dt * 3 > left do want = want / 10 end
 	end
+	-- long autopilot burns in vacuum run at 4x (still fully simulated)
+	if want == 1 and C.ap and not C.ap.wakeAt and ship.thrustNow > 0 and ship.env.rho < 1e-6 then want = 4 end
 	if not canWarp(want) then want = 1; if warpIdx > 3 then warpIdx = 1 end end
 	ship.warp = math.max(1, want)
 	-- simulate

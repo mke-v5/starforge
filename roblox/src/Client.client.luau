@@ -430,6 +430,8 @@ local function dailyText()
 	end
 	return '<font color="#ffb347">TODAY</font>  ' .. table.concat(parts, "  ·  ")
 end
+local GIFTS = { { 3, 50 }, { 10, 100 }, { 20, 200 }, { 35, 350 }, { 60, 600 } }   -- { minutes, credits }
+local giftIdx, playT = 1, 0
 local function creditMult() return if player:GetAttribute("VIP") then 2 else 1 end
 local function addCredits(n) state.credits += n * creditMult() end
 local function grant(xp, credits)
@@ -1428,6 +1430,22 @@ frame = function(dtRaw)
 	end
 	local _c3 = os.clock()
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
+	-- gifts for time played this session (bigger the longer you stay)
+	if giftIdx <= #GIFTS then
+		playT += dt
+		local g = GIFTS[giftIdx]
+		if playT >= g[1] * 60 then
+			giftIdx += 1
+			addCredits(g[2])
+			sfx("chime", 0.9, 1.1)
+			banner("🎁 PLAYTIME GIFT", string.format("+%d credits for flying %d minutes%s", g[2], g[1], if GIFTS[giftIdx] then string.format("  ·  next gift at %d min", GIFTS[giftIdx][1]) else ""), 3.5)
+			save()
+		end
+		local left = math.max(0, g[1] * 60 - playT)
+		hud:setGift(string.format("🎁 Gift in %d:%02d", math.floor(left / 60), math.floor(left % 60)))
+	else
+		hud:setGift(nil)
+	end
 	dbgTimes.hud = dbgTimes.hud * 0.9 + (os.clock() - _c3) * 100
 	dbgTimes.frame = dbgTimes.frame * 0.9 + (os.clock() - _frame0) * 100
 end

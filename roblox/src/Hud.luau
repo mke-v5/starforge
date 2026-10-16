@@ -132,6 +132,10 @@ function Hud.new(player, cb)
 	self.xpFill = make("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = AMBER }, xpBar)
 	corner(self.xpFill, 3)
 	self.title.LayoutOrder = -1
+	-- playtime gift countdown, under the right-hand buttons
+	self.gift = make("TextLabel", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 392), Size = UDim2.new(0, 170, 0, 26), BackgroundColor3 = Color3.fromRGB(60, 40, 90), BackgroundTransparency = 0.2,
+		Text = "", TextColor3 = INK, Font = FONT_B, TextSize = 14, Visible = false }, gui)
+	corner(self.gift, 8)
 	-- race timer
 	self.race = make("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 120), Size = UDim2.new(0, 260, 0, 34), BackgroundColor3 = PANEL, BackgroundTransparency = 0.25, Text = "", TextColor3 = Color3.fromRGB(120, 255, 170), Font = FONT_B, TextSize = 20, Visible = false }, gui)
 	corner(self.race, 8)
@@ -207,6 +211,11 @@ function Hud:setProgress(state, xpNeed, crystals, crystalTotal)
 	self.levelText.Text = string.format('Level %d  ·  <font color="#ffb347">%d credits</font>%s', state.level, state.credits,
 		if crystals then string.format('  ·  <font color="#ffd23c">◆ %d/%d</font>', crystals, crystalTotal) else "")
 	self.xpFill.Size = UDim2.new(math.clamp(state.xp / xpNeed, 0, 1), 0, 1, 0)
+end
+
+function Hud:setGift(text)
+	self.gift.Visible = text ~= nil
+	if text then self.gift.Text = text end
 end
 
 -- leaderboard panel: list of { name, t }

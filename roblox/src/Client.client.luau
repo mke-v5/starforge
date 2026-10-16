@@ -1677,6 +1677,18 @@ dbg.OnInvoke = function(cmd, a, b, c)
 	elseif cmd == "credits" and game:GetService("RunService"):IsStudio() then state.credits = a
 	elseif cmd == "input" then C.input[a] = b
 	elseif cmd == "stick" then dbgStick = if a then { a, b, c or 0 } else nil
+	elseif cmd == "place" and game:GetService("RunService"):IsStudio() then
+		-- testing: put the ship in a circular orbit `b` metres up around body `a` ("earth" / "moon" / "mars")
+		local bodyP = if a == "mars" then MARS elseif a == "moon" then MOON else EARTH
+		local rr = bodyP.R + (b or 300000)
+		local cen, cv = ship:bodyCenter(bodyP, ship.t, V3()), ship:bodyVel(bodyP, ship.t, V3())
+		local ax = eph:axis(bodyP)
+		local radial = V3(1, 0, 0):cross(ax):normalize()
+		ship.r:copy(cen):addScaledVector(radial, rr)
+		ship.v:copy(cv):addScaledVector(V3():crossVectors(ax, radial):normalize(), math.sqrt(bodyP.mu / rr))
+		ship.parked = nil; ship.ctl.gear = false; ship.contacts = 0
+		C:cancelAp()
+		ship:updateEnv(ship.t)
 	end
 	local E = ship.env
 	return { h = E.h, agl = E.agl, v = E.vSurf, mach = E.mach, body = E.body.name, dead = ship.dead, contacts = ship.contacts,

@@ -26,6 +26,7 @@ local TweenService = game:GetService("TweenService")
 local V3 = THREE.Vector3.new
 local EARTH, MOON, D2R = Geo.EARTH, Geo.MOON, Geo.D2R
 local S = ShipModel.SCALE
+local K = {}   -- constants (kept in one table: Luau allows only 200 locals per function)
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -161,16 +162,16 @@ end
 -- the Earth seen from high up, the Moon, the Sun, and a black dome for space
 local earthBall = anchored("Part", { Name = "EarthBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.SmoothPlastic, Color = Color3.fromRGB(40, 90, 170), CastShadow = false })
 local earthMesh = Instance.new("SpecialMesh"); earthMesh.MeshType = Enum.MeshType.Sphere; earthMesh.Parent = earthBall
--- set EARTH_TEXTURE to an uploaded Earth map to texture the globe; an optional cloud layer turns just above it
-local EARTH_TEXTURE = ""
-if EARTH_TEXTURE ~= "" then earthMesh.TextureId = EARTH_TEXTURE end
+-- set K.EARTH_TEXTURE to an uploaded Earth map to texture the globe; an optional cloud layer turns just above it
+K.EARTH_TEXTURE = ""
+if K.EARTH_TEXTURE ~= "" then earthMesh.TextureId = K.EARTH_TEXTURE end
 local cloudBall = anchored("Part", { Name = "EarthClouds", Size = Vector3.new(1, 1, 1), Transparency = 1, CastShadow = false })
 local cloudMesh = Instance.new("SpecialMesh"); cloudMesh.MeshType = Enum.MeshType.Sphere; cloudMesh.Parent = cloudBall
-local CLOUD_TEXTURE = ""     -- an uploaded cloud map with transparency (none yet)
+K.CLOUD_TEXTURE = ""     -- an uploaded cloud map with transparency (none yet)
 -- a thin glowing shell for the atmosphere seen edge-on from space
 local airBall = anchored("Part", { Name = "EarthAir", Size = Vector3.new(1, 1, 1), Material = Enum.Material.ForceField, Color = Color3.fromRGB(120, 190, 255), Transparency = 1, CastShadow = false })
 local airMesh = Instance.new("SpecialMesh"); airMesh.MeshType = Enum.MeshType.Sphere; airMesh.Parent = airBall
-if CLOUD_TEXTURE ~= "" then cloudMesh.TextureId = CLOUD_TEXTURE end
+if K.CLOUD_TEXTURE ~= "" then cloudMesh.TextureId = K.CLOUD_TEXTURE end
 local moonBall = anchored("Part", { Name = "MoonBall", Shape = Enum.PartType.Ball, Size = Vector3.new(1, 1, 1), Material = Enum.Material.Slate, Color = Color3.fromRGB(170, 170, 165), CastShadow = false })
 local moonMesh = Instance.new("SpecialMesh"); moonMesh.MeshType = Enum.MeshType.Sphere; moonMesh.Parent = moonBall
 local sunBall = anchored("Part", { Name = "SunBall", Shape = Enum.PartType.Ball, Size = Vector3.new(80, 80, 80), Material = Enum.Material.Neon, Color = Color3.fromRGB(255, 244, 214), CastShadow = false })
@@ -201,19 +202,19 @@ local function hash2(i, j, salt)
 	local h = bit32.bxor(bit32.bxor((i * 73856093) % 4294967296, (j * 19349663) % 4294967296), (salt * 83492791) % 4294967296)
 	return (h % 1000003) / 1000003
 end
-local FIELD = { Color3.fromRGB(86, 120, 64), Color3.fromRGB(98, 132, 70), Color3.fromRGB(110, 128, 66), Color3.fromRGB(76, 110, 60), Color3.fromRGB(124, 136, 78) }
-local SEA, SAND = Color3.fromRGB(28, 82, 128), Color3.fromRGB(214, 200, 150)
+K.FIELD = { Color3.fromRGB(86, 120, 64), Color3.fromRGB(98, 132, 70), Color3.fromRGB(110, 128, 66), Color3.fromRGB(76, 110, 60), Color3.fromRGB(124, 136, 78) }
+K.SEA, K.SAND = Color3.fromRGB(28, 82, 128), Color3.fromRGB(214, 200, 150)
 local function groundStyle(e, n)
 	local c = coastE(n)
-	if e > c + 60 then return SEA, Enum.Material.SmoothPlastic end
-	if e > c - 160 then return SAND, Enum.Material.Sand end
+	if e > c + 60 then return K.SEA, Enum.Material.SmoothPlastic end
+	if e > c - 160 then return K.SAND, Enum.Material.Sand end
 	local i, j = math.floor(e / 700), math.floor(n / 700)
-	return FIELD[1 + math.floor(hash2(i, j, 7) * #FIELD)], Enum.Material.Grass
+	return K.FIELD[1 + math.floor(hash2(i, j, 7) * #K.FIELD)], Enum.Material.Grass
 end
 
 local CELL = 250
 local cellCache = {}
-local BUILD_COLORS = { Color3.fromRGB(200, 200, 196), Color3.fromRGB(170, 172, 176), Color3.fromRGB(214, 196, 168), Color3.fromRGB(120, 126, 136), Color3.fromRGB(230, 230, 226) }
+K.BUILD_COLORS = { Color3.fromRGB(200, 200, 196), Color3.fromRGB(170, 172, 176), Color3.fromRGB(214, 196, 168), Color3.fromRGB(120, 126, 136), Color3.fromRGB(230, 230, 226) }
 local function cellObjects(ci, cj)
 	local key = ci .. "," .. cj
 	local c = cellCache[key]
@@ -237,7 +238,7 @@ local function cellObjects(ci, cj)
 				local w, d = rng:NextNumber(18, 45), rng:NextNumber(18, 45)
 				local h = if tall then rng:NextNumber(60, 160) else rng:NextNumber(8, 30)
 				table.insert(c, { e = e, n = n, y = h / 2, size = Vector3.new(w, h, d), shape = Enum.PartType.Block,
-					color = if tall then Color3.fromRGB(110, 150, 190) else BUILD_COLORS[rng:NextInteger(1, #BUILD_COLORS)],
+					color = if tall then Color3.fromRGB(110, 150, 190) else K.BUILD_COLORS[rng:NextInteger(1, #K.BUILD_COLORS)],
 					mat = if tall then Enum.Material.Glass else Enum.Material.Concrete, rot = rng:NextNumber(0, 0.3) })
 			end
 		end
@@ -256,7 +257,7 @@ local function cellObjects(ci, cj)
 	cellCache[key] = c
 	return c
 end
-local CLOUD_CELL = 2200
+K.CLOUD_CELL = 2200
 local cloudCache = {}
 local function cloudObjects(ci, cj)
 	local key = ci .. "," .. cj
@@ -265,7 +266,7 @@ local function cloudObjects(ci, cj)
 	c = {}
 	local rng = Random.new(ci * 30011 + cj * 6151 + 99)
 	if rng:NextNumber() < 0.55 then
-		local e, n, h = (ci + rng:NextNumber()) * CLOUD_CELL, (cj + rng:NextNumber()) * CLOUD_CELL, rng:NextNumber(1100, 2600)
+		local e, n, h = (ci + rng:NextNumber()) * K.CLOUD_CELL, (cj + rng:NextNumber()) * K.CLOUD_CELL, rng:NextNumber(1100, 2600)
 		local base = rng:NextNumber(120, 260)
 		for b = 1, rng:NextInteger(3, 5) do
 			local r = base * rng:NextNumber(0.6, 1.1)
@@ -335,8 +336,8 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 	end
 	if show then
 		local R = 8000
-		for ci = math.floor((xe - R) / CLOUD_CELL), math.floor((xe + R) / CLOUD_CELL) do
-			for cj = math.floor((xn - R) / CLOUD_CELL), math.floor((xn + R) / CLOUD_CELL) do
+		for ci = math.floor((xe - R) / K.CLOUD_CELL), math.floor((xe + R) / K.CLOUD_CELL) do
+			for cj = math.floor((xn - R) / K.CLOUD_CELL), math.floor((xn + R) / K.CLOUD_CELL) do
 				for idx, o in ipairs(cloudObjects(ci, cj)) do
 					o.id = o.id or -((ci * 1000 + cj) * 16 + idx) - 1
 					if n < 520 then put(o) end
@@ -366,7 +367,7 @@ local refFixed = nil      -- body-fixed reference point for the ground frame
 local refBody = EARTH
 local camYaw, camPitch, camDist = 0, 0.18, 60
 local camMode = 1        -- 1 chase (level with the horizon), 2 cockpit, 3 locked chase
-local CAM_NAMES = { "Chase camera", "Cockpit camera", "Locked chase camera" }
+K.CAM_NAMES = { "Chase camera", "Cockpit camera", "Locked chase camera" }
 local function rv3(v) return Vector3.new(v.x, v.y, v.z) end
 
 local messages = {}
@@ -434,7 +435,7 @@ local function dailyText()
 	end
 	return '<font color="#ffb347">TODAY</font>  ' .. table.concat(parts, "  ·  ")
 end
-local GIFTS = { { 3, 50 }, { 10, 100 }, { 20, 200 }, { 35, 350 }, { 60, 600 } }   -- { minutes, credits }
+K.GIFTS = { { 3, 50 }, { 10, 100 }, { 20, 200 }, { 35, 350 }, { 60, 600 } }   -- { minutes, credits }
 local giftIdx, playT = 1, 0
 local function creditMult() return if player:GetAttribute("VIP") then 2 else 1 end
 local function addCredits(n) state.credits += n * creditMult() end
@@ -460,9 +461,9 @@ end
 local engineJet = sound("82496091617037", { Looped = true, Volume = 0 })
 local engineRocket = sound("77862630063982", { Looped = true, Volume = 0 })
 engineJet:Play(); engineRocket:Play()
-local SOUND_IDS = { boom = "9120769331", chime = "85188102085028", crash = "138533090376585", ring = "138890894929151" }
+K.SOUND_IDS = { boom = "9120769331", chime = "85188102085028", crash = "138533090376585", ring = "138890894929151" }
 local function sfx(name, vol, pitch)
-	local id = SOUND_IDS[name]
+	local id = K.SOUND_IDS[name]
 	if id == "" then return end
 	local s = sound(id, { Volume = vol or 0.8, PlaybackSpeed = pitch or 1 })
 	s:Play()
@@ -557,10 +558,10 @@ local function placeRing(ring, idx, xe, xn, agl, k, visible)
 end
 
 ----------------------------------------------------------------- engine trail (bought in the shop)
-local TRAIL_N = 90
+K.TRAIL_N = 90
 local trailPts = {}      -- { e, n, h, t }
 local trailParts = {}
-for i = 1, TRAIL_N do trailParts[i] = anchored("Part", { Name = "Trail", Size = Vector3.one, Material = Enum.Material.Neon, CastShadow = false, Transparency = 1 }) end
+for i = 1, K.TRAIL_N do trailParts[i] = anchored("Part", { Name = "Trail", Size = Vector3.one, Material = Enum.Material.Neon, CastShadow = false, Transparency = 1 }) end
 local lastTrail = 0
 local trailParts2, trailCF = {}, {}
 local function drawTrail(xe, xn, agl, k, tailE, tailN, tailU, simT, active)
@@ -572,12 +573,12 @@ local function drawTrail(xe, xn, agl, k, tailE, tailN, tailU, simT, active)
 	if active and simT - lastTrail > 0.07 then
 		lastTrail = simT
 		table.insert(trailPts, { tailE, tailN, tailU, simT })
-		if #trailPts > TRAIL_N then table.remove(trailPts, 1) end
+		if #trailPts > K.TRAIL_N then table.remove(trailPts, 1) end
 	end
 	table.clear(trailParts2); table.clear(trailCF)
 	local life = 6
 	local w = def.width * S * k
-	for i = 1, TRAIL_N do
+	for i = 1, K.TRAIL_N do
 		local p = trailParts[i]
 		local a, b = trailPts[i], trailPts[i + 1]
 		if not a then p.Transparency = 1; continue end
@@ -603,9 +604,9 @@ local function drawTrail(xe, xn, agl, k, tailE, tailN, tailU, simT, active)
 end
 
 -- speed streaks: thin wisps in the air rushing past the ship (only in the atmosphere, at speed)
-local STREAKS = 36
+K.STREAKS = 36
 local streaks = {}
-for i = 1, STREAKS do
+for i = 1, K.STREAKS do
 	streaks[i] = { part = anchored("Part", { Name = "Streak", Size = Vector3.new(0.15, 0.15, 4), Material = Enum.Material.Neon, Color = Color3.fromRGB(235, 245, 255), Transparency = 1, CastShadow = false }), pos = nil }
 end
 local streakParts, streakCF = {}, {}
@@ -651,7 +652,7 @@ for _, c in ipairs(CRYSTALS) do
 	c.part = anchored("Part", { Name = "Crystal", Size = Vector3.one, Material = Enum.Material.Neon, Color = Color3.fromRGB(255, 205, 60), CastShadow = false, Transparency = 1 })
 end
 local crystalParts, crystalCF = {}, {}
-local CRYSTAL_SIZE, CRYSTAL_GRAB = 14, 45      -- metres
+K.CRYSTAL_SIZE, K.CRYSTAL_GRAB = 14, 45      -- metres
 local function crystalsToday()
 	local day = math.floor(os.time() / 86400)
 	if state.crystalDay ~= day then state.crystalDay = day; state.crystals = {} end
@@ -772,7 +773,7 @@ end
 ----------------------------------------------------------------- input
 local function nextCam()
 	camMode = camMode % 3 + 1
-	toast(CAM_NAMES[camMode])
+	toast(K.CAM_NAMES[camMode])
 end
 local keys = {}
 UIS.InputBegan:Connect(function(io, gp)
@@ -787,8 +788,31 @@ UIS.InputBegan:Connect(function(io, gp)
 	elseif k == Enum.KeyCode.Period then warpIdx = math.min(#warpLevels, warpIdx + 1)
 	elseif k == Enum.KeyCode.Comma then warpIdx = math.max(1, warpIdx - 1)
 	elseif k == Enum.KeyCode.R then startFlight(design)
-	elseif k == Enum.KeyCode.V then nextCam()
+	elseif k == Enum.KeyCode.V or k == Enum.KeyCode.ButtonY then nextCam()
+	-- gamepad
+	elseif k == Enum.KeyCode.ButtonA then ship.ctl.gear = not ship.ctl.gear; toast(if ship.ctl.gear then "Gear down" else "Gear up")
+	elseif k == Enum.KeyCode.ButtonB then C.input.brake = not C.input.brake; toast(if C.input.brake then "Brakes on" else "Brakes off")
+	elseif k == Enum.KeyCode.ButtonX then hud._cb.onAuto(hud.autoKind)
+	elseif k == Enum.KeyCode.DPadUp then warpIdx = math.min(#warpLevels, warpIdx + 1)
+	elseif k == Enum.KeyCode.DPadDown then warpIdx = math.max(1, warpIdx - 1)
+	elseif k == Enum.KeyCode.DPadLeft then hud._cb.onNextShip()
 	end
+end)
+-- gamepad sticks and triggers: left stick flies, right stick looks around, R2/L2 throttle up/down
+local pad = { lx = 0, ly = 0, rx = 0, ry = 0, r2 = 0, l2 = 0 }
+local function dz(v) return if math.abs(v) < 0.12 then 0 else (v - 0.12 * math.sign(v)) / 0.88 end
+UIS.InputChanged:Connect(function(io)
+	if io.UserInputType ~= Enum.UserInputType.Gamepad1 then return end
+	if io.KeyCode == Enum.KeyCode.Thumbstick1 then pad.lx, pad.ly = dz(io.Position.X), dz(io.Position.Y)
+	elseif io.KeyCode == Enum.KeyCode.Thumbstick2 then pad.rx, pad.ry = dz(io.Position.X), dz(io.Position.Y)
+	elseif io.KeyCode == Enum.KeyCode.ButtonR2 then pad.r2 = io.Position.Z
+	elseif io.KeyCode == Enum.KeyCode.ButtonL2 then pad.l2 = io.Position.Z end
+end)
+UIS.InputEnded:Connect(function(io)
+	if io.KeyCode == Enum.KeyCode.Thumbstick1 then pad.lx, pad.ly = 0, 0
+	elseif io.KeyCode == Enum.KeyCode.Thumbstick2 then pad.rx, pad.ry = 0, 0
+	elseif io.KeyCode == Enum.KeyCode.ButtonR2 then pad.r2 = 0
+	elseif io.KeyCode == Enum.KeyCode.ButtonL2 then pad.l2 = 0 end
 end)
 UIS.InputEnded:Connect(function(io) keys[io.KeyCode] = nil end)
 local dragging = false
@@ -1089,9 +1113,14 @@ frame = function(dtRaw)
 	local dt = math.min(dtRaw, 0.1)   -- keep real time even on slow devices (physics substeps internally)
 	simTime += dt
 	-- inputs
-	C.input.pitch = axisKey(Enum.KeyCode.S, Enum.KeyCode.W) + hud.stickY
-	C.input.roll = axisKey(Enum.KeyCode.D, Enum.KeyCode.A) + hud.stickX
-	C.input.yaw = axisKey(Enum.KeyCode.E, Enum.KeyCode.Q)
+	C.input.pitch = axisKey(Enum.KeyCode.S, Enum.KeyCode.W) + hud.stickY - pad.ly
+	C.input.roll = axisKey(Enum.KeyCode.D, Enum.KeyCode.A) + hud.stickX + pad.lx
+	C.input.yaw = axisKey(Enum.KeyCode.E, Enum.KeyCode.Q) + (if keys[Enum.KeyCode.ButtonR1] then 1 else 0) - (if keys[Enum.KeyCode.ButtonL1] then 1 else 0)
+	if pad.rx ~= 0 or pad.ry ~= 0 then
+		camYaw -= pad.rx * dt * 2.2
+		camPitch = math.clamp(camPitch - pad.ry * dt * 1.6, -1.2, 1.4)
+	end
+	if pad.r2 > 0.05 or pad.l2 > 0.05 then C.input.throttle = math.clamp(C.input.throttle + (pad.r2 - pad.l2) * dt * 0.8, 0, 1) end
 	if dbgStick then C.input.pitch += dbgStick[1]; C.input.roll += dbgStick[2]; C.input.yaw += dbgStick[3] end
 	local thr = axisKey(Enum.KeyCode.LeftShift, Enum.KeyCode.LeftControl)
 	if thr ~= 0 then C.input.throttle = math.clamp(C.input.throttle + thr * dt * 0.6, 0, 1) end
@@ -1362,7 +1391,7 @@ frame = function(dtRaw)
 			if not visible or got[key] then p.Transparency = 1; continue end
 			local dE, dN, dU = c.e - xe, c.n - xn, c.h - E.h
 			local d = math.sqrt(dE * dE + dN * dN + dU * dU)
-			if d < CRYSTAL_GRAB and not ship.dead then
+			if d < K.CRYSTAL_GRAB and not ship.dead then
 				got[key] = true
 				addCredits(25)
 				sfx("ring", 0.8, 1.6)
@@ -1376,7 +1405,7 @@ frame = function(dtRaw)
 			local pos = Vector3.new(dE * S * k, (c.h - agl) * S * k, -dN * S * k)
 			local f = 1
 			if pos.Magnitude > DMAX then f = DMAX / pos.Magnitude; pos *= f end
-			local sz = math.max(0.6, CRYSTAL_SIZE * S * k * f)
+			local sz = math.max(0.6, K.CRYSTAL_SIZE * S * k * f)
 			p.Size = Vector3.new(sz, sz * 1.6, sz)
 			p.Transparency = 0
 			table.insert(crystalParts, p)
@@ -1494,7 +1523,7 @@ frame = function(dtRaw)
 		airMesh.Scale = Vector3.new(2, 2, 2) * ((EARTH.R + 60000) * kk)
 		earthMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk)
 		earthBall.Transparency = if body == EARTH then math.clamp(1 - (hEarth - 18000) / 7000, 0, 1) else 0
-		cloudBall.Transparency = if CLOUD_TEXTURE ~= "" then earthBall.Transparency else 1
+		cloudBall.Transparency = if K.CLOUD_TEXTURE ~= "" then earthBall.Transparency else 1
 		airBall.Transparency = if hEarth > 75000 then 0 else 1
 	else
 		earthBall.Transparency = 1
@@ -1544,14 +1573,14 @@ frame = function(dtRaw)
 	local _c3 = os.clock()
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
 	-- gifts for time played this session (bigger the longer you stay)
-	if giftIdx <= #GIFTS then
+	if giftIdx <= #K.GIFTS then
 		playT += dt
-		local g = GIFTS[giftIdx]
+		local g = K.GIFTS[giftIdx]
 		if playT >= g[1] * 60 then
 			giftIdx += 1
 			addCredits(g[2])
 			sfx("chime", 0.9, 1.1)
-			banner("🎁 PLAYTIME GIFT", string.format("+%d credits for flying %d minutes%s", g[2], g[1], if GIFTS[giftIdx] then string.format("  ·  next gift at %d min", GIFTS[giftIdx][1]) else ""), 3.5)
+			banner("🎁 PLAYTIME GIFT", string.format("+%d credits for flying %d minutes%s", g[2], g[1], if K.GIFTS[giftIdx] then string.format("  ·  next gift at %d min", K.GIFTS[giftIdx][1]) else ""), 3.5)
 			save()
 		end
 		local left = math.max(0, g[1] * 60 - playT)

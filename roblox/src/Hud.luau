@@ -241,7 +241,10 @@ end
 function Hud:update(ship, C, craft, warpWant, warpNow, messages)
 	local E = ship.env
 	local L = self.lines
-	L[1].Text = string.format("<b>%s</b>  ·  %s", Geo.fmtSpeed(E.vSurf), if E.mach > 0.3 and E.rho > 1e-5 then string.format("Mach %.2f", E.mach) else E.body.name)
+	-- low down: speed over the ground; in space: orbital speed around the body
+	local spd = E.vSurf
+	if E.h > 60000 or E.body ~= Geo.EARTH then spd = require(script.Parent.Orbit).relState(ship, E.body).v:length() end
+	L[1].Text = string.format("<b>%s</b>  ·  %s", Geo.fmtSpeed(spd), if E.mach > 0.3 and E.rho > 1e-5 then string.format("Mach %.2f", E.mach) else E.body.name)
 	L[2].Text = string.format("Altitude <b>%s</b>  ·  above ground %s", dist(E.h), dist(E.agl))
 	L[3].Text = string.format("Climb %+d m/s  ·  g %.1f", math.round(E.vVert), ship.gForce)
 	local rs = require(script.Parent.Orbit).relState(ship, E.body)

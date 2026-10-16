@@ -719,7 +719,7 @@ function C.landAp(target)
 		local brakeEng = if hasMain and (vac or not hasLift) then "main" elseif hasLift then "lift" else "all"
 		local finalEng = if hasLift then "lift" elseif hasMain then "main" else "all"
 		local swap = brakeEng ~= finalEng
-		local hTarget = if body == MARS then 5000 + 0.03 * agl else (if swap then SWAP_H else 120) + 0.03 * agl
+		local hTarget = if body == MARS then 5000 + 0.03 * agl elseif body == MOON and not swap then 450 + 0.05 * agl else (if swap then SWAP_H else 120) + 0.03 * agl
 		if not phase then
 			for _, P in ipairs(craft.engines) do
 				if P.alive == false then continue end

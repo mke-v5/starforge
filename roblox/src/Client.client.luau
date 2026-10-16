@@ -1693,7 +1693,7 @@ dbg.OnInvoke = function(cmd, a, b, c)
 	local E = ship.env
 	return { h = E.h, agl = E.agl, v = E.vSurf, mach = E.mach, body = E.body.name, dead = ship.dead, contacts = ship.contacts,
 		flags = flags, level = state.level, xp = state.xp, credits = state.credits, mission = (Progress.current(state) or {}).id,
-		raceNext = race.next, ms = dbgTimes, r = { ship.r.x, ship.r.y, ship.r.z }, t = ship.t, deadFor = deadFor, parts = #craft.parts, parked = ship.parked ~= nil, xe = dbgPos[1], xn = dbgPos[2], pitchDeg = math.deg(math.asin(math.clamp(V3(0,0,1):applyQuaternion(ship.q):dot(ship.r:clone():normalize()), -1, 1))), ap = C.ap and C.ap.name, apStatus = C.apStatus, ship = design.key }
+		raceNext = race.next, ms = dbgTimes, r = { ship.r.x, ship.r.y, ship.r.z }, t = ship.t, deadFor = deadFor, parts = #craft.parts, parked = ship.parked ~= nil, xe = dbgPos[1], xn = dbgPos[2], pitchDeg = math.deg(math.asin(math.clamp(V3(0,0,1):applyQuaternion(ship.q):dot(ship.r:clone():normalize()), -1, 1))), ap = C.ap and C.ap.name, apStatus = C.apStatus, ship = design.key, wakeIn = C.ap and C.ap.wakeAt and (C.ap.wakeAt - ship.t), warp = ship.warp, thrustNow = ship.thrustNow, thr = ship.ctl.throttle }
 end
 dbg.Parent = player:WaitForChild("PlayerScripts")
 startFlight(Designs[1])

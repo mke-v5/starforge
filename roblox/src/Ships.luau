@@ -41,8 +41,15 @@ local EXTRA = {
 	},
 }
 
+-- Roblox blurbs for the web game's ships
+local BLURB = {
+	selene = "Fusion spaceplane: runway → orbit → the Moon — and, for the bravest pilots, Mars.",
+}
 local list = {}
-for _, d in ipairs(Designs) do table.insert(list, d) end
+for _, d in ipairs(Designs) do
+	if BLURB[d.key] then d.blurb = BLURB[d.key] end
+	table.insert(list, d)
+end
 -- the Viper sits between the Starhopper (level 3) and the Selene (level 5)
 for _, d in ipairs(EXTRA) do
 	local at = #list + 1

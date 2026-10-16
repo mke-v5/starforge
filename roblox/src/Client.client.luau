@@ -1132,7 +1132,7 @@ frame = function(dtRaw)
 		earthMesh.Scale = Vector3.new(2, 2, 2) * (EARTH.R * kk)
 		earthBall.Transparency = if body == EARTH then math.clamp(1 - (hEarth - 18000) / 7000, 0, 1) else 0
 		cloudBall.Transparency = if CLOUD_TEXTURE ~= "" then earthBall.Transparency else 1
-		airBall.Transparency = if body == EARTH and hEarth > 30000 then 0 else 1
+		airBall.Transparency = if hEarth > 75000 then 0 else 1
 	else
 		earthBall.Transparency = 1
 		cloudBall.Transparency = 1

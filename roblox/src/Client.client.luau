@@ -36,6 +36,14 @@ function world:isWater(lat, lon) return false end
 function world:buildingTop() return nil end
 
 local SITE = { name = "Starforge Spaceport", lat = 28.61, lon = -80.69, hdg = 90 }   -- Florida coast, runway pointing east
+-- the spaceport runway in the form the runway autopilot expects
+local RUNWAY = { latC = SITE.lat, lonC = SITE.lon, cosC = math.cos(SITE.lat * D2R), dx = math.sin(SITE.hdg * D2R), dy = math.cos(SITE.hdg * D2R), len = 3000, e1 = 0, e2 = 0 }
+local airports = {}
+function airports:localCoords(rw, lat, lon)
+	local x, y = (lon - rw.lonC) * D2R * EARTH.R * rw.cosC, (lat - rw.latC) * D2R * EARTH.R
+	return { along = x * rw.dx + y * rw.dy, cross = x * rw.dy - y * rw.dx }
+end
+function airports:elevAt(rw, along) return rw.e1 end
 
 ----------------------------------------------------------------- scene
 local scene = workspace:FindFirstChild("StarforgeScene") or Instance.new("Folder")
@@ -609,7 +617,15 @@ hud = require(SF.Hud).new(player, {
 	onAuto = function(kind)
 		if not ship then return end
 		if kind == "orbit" then C:engage(Control.ascentAp()); toast("Autopilot: climbing to orbit")
-		elseif kind == "land" then C:engage(Control.landAp()); toast("Autopilot: landing")
+		elseif kind == "land" then
+			local E = ship.env
+			local winged = #craft.wings > 0 and not craft.vertical
+			local d = Geo.gcDist(E.lat, E.lon, SITE.lat, SITE.lon)
+			if E.body == EARTH and winged and d < 300000 and E.h < 30000 and ship.contacts == 0 then
+				C:engage(Control.landRunwayAp(airports, RUNWAY, SITE.name)); toast("Autopilot: landing on the spaceport runway")
+			else
+				C:engage(Control.landAp()); toast("Autopilot: landing")
+			end
 		elseif kind == "off" then C:cancelAp(); toast("Autopilot off") end
 	end,
 	onSas = function(mode) if ship then C:setSas(mode); toast("SAS: " .. mode) end end,

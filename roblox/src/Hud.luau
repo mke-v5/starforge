@@ -48,7 +48,8 @@ function Hud.new(player, cb)
 	-- buttons, right
 	local side = make("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 52), Size = UDim2.new(0, 170, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
-	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, 0).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
+	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, -2).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
+	button(side, "🏆 Top pilots", function() if cb.onTop then cb.onTop() end end, -1)
 	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function() cb.onNextShip() end, 1)
 	button(side, "Auto: climb to orbit", function() cb.onAuto("orbit") end, 2)
 	button(side, "Auto: land", function() cb.onAuto("land") end, 3)
@@ -190,6 +191,33 @@ end
 function Hud:setProgress(state, xpNeed)
 	self.levelText.Text = string.format('Level %d  ·  <font color="#ffb347">%d credits</font>', state.level, state.credits)
 	self.xpFill.Size = UDim2.new(math.clamp(state.xp / xpNeed, 0, 1), 0, 1, 0)
+end
+
+-- leaderboard panel: list of { name, t }
+function Hud:showTop(list, mine)
+	local old = self.gui:FindFirstChild("TopPanel")
+	if old then old:Destroy() return end
+	local p = make("Frame", { Name = "TopPanel", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0, 360, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = PANEL, BackgroundTransparency = 0.05, ZIndex = 20 }, self.gui)
+	corner(p, 14)
+	make("UIStroke", { Color = AMBER, Thickness = 2 }, p)
+	make("UIScale", { Scale = self.uiScale or 1 }, p)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 18), PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 16) }, p)
+	make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, p)
+	make("TextLabel", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, Text = "🏆 FASTEST RING RACE", TextColor3 = AMBER, Font = FONT_B, TextSize = 20, LayoutOrder = 0, ZIndex = 21 }, p)
+	if #list == 0 then
+		make("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = "No times yet — be the first!", TextColor3 = DIM, Font = FONT, TextSize = 15, LayoutOrder = 1, ZIndex = 21 }, p)
+	end
+	for i, e in ipairs(list) do
+		local medal = if i == 1 then "🥇" elseif i == 2 then "🥈" elseif i == 3 then "🥉" else tostring(i) .. "."
+		make("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, RichText = true, LayoutOrder = i, ZIndex = 21, TextXAlignment = Enum.TextXAlignment.Left,
+			Text = string.format("%s  %s  <font color=\"#9dffb0\">%d:%05.2f</font>", medal, e.name, math.floor(e.t / 60), e.t % 60), TextColor3 = INK, Font = FONT, TextSize = 16 }, p)
+	end
+	make("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = 99, ZIndex = 21,
+		Text = if mine then string.format("Your best: %d:%05.2f", math.floor(mine / 60), mine % 60) else "Fly the glowing rings over the spaceport to set a time", TextColor3 = DIM, Font = FONT, TextSize = 14, TextWrapped = true }, p)
+	local close = make("TextButton", { Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = Color3.fromRGB(36, 42, 54), Text = "Close", TextColor3 = INK, Font = FONT_B, TextSize = 15, LayoutOrder = 100, ZIndex = 21 }, p)
+	corner(close, 8)
+	close.Activated:Connect(function() p:Destroy() end)
 end
 
 function Hud:setRace(text)

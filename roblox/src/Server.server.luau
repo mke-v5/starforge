@@ -14,6 +14,8 @@ local Pose = remotes:FindFirstChild("Pose") or Instance.new("UnreliableRemoteEve
 Pose.Name = "Pose"; Pose.Parent = remotes
 local Left = remotes:FindFirstChild("Left") or Instance.new("RemoteEvent")
 Left.Name = "Left"; Left.Parent = remotes
+local Top = remotes:FindFirstChild("Top") or Instance.new("RemoteFunction")
+Top.Name = "Top"; Top.Parent = remotes
 remotes.Parent = RS
 
 -- relay ship poses to everyone else (light checks so a bad client can't send junk)
@@ -33,6 +35,41 @@ end)
 
 local store
 pcall(function() store = DataStoreService:GetDataStore("StarforgeV1") end)
+
+local raceStore
+pcall(function() raceStore = DataStoreService:GetOrderedDataStore("RaceTimesV1") end)
+
+-- global best race times (hundredths of a second, lower is better), cached for a minute
+local topCache, topAt = {}, -1e9
+local nameCache = {}
+local function nameOf(userId)
+	if nameCache[userId] then return nameCache[userId] end
+	local ok, n = pcall(function() return Players:GetNameFromUserIdAsync(userId) end)
+	nameCache[userId] = if ok then n else "Pilot"
+	return nameCache[userId]
+end
+Top.OnServerInvoke = function()
+	if os.clock() - topAt < 60 then return topCache end
+	topAt = os.clock()
+	if not raceStore then return topCache end
+	local ok, pages = pcall(function() return raceStore:GetSortedAsync(true, 10) end)
+	if not ok then return topCache end
+	local list = {}
+	for _, e in ipairs(pages:GetCurrentPage()) do
+		local id = tonumber(string.sub(e.key, 2))
+		table.insert(list, { name = if id then nameOf(id) else "Pilot", t = e.value / 100 })
+	end
+	topCache = list
+	return list
+end
+local function submitRace(player, t)
+	if not raceStore then return end
+	local v = math.floor(t * 100)
+	pcall(function()
+		raceStore:UpdateAsync("u" .. player.UserId, function(old) if old and old <= v then return nil end return v end)
+	end)
+	topAt = -1e9
+end
 
 local cache = {}     -- userId -> state
 local loaded = {}
@@ -102,6 +139,8 @@ local lastWrite = {}
 Save.OnServerEvent:Connect(function(player, s)
 	s = clean(s)
 	if not s then return end
+	local prev = cache[player.UserId]
+	if s.bestRace and (not prev or not prev.bestRace or s.bestRace < prev.bestRace - 0.005) then task.spawn(submitRace, player, s.bestRace) end
 	cache[player.UserId] = s
 	stats(player, s)
 	-- write at most every 30 s per player; the rest goes out when they leave

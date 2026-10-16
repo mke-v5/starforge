@@ -613,6 +613,14 @@ hud = require(SF.Hud).new(player, {
 		elseif kind == "off" then C:cancelAp(); toast("Autopilot off") end
 	end,
 	onSas = function(mode) if ship then C:setSas(mode); toast("SAS: " .. mode) end end,
+	onTop = function()
+		local list = {}
+		if remotes and remotes:FindFirstChild("Top") then
+			local ok, res = pcall(function() return remotes.Top:InvokeServer() end)
+			if ok and type(res) == "table" then list = res end
+		end
+		hud:showTop(list, state.bestRace)
+	end,
 	onShop = function()
 		Shop.open(hud.gui, {
 			state = function() return state end,

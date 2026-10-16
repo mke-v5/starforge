@@ -19,6 +19,8 @@ local Control = require(SF.Control)
 local Orbit = require(SF.Orbit)
 local Designs = require(SF.DesignsData)
 local ShipModel = require(SF.ShipModel)
+local Progress = require(SF.Progress)
+local TweenService = game:GetService("TweenService")
 local V3 = THREE.Vector3.new
 local EARTH, MOON, D2R = Geo.EARTH, Geo.MOON, Geo.D2R
 local S = ShipModel.SCALE
@@ -88,8 +90,111 @@ local function toast(msg)
 	print("[Starforge] " .. msg)
 end
 
+----------------------------------------------------------------- progress (missions, levels, unlocks), saved on the server
+local state = Progress.newState()
+local remotes = RS:WaitForChild("StarforgeRemotes", 8)
+if remotes then
+	local ok, saved = pcall(function() return remotes.Load:InvokeServer() end)
+	if ok and type(saved) == "table" then
+		for k, v in pairs(saved) do state[k] = v end
+		state.done = state.done or {}
+	end
+end
+local saveDirty, lastSave = false, 0
+local function save() saveDirty = true end
+local function flushSave(force)
+	if not remotes or not saveDirty then return end
+	if not force and os.clock() - lastSave < 6 then return end
+	saveDirty = false; lastSave = os.clock()
+	remotes.Save:FireServer(state)
+end
+
+-- flight flags the missions look at; reset each flight
+local flags
+local function resetFlags()
+	flags = { airborne = false, landedRunway = false, ringsPassed = 0, raceDone = false, hoverTime = 0, landedBody = nil, wasHigh = false }
+end
+resetFlags()
+
+local bannerQueue = {}
+local function banner(title, sub, secs) table.insert(bannerQueue, { title, sub, secs }) end
+
+----------------------------------------------------------------- sounds and effects
+local SoundService = game:GetService("SoundService")
+local function sound(id, props)
+	local s = Instance.new("Sound")
+	s.SoundId = "rbxassetid://" .. id
+	for k, v in pairs(props or {}) do s[k] = v end
+	s.Parent = SoundService
+	return s
+end
+local engineJet = sound("82496091617037", { Looped = true, Volume = 0 })
+local engineRocket = sound("77862630063982", { Looped = true, Volume = 0 })
+engineJet:Play(); engineRocket:Play()
+local SOUND_IDS = { boom = "9120769331", chime = "85188102085028", crash = "138533090376585", ring = "138890894929151" }
+local function sfx(name, vol, pitch)
+	local id = SOUND_IDS[name]
+	if id == "" then return end
+	local s = sound(id, { Volume = vol or 0.8, PlaybackSpeed = pitch or 1 })
+	s:Play()
+	s.Ended:Connect(function() s:Destroy() end)
+end
+local shake = 0          -- camera shake amplitude (studs), decays
+local function kick(a) shake = math.max(shake, a) end
+
+----------------------------------------------------------------- ring race over the spaceport
+-- ring centres in metres from the spaceport: east, north, height
+local RING_POS = {
+	{ 2500, 0, 150 }, { 4500, 400, 250 }, { 6200, 1500, 400 }, { 6800, 3300, 500 }, { 5600, 5000, 600 },
+	{ 3200, 5800, 500 }, { 800, 5200, 400 }, { -400, 3400, 300 }, { 200, 1600, 200 }, { 1500, 600, 150 },
+}
+local RING_R, SEG = 45, 18
+local rings = {}
+for i, p in ipairs(RING_POS) do
+	local q = RING_POS[i + 1] or RING_POS[1]
+	local prev = RING_POS[i - 1]
+	-- facing: along the course (from the previous ring to the next)
+	local a = prev or { 0, 0, 100 }
+	local nx, ny, nz = q[1] - a[1], q[3] - a[3], q[2] - a[2]
+	if i == #RING_POS then nx, ny, nz = p[1] - a[1], p[3] - a[3], p[2] - a[2] end
+	local L = math.sqrt(nx * nx + ny * ny + nz * nz)
+	local ring = { e = p[1], n = p[2], h = p[3], nE = nx / L, nU = ny / L, nN = nz / L, parts = {}, side = nil }
+	for s = 1, SEG do
+		ring.parts[s] = anchored("Part", { Name = "Ring" .. i, Material = Enum.Material.Neon, Color = Color3.fromRGB(80, 220, 255), CastShadow = false, Size = Vector3.one })
+	end
+	rings[i] = ring
+end
+local race = { next = 1, startT = nil, t = 0 }
+
+-- ring position (metres, east/up/north from the ship's spot over the ground) -> world studs, given the ground scale
+local function placeRing(ring, idx, xe, xn, agl, k, visible)
+	local col = if idx == race.next then Color3.fromRGB(90, 255, 140) elseif idx == race.next + 1 then Color3.fromRGB(80, 220, 255) else Color3.fromRGB(60, 120, 200)
+	local show = visible and idx >= race.next
+	local c = Vector3.new((ring.e - xe) * S * k, (ring.h - agl) * S * k, -(ring.n - xn) * S * k)
+	local n = Vector3.new(ring.nE, ring.nU, -ring.nN)
+	local cf = CFrame.lookAt(c, c + n)
+	local R = RING_R * S * k
+	local segLen = 2 * math.pi * R / SEG * 1.08
+	local thick = math.max(0.4, (if idx == race.next then 3.5 else 2.2) * S * k)
+	for s, part in ipairs(ring.parts) do
+		part.Transparency = if show then (if idx == race.next then 0 else 0.35) else 1
+		if show then
+			local ang = (s - 0.5) / SEG * 2 * math.pi
+			part.Color = col
+			part.Size = Vector3.new(segLen, thick, thick)
+			part.CFrame = cf * CFrame.Angles(0, 0, ang) * CFrame.new(0, R, 0)
+		end
+	end
+end
+
+local function fmtRace(t) return string.format("%d:%05.2f", math.floor(t / 60), t % 60) end
+
 local function startFlight(entry)
 	if view then view.model:Destroy() end
+	resetFlags()
+	race.next = 1; race.startT = nil
+	if hud then hud:setRace(nil); hud:setShip("Ship: " .. entry.design.name) end
+	state.flights = (state.flights or 0) + 1
 	design = entry
 	eph:update(Astro.nowSimTime())
 	craft = Craft.new(entry.design)
@@ -171,9 +276,29 @@ end)
 local function axisKey(pos, neg) return (if keys[pos] then 1 else 0) - (if keys[neg] then 1 else 0) end
 
 ----------------------------------------------------------------- HUD
+local function designIndex(key) for i, d in ipairs(Designs) do if d.key == key then return i end end return 1 end
+local function lockedHint()
+	local best
+	for _, d in ipairs(Designs) do
+		if not Progress.unlocked(state, d.key) and (not best or Progress.SHIP_LEVEL[d.key] < Progress.SHIP_LEVEL[best.key]) then best = d end
+	end
+	return best
+end
 hud = require(SF.Hud).new(player, {
 	ships = Designs,
-	onShip = function(entry) startFlight(entry) end,
+	onNextShip = function()
+		local i = designIndex(design.key)
+		for _ = 1, #Designs do
+			i = i % #Designs + 1
+			if Progress.unlocked(state, Designs[i].key) then break end
+		end
+		if Designs[i] == design then
+			local nxt = lockedHint()
+			if nxt then toast(string.format("Reach level %d to unlock the %s", Progress.SHIP_LEVEL[nxt.key], nxt.design.name)) end
+			return
+		end
+		startFlight(Designs[i])
+	end,
 	onAuto = function(kind)
 		if not ship then return end
 		if kind == "orbit" then C:engage(Control.ascentAp()); toast("Autopilot: climbing to orbit")
@@ -225,8 +350,18 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	eph:update(ship.t)
 	for _, e in ipairs(ship.events) do
 		if e.type == "break" then toast(string.format("%s %s", e.part.def.name, if e.why == "overheat" then "overheated" else "broke off"))
-		elseif e.type == "destroyed" then toast("Ship destroyed — press R to restart")
-		elseif e.type == "landed" then toast("Landed on the " .. (if e.body == EARTH then "ground" else e.body.name))
+		elseif e.type == "destroyed" then
+			toast("Ship destroyed — press R to restart")
+			banner("CRASHED", "Press R (or the Ship button) to fly again", 3)
+			local ex = Instance.new("Explosion")
+			ex.Position = Vector3.zero; ex.BlastPressure = 0; ex.BlastRadius = 30 + craft.size * S; ex.DestroyJointRadiusPercent = 0
+			ex.ExplosionType = Enum.ExplosionType.NoCraters
+			ex.Parent = workspace
+			sfx("crash", 1)
+			kick(6)
+		elseif e.type == "landed" then
+			toast("Landed on the " .. (if e.body == EARTH then "ground" else e.body.name))
+			if flags.airborne then flags.landedBody = e.body end
 		elseif e.type == "warpStop" then warpIdx = 1 end
 	end
 	table.clear(ship.events)
@@ -251,8 +386,27 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	-- never below the ground
 	local groundY = -(ship.env.agl * S) + 3
 	if camPos.Y < groundY then camPos = Vector3.new(camPos.X, groundY, camPos.Z) end
-	camera.CFrame = CFrame.lookAt(camPos, target)
-	camera.FieldOfView = 70
+	-- shake: from events, plus rumble from engines in air and transonic buffeting
+	local rumble = 0
+	if ship.thrustNow > 0 then rumble = 0.08 + 0.25 * ship.ctl.throttle * math.clamp(E.rho / 1.225, 0.15, 1) end
+	if E.mach > 0.9 and E.mach < 1.15 and E.rho > 0.05 then rumble += 0.5 end
+	if (craft.heatFrac or 0) > 0.3 then rumble += (craft.heatFrac - 0.3) * 1.5 end
+	if ship.dead then rumble = 0 end
+	shake = math.max(0, shake - dt * 5)
+	local sh = (shake + rumble) * camDist / 60
+	local jitter = Vector3.new(math.noise(simTime * 23, 1) , math.noise(simTime * 23, 2), math.noise(simTime * 23, 3)) * sh
+	camera.CFrame = CFrame.lookAt(camPos + jitter, target + jitter * 0.5)
+	-- wider view at speed feels faster
+	camera.FieldOfView = 70 + math.clamp((E.vSurf - 100) / 600, 0, 1) * 12
+	-- engine sound follows throttle; muffled when the air is thin
+	local airS = math.clamp(E.rho / 1.225, 0, 1) ^ 0.5
+	local on = if ship.thrustNow > 0 and not ship.dead then ship.ctl.throttle else 0
+	local rocketish = craft.vertical or craft:capacity("OX") > 0 and E.h > 15000
+	local vol = on * (0.25 + 0.75 * math.max(airS, 0.25))
+	engineJet.Volume = if rocketish then 0 else vol * 0.9
+	engineRocket.Volume = if rocketish then vol else 0
+	engineJet.PlaybackSpeed = 0.7 + 0.6 * on
+	engineRocket.PlaybackSpeed = 0.8 + 0.3 * on
 
 	-- ground under the ship (near the surface), drawn uniformly scaled about the ship when high up
 	local agl = E.agl
@@ -295,6 +449,85 @@ RunService.RenderStepped:Connect(function(dtRaw)
 		hangar.Size = Vector3.new(60 * S * k, 22 * S * k, 50 * S * k)
 		hangar.CFrame = base * CFrame.new(-1100 * S * k, 11 * S * k, -120 * S * k)
 	end
+
+	-- ---------- rings ----------
+	local ringsVisible = showGround and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
+	for i, ring in ipairs(rings) do placeRing(ring, i, xe, xn, agl, k, ringsVisible) end
+	local ringNow = rings[race.next]
+	if ringNow and not ship.dead then
+		local dE, dN, dU = xe - ringNow.e, xn - ringNow.n, E.h - ringNow.h
+		local side = dE * ringNow.nE + dN * ringNow.nN + dU * ringNow.nU
+		local lat2 = dE * dE + dN * dN + dU * dU - side * side
+		if ringNow.side and ringNow.side < 0 and side >= 0 and lat2 < (RING_R * 1.15) ^ 2 then
+			-- through the ring
+			flags.ringsPassed += 1
+			if race.next == 1 then race.startT = simTime end
+			race.next += 1
+			sfx("ring", 0.7, 1 + race.next * 0.04)
+			kick(0.6)
+			if race.next > #rings then
+				local t = simTime - race.startT
+				flags.raceDone = true
+				local best = state.bestRace
+				local record = not best or t < best
+				if record then state.bestRace = t end
+				banner(if record then "NEW RECORD!" else "RACE COMPLETE", string.format("Time %s%s", fmtRace(t), if best then "  ·  best " .. fmtRace(math.min(best, t)) else ""), 4)
+				Progress.reward(state, if record then 40 else 15, if record then 150 else 50)
+				save()
+				race.next = 1; race.startT = nil
+				hud:setRace(nil)
+				for _, r in ipairs(rings) do r.side = nil end
+			else
+				toast(string.format("Ring %d / %d", race.next - 1, #rings))
+			end
+		end
+		ringNow.side = side
+		if race.startT then
+			hud:setRace(string.format("Ring %d/%d  ·  %s", race.next - 1, #rings, fmtRace(simTime - race.startT)))
+		end
+	end
+
+	-- ---------- missions ----------
+	if not ship.dead then
+		local airborne = ship.contacts == 0 and E.agl > 5
+		if airborne then flags.airborne = true end
+		if E.h > 10000 then flags.wasHigh = true end
+		if flags.airborne and ship.contacts > 0 and E.vSurf < 3 and E.body == EARTH and math.abs(xn) < 60 and math.abs(xe) < 1600 then
+			flags.landedRunway = true
+		end
+		if design.key == "lynx" and E.agl > 10 and E.agl < 40 and E.vSurf < 3 then flags.hoverTime += dt else flags.hoverTime = 0 end
+		local orbitPe = nil
+		if E.h > 100000 then
+			local rs = Orbit.relState(ship, E.body)
+			local el = Orbit.elements(rs.r, rs.v, rs.mu)
+			orbitPe = el.pe - E.body.R
+		end
+		-- sonic boom
+		if E.rho > 0.05 and E.mach >= 1 and (ship.lastMach or 0) < 1 then
+			sfx("boom", 1); kick(2.5)
+			toast("Sonic boom!")
+		end
+		ship.lastMach = E.mach
+		local m = Progress.check(state, { E = E, key = design.key, flags = flags, orbitPe = orbitPe, ship = ship, craft = craft })
+		if m then
+			local ups = Progress.reward(state, m.xp, m.credits)
+			sfx("chime", 0.9)
+			banner("MISSION COMPLETE", string.format("%s   +%d XP   +%d credits", m.title, m.xp, m.credits), 3.5)
+			for _, lv in ipairs(ups) do
+				local unlocked = {}
+				for _, d in ipairs(Designs) do if Progress.SHIP_LEVEL[d.key] == lv then table.insert(unlocked, d.design.name) end end
+				banner("LEVEL " .. lv .. "!", if #unlocked > 0 then "Unlocked: " .. table.concat(unlocked, ", ") .. " — tap the Ship button" else "Keep flying", 4)
+			end
+			save()
+			hud:setMission(Progress.current(state))
+		end
+	end
+	hud:setProgress(state, Progress.xpForLevel(state.level))
+	if not hud.bannerUntil and #bannerQueue > 0 then
+		local b = table.remove(bannerQueue, 1)
+		hud:showBanner(b[1], b[2], b[3])
+	end
+	flushSave(false)
 
 	-- planets: drawn scaled about the ship so their angular size is right and they stay in front of space
 	local function drawBall(part, mesh, bodyB, R, maxD)
@@ -348,3 +581,10 @@ RunService.RenderStepped:Connect(function(dtRaw)
 end)
 
 startFlight(Designs[1])
+hud:setMission(Progress.current(state))
+hud:setProgress(state, Progress.xpForLevel(state.level))
+if state.flights <= 1 then
+	banner("WELCOME TO STARFORGE", "Complete missions to earn XP, level up and unlock new ships", 5)
+else
+	banner("WELCOME BACK", string.format("Level %d  ·  %d credits", state.level, state.credits), 3)
+end

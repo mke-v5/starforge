@@ -47,12 +47,7 @@ function Hud.new(player, cb)
 	-- buttons, right
 	local side = make("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 52), Size = UDim2.new(0, 170, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
-	local shipIdx = 1
-	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function()
-		shipIdx = shipIdx % #cb.ships + 1
-		self.shipBtn.Text = "Ship: " .. cb.ships[shipIdx].design.name
-		cb.onShip(cb.ships[shipIdx])
-	end, 1)
+	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function() cb.onNextShip() end, 1)
 	button(side, "Auto: climb to orbit", function() cb.onAuto("orbit") end, 2)
 	button(side, "Auto: land", function() cb.onAuto("land") end, 3)
 	button(side, "Autopilot off", function() cb.onAuto("off") end, 4)
@@ -107,8 +102,35 @@ function Hud.new(player, cb)
 		stickTouch = nil; self.stickX, self.stickY = 0, 0
 		knob.Position = UDim2.new(0.5, 0, 0.5, 0)
 	end)
-	-- messages, top centre
-	self.msg = make("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 52), Size = UDim2.new(0, 560, 0, 28), BackgroundColor3 = PANEL, BackgroundTransparency = 0.3, Text = "", TextColor3 = INK, Font = FONT, TextSize = 15, Visible = false, TextWrapped = true }, gui)
+	-- mission card, top centre
+	local card = make("Frame", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 8), Size = UDim2.new(0, 420, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = PANEL, BackgroundTransparency = 0.2 }, gui)
+	corner(card, 12)
+	make("UIStroke", { Color = AMBER, Thickness = 1.5, Transparency = 0.3 }, card)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 10) }, card)
+	make("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder, HorizontalAlignment = Enum.HorizontalAlignment.Center }, card)
+	self.cardTitle = make("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = "", TextColor3 = AMBER, Font = FONT_B, TextSize = 18, LayoutOrder = 1, TextWrapped = true }, card)
+	self.cardHint = make("TextLabel", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "", TextColor3 = INK, Font = FONT, TextSize = 14, LayoutOrder = 2, TextWrapped = true }, card)
+	self.cardReward = make("TextLabel", { Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = "", TextColor3 = DIM, Font = FONT, TextSize = 13, LayoutOrder = 3 }, card)
+	self.card = card
+	-- level, xp and credits under the title
+	self.levelText = make("TextLabel", { Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = "", TextColor3 = INK, Font = FONT_B, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = 0, RichText = true }, info)
+	local xpBar = make("Frame", { Size = UDim2.new(1, 0, 0, 6), BackgroundColor3 = Color3.fromRGB(40, 46, 56), LayoutOrder = 0 }, info)
+	corner(xpBar, 3)
+	self.xpFill = make("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = AMBER }, xpBar)
+	corner(self.xpFill, 3)
+	self.title.LayoutOrder = -1
+	-- race timer
+	self.race = make("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 120), Size = UDim2.new(0, 260, 0, 34), BackgroundColor3 = PANEL, BackgroundTransparency = 0.25, Text = "", TextColor3 = Color3.fromRGB(120, 255, 170), Font = FONT_B, TextSize = 20, Visible = false }, gui)
+	corner(self.race, 8)
+	-- big banner for achievements
+	self.banner = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.38, 0), Size = UDim2.new(0, 460, 0, 110), BackgroundColor3 = PANEL, BackgroundTransparency = 0.1, Visible = false }, gui)
+	corner(self.banner, 16)
+	make("UIStroke", { Color = AMBER, Thickness = 3 }, self.banner)
+	self.bannerTitle = make("TextLabel", { Position = UDim2.new(0, 0, 0, 14), Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, Text = "", TextColor3 = AMBER, Font = FONT_B, TextSize = 32 }, self.banner)
+	self.bannerSub = make("TextLabel", { Position = UDim2.new(0, 10, 0, 58), Size = UDim2.new(1, -20, 0, 40), BackgroundTransparency = 1, Text = "", TextColor3 = INK, Font = FONT, TextSize = 17, TextWrapped = true }, self.banner)
+	self.bannerScale = make("UIScale", { Scale = 1 }, self.banner)
+	-- messages
+	self.msg = make("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 160), Size = UDim2.new(0, 560, 0, 28), BackgroundColor3 = PANEL, BackgroundTransparency = 0.3, Text = "", TextColor3 = INK, Font = FONT, TextSize = 15, Visible = false, TextWrapped = true }, gui)
 	corner(self.msg, 8)
 	-- controls help
 	make("TextLabel", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(0, 700, 0, 18), BackgroundTransparency = 1, TextColor3 = DIM, Font = FONT, TextSize = 13,
@@ -117,6 +139,40 @@ function Hud.new(player, cb)
 end
 
 local function dist(m) return Geo.fmtDist(m) end
+
+function Hud:setShip(text) self.shipBtn.Text = text end
+
+function Hud:setMission(m, extra)
+	if not m then
+		self.cardTitle.Text = "All missions complete!"
+		self.cardHint.Text = extra or "Race the rings for a better time, or explore the Moon."
+		self.cardReward.Text = ""
+		return
+	end
+	self.cardTitle.Text = "MISSION · " .. m.title
+	self.cardHint.Text = m.hint
+	self.cardReward.Text = string.format("Reward  %d XP  ·  %d credits", m.xp, m.credits)
+end
+
+-- big animated announcement
+function Hud:showBanner(title, sub, secs)
+	self.banner.Visible = true
+	self.bannerTitle.Text = title
+	self.bannerSub.Text = sub or ""
+	self.bannerScale.Scale = 0.6
+	game:GetService("TweenService"):Create(self.bannerScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	self.bannerUntil = os.clock() + (secs or 3.5)
+end
+
+function Hud:setProgress(state, xpNeed)
+	self.levelText.Text = string.format('Level %d  ·  <font color="#ffb347">%d credits</font>', state.level, state.credits)
+	self.xpFill.Size = UDim2.new(math.clamp(state.xp / xpNeed, 0, 1), 0, 1, 0)
+end
+
+function Hud:setRace(text)
+	self.race.Visible = text ~= nil
+	if text then self.race.Text = text end
+end
 
 function Hud:update(ship, C, craft, warpWant, warpNow, messages)
 	local E = ship.env
@@ -145,6 +201,7 @@ function Hud:update(ship, C, craft, warpWant, warpNow, messages)
 	-- latest message for 5 s
 	local last = messages[#messages]
 	if last and os.clock() - last.t < 5 then self.msg.Visible = true; self.msg.Text = last.text else self.msg.Visible = false end
+	if self.bannerUntil and os.clock() > self.bannerUntil then self.banner.Visible = false; self.bannerUntil = nil end
 end
 
 return Hud

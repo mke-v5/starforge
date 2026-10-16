@@ -365,6 +365,10 @@ local design = Designs[1]
 local refFixed = nil      -- body-fixed reference point for the ground frame
 local refBody = EARTH
 local camYaw, camPitch, camDist = 0, 0.18, 60
+local camMode = 1        -- 1 chase (level with the horizon), 2 cockpit, 3 locked chase
+local CAM_NAMES = { "Chase camera", "Cockpit camera", "Locked chase camera" }
+local function rv3(v) return Vector3.new(v.x, v.y, v.z) end
+
 local messages = {}
 local warpLevels = { 1, 2, 4, 10, 50, 100, 1000, 10000, 100000 }
 local warpIdx = 1
@@ -766,6 +770,10 @@ local function shipCFrame(qq)
 end
 
 ----------------------------------------------------------------- input
+local function nextCam()
+	camMode = camMode % 3 + 1
+	toast(CAM_NAMES[camMode])
+end
 local keys = {}
 UIS.InputBegan:Connect(function(io, gp)
 	if gp then return end
@@ -779,6 +787,7 @@ UIS.InputBegan:Connect(function(io, gp)
 	elseif k == Enum.KeyCode.Period then warpIdx = math.min(#warpLevels, warpIdx + 1)
 	elseif k == Enum.KeyCode.Comma then warpIdx = math.max(1, warpIdx - 1)
 	elseif k == Enum.KeyCode.R then startFlight(design)
+	elseif k == Enum.KeyCode.V then nextCam()
 	end
 end)
 UIS.InputEnded:Connect(function(io) keys[io.KeyCode] = nil end)
@@ -1048,7 +1057,8 @@ hud = require(SF.Hud).new(player, {
 		if not ship then return end
 		if kind == "gear" then ship.ctl.gear = not ship.ctl.gear; toast(if ship.ctl.gear then "Gear down" else "Gear up")
 		elseif kind == "brake" then C.input.brake = not C.input.brake; toast(if C.input.brake then "Brakes on" else "Brakes off")
-		elseif kind == "restart" then startFlight(design) end
+		elseif kind == "restart" then startFlight(design)
+		elseif kind == "cam" then nextCam() end
 	end,
 	onWarp = function(d) warpIdx = math.clamp(warpIdx + d, 1, #warpLevels) end,
 	onThrottle = function(v) if C then C.input.throttle = v end end,
@@ -1161,10 +1171,24 @@ frame = function(dtRaw)
 	camera.CameraType = Enum.CameraType.Scriptable
 	local target = Vector3.new(0, camDist * 0.06, 0)
 	local camPos = target - dir * camDist
+	local camUp = Vector3.yAxis
+	if camMode == 2 then
+		-- cockpit: just above and ahead of the pilot's seat, looking along the nose
+		local ck = craft.parts[1]
+		local eye = if ck and ck.com then rv3(ck.com) - rv3(craft.com) + Vector3.new(0, 0.9, -0.4) else Vector3.new(0, 1, -2)
+		camPos = (cf * CFrame.new(eye * S)).Position
+		target = camPos + cf.LookVector * 100
+		camUp = cf.UpVector
+	elseif camMode == 3 then
+		-- locked chase: behind and above the ship, rolling with it (aerobatics, space)
+		camPos = (cf * CFrame.new(0, camDist * 0.18, camDist)).Position
+		target = (cf * CFrame.new(0, camDist * 0.05, -camDist * 0.3)).Position
+		camUp = cf.UpVector
+	end
 	skyC = camPos   -- sky objects (space, Sun, Moon, Earth from orbit) are centred on the camera
 	-- never below the ground
 	local groundY = -(ship.env.agl * S) + 3
-	if camPos.Y < groundY then camPos = Vector3.new(camPos.X, groundY, camPos.Z) end
+	if camMode ~= 2 and camPos.Y < groundY then camPos = Vector3.new(camPos.X, groundY, camPos.Z) end
 	-- shake: from events, plus rumble from engines in air and transonic buffeting
 	local rumble = 0
 	if ship.thrustNow > 0 then rumble = 0.08 + 0.25 * ship.ctl.throttle * math.clamp(E.rho / 1.225, 0.15, 1) end
@@ -1174,7 +1198,8 @@ frame = function(dtRaw)
 	shake = math.max(0, shake - dt * 5)
 	local sh = (shake + rumble) * camDist / 60
 	local jitter = Vector3.new(math.noise(simTime * 23, 1) , math.noise(simTime * 23, 2), math.noise(simTime * 23, 3)) * sh
-	camera.CFrame = CFrame.lookAt(camPos + jitter, target + jitter * 0.5)
+	if camMode == 2 then jitter *= 0.15 end
+	camera.CFrame = CFrame.lookAt(camPos + jitter, target + jitter * 0.5, camUp)
 	-- wider view at speed feels faster
 	camera.FieldOfView = 70 + math.clamp((E.vSurf - 100) / 600, 0, 1) * 12
 	-- engine sound follows throttle; muffled when the air is thin

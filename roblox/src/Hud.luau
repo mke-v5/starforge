@@ -71,9 +71,10 @@ function Hud.new(player, cb)
 	make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, warpRow)
 	local keyRow = make("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 7 }, side)
 	make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, keyRow)
-	for _, m in ipairs({ { "Gear", "gear" }, { "Brake", "brake" }, { "Retry", "restart" } }) do
+	for _, m in ipairs({ { "Gear", "gear" }, { "Brake", "brake" }, { "📷", "cam" }, { "Retry", "restart" } }) do
 		local b = button(keyRow, m[1], function() if cb.onKey then cb.onKey(m[2]) end end)
-		b.Size = UDim2.new(1 / 3, -3, 1, 0)
+		b.Size = UDim2.new(1 / 4, -3, 1, 0)
+		b.TextSize = 13
 	end
 	local wd = button(warpRow, "◀ warp", function() cb.onWarp(-1) end); wd.Size = UDim2.new(0.5, -2, 1, 0)
 	local wu = button(warpRow, "warp ▶", function() cb.onWarp(1) end); wu.Size = UDim2.new(0.5, -2, 1, 0)
@@ -172,7 +173,7 @@ function Hud.new(player, cb)
 	corner(self.msg, 8)
 	-- controls help
 	make("TextLabel", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(0, 700, 0, 18), BackgroundTransparency = 1, TextColor3 = DIM, Font = FONT, TextSize = 13,
-		Text = "Shift/Ctrl throttle · Z full · X cut · W/S pitch · A/D roll · Q/E yaw · G gear · B brakes · , . warp · R restart · right-drag camera · wheel zoom", Visible = not UIS.TouchEnabled }, gui)
+		Text = "Shift/Ctrl throttle · Z full · X cut · W/S pitch · A/D roll · Q/E yaw · G gear · B brakes · , . warp · R restart · V camera · right-drag look · wheel zoom", Visible = not UIS.TouchEnabled }, gui)
 	-- shrink everything on small screens (phones). UIScale shrinks about an object's centre, which would
 	-- slide corner-anchored panels off the screen, so the whole HUD lives in one full-screen frame that is
 	-- made 1/scale times larger and then scaled down: every panel keeps its corner.

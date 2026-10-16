@@ -628,6 +628,8 @@ local function startFlight(entry)
 	if view then view.model:Destroy() end
 	table.clear(trailPts)
 	resetFlags()
+	dailyAcc.armed = false
+	for _, r in ipairs(rings) do r.side = nil end
 	race.next = 1; race.startT = nil
 	if hud then hud:setRace(nil); hud:setShip("Ship: " .. entry.design.name) end
 	state.flights = (state.flights or 0) + 1
@@ -1022,7 +1024,7 @@ frame = function(dtRaw)
 			kick(6)
 		elseif e.type == "landed" then
 			toast("Landed on the " .. (if e.body == EARTH then "ground" else e.body.name))
-			if flags.airborne then flags.landedBody = e.body; daily("landings", 1) end
+			if flags.airborne then flags.landedBody = e.body end
 		elseif e.type == "warpStop" then warpIdx = 1 end
 	end
 	table.clear(ship.events)
@@ -1175,12 +1177,14 @@ frame = function(dtRaw)
 			flags.ringsPassed += 1
 			addCredits(5)
 			daily("rings", 1)
-			if race.next == 1 then race.startT = simTime end
+			-- (timed in simulation time, so time warp doesn't help)
+			if race.next == 1 then race.startT = ship.t end
+			race.lastRingT = ship.t
 			race.next += 1
 			sfx("ring", 0.7, 1 + race.next * 0.04)
 			kick(0.6)
 			if race.next > #rings then
-				local t = simTime - race.startT
+				local t = ship.t - race.startT
 				flags.raceDone = true
 				daily("races", 1)
 				local best = state.bestRace
@@ -1197,8 +1201,14 @@ frame = function(dtRaw)
 			end
 		end
 		ringNow.side = side
-		if race.startT then
-			hud:setRace(string.format("Ring %d/%d  ·  %s", race.next - 1, #rings, fmtRace(simTime - race.startT)))
+		if race.startT and ship.t - (race.lastRingT or race.startT) > 150 then
+			-- gave up on the course: start over from ring 1
+			toast("Ring race timed out — fly through ring 1 to start again")
+			race.next = 1; race.startT = nil
+			hud:setRace(nil)
+			for _, r in ipairs(rings) do r.side = nil end
+		elseif race.startT then
+			hud:setRace(string.format("Ring %d/%d  ·  %s", race.next - 1, #rings, fmtRace(ship.t - race.startT)))
 		end
 	end
 
@@ -1259,6 +1269,14 @@ frame = function(dtRaw)
 		if flags.airborne and ship.contacts > 0 and E.vSurf < 3 and E.body == EARTH and math.abs(xn) < 60 and math.abs(xe) < 1600 then
 			flags.landedRunway = true
 		end
+		-- first flights: tell them when to pull up
+		if not state.done.takeoff and not flags.hinted and ship.contacts > 0 and E.vSurf > 72 and not craft.vertical then
+			flags.hinted = true
+			banner("PULL UP!", if UIS.TouchEnabled then "Drag the stick down (bottom left) to lift the nose" else "Hold S to lift the nose", 2.5)
+		end
+		-- every touchdown that comes to a stop counts as a landing (touch-and-goes too)
+		if ship.contacts == 0 and E.agl > 20 then dailyAcc.armed = true end
+		if dailyAcc.armed and ship.contacts > 0 and E.vSurf < 3 then dailyAcc.armed = false; daily("landings", 1) end
 		if design.key == "lynx" and E.agl > 10 and E.agl < 40 and E.vSurf < 3 then flags.hoverTime += dt else flags.hoverTime = 0 end
 		local orbitPe = nil
 		if E.h > 100000 then

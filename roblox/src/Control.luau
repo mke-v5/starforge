@@ -719,7 +719,7 @@ function C.landAp(target)
 		local brakeEng = if hasMain and (vac or not hasLift) then "main" elseif hasLift then "lift" else "all"
 		local finalEng = if hasLift then "lift" elseif hasMain then "main" else "all"
 		local swap = brakeEng ~= finalEng
-		local hTarget = if body == MARS then 5000 + 0.03 * agl elseif body == MOON and not swap then 450 + 0.05 * agl else (if swap then SWAP_H else 120) + 0.03 * agl
+		local hTarget = if body == MARS then 5000 + 0.03 * agl elseif body == MOON and not swap then (if ship.craft.vertical then 1600 else 450) + 0.05 * agl else (if swap then SWAP_H else 120) + 0.03 * agl
 		if not phase then
 			for _, P in ipairs(craft.engines) do
 				if P.alive == false then continue end
@@ -797,7 +797,9 @@ function C.landAp(target)
 			else
 				if ship.t - lastWake > 20 then
 					lastWake = ship.t
-					ap.wakeAt = estimateBrakeStart(ship, amax, math.max(0, ground) + (if body == MOON then 3000 else 500)) - 60
+					local est = estimateBrakeStart(ship, amax, math.max(0, ground) + (if body == MOON then 3000 else 500)) - 60
+					-- wake halfway there and estimate again, so a long coast can't drift past the real brake point
+					ap.wakeAt = math.min(est, ship.t + math.max(30, (est - ship.t) * 0.5))
 					if guided and not onMoon and corr == 0 then ap.wakeAt = math.min(ap.wakeAt, coastStart + 290, timeToAlt(ship, 152000)) end
 					if guided and not onMoon and corr == 1 then ap.wakeAt = math.min(ap.wakeAt, timeToAlt(ship, 130000)) end
 					if guided and onMoon and corr == 0 then ap.wakeAt = math.min(ap.wakeAt, coastStart + 250) end
@@ -838,7 +840,7 @@ function C.landAp(target)
 
 		-- final: vertical descent, kill horizontal drift, land upright
 		local anet = math.max(0.6, amax * 0.85 - g)
-		local vzT = -clamp(math.sqrt(2 * anet * agl) * 0.5, 1.3, if body == MARS then (if E.rho > 0.003 and #craft.wings > 0 then 28 else 140) else 80)
+		local vzT = -clamp(math.sqrt(2 * anet * agl) * 0.35, 1.3, if body == MARS then (if E.rho > 0.003 and #craft.wings > 0 then 28 else 140) elseif body == MOON then 40 else 80)
 		local hor = vH:clone():multiplyScalar(if agl < 30 then -1.0 else -0.6)
 		local maxTilt = if agl < 30 then 0.18 elseif agl < 300 then 0.3 else 0.6
 		local status = if agl > 100 then "Descending" else string.format("Touchdown in %.0f s", math.max(0, agl / math.max(1, -vz)))
@@ -861,15 +863,20 @@ function C.landAp(target)
 			if (dist > 60 or vh > 2.5) and agl < hHold + 40 then vzT = clamp((hHold - agl) * 0.3, -4, 4) end
 			if dist > 60 then status = string.format("Flying to %s · %d m", target.name or "target", math.round(dist)) end
 		end
-		local vert = 0.9 * (vzT - vz) + g
+		local vert = 1.5 * (vzT - vz) + g
 		local vb = math.max(vert, 0.3 * g)
 		local hl = hor:length()
 		if hl > math.tan(maxTilt) * vb then hor:multiplyScalar(math.tan(maxTilt) * vb / hl) end
-		local dir = up:clone():multiplyScalar(math.max(vert, 0.05)):add(hor)
-		local need = dir:length()
+		-- point along (up * vb + hor) so a rocket stays upright even while it lets itself fall
+		-- (vert < 0); the thrust it needs is the real, possibly zero, vertical demand plus the sideways one
+		local need = up:clone():multiplyScalar(math.max(vert, 0)):add(hor):length()
+		local dir = up:clone():multiplyScalar(vb):add(hor)
 		dir:normalize()
 		local al = fwd:dot(dir)
 		local thr = clamp(need / amax, 0, 1) * smoothstep(0.6, 0.95, al)
+		-- far off upright (a rocket coming out of its braking burn on its side): a trickle of thrust lets the
+		-- engine gimbal swing the nose up much faster than the RCS alone
+		if al < 0.95 and al > -0.2 and agl > 60 and craft.vertical then thr = math.max(thr, 0.1 * (1 - smoothstep(0.85, 0.97, al))) end
 		if vz > 3 and agl > 20 then thr = 0 end
 		return { dir = dir, axis = axis, throttle = thr, gear = if agl < 1500 then true else nil, engines = finalEng, status = status }
 	end

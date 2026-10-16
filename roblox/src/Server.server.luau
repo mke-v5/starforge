@@ -36,6 +36,23 @@ end)
 local store
 pcall(function() store = DataStoreService:GetDataStore("StarforgeV1") end)
 
+-- Game passes: put the pass ids here once they are created in the Creator Hub (0 = not on sale)
+local GAMEPASS = { VIP = 0 }   -- VIP: double credits from everything
+local MarketplaceService = game:GetService("MarketplaceService")
+local function checkPasses(player)
+	for name, id in pairs(GAMEPASS) do
+		if id ~= 0 then
+			local ok, owns = pcall(function() return MarketplaceService:UserOwnsGamePassAsync(player.UserId, id) end)
+			if ok and owns then player:SetAttribute(name, true) end
+		end
+	end
+end
+MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, id, bought)
+	if not bought then return end
+	for name, pid in pairs(GAMEPASS) do if pid == id then player:SetAttribute(name, true) end end
+end)
+RS:SetAttribute("VipPass", GAMEPASS.VIP)
+
 local raceStore
 pcall(function() raceStore = DataStoreService:GetOrderedDataStore("RaceTimesV1") end)
 
@@ -162,8 +179,8 @@ Save.OnServerEvent:Connect(function(player, s)
 	end
 end)
 
-Players.PlayerAdded:Connect(loadPlayer)
-for _, p in ipairs(Players:GetPlayers()) do task.spawn(loadPlayer, p) end
+Players.PlayerAdded:Connect(function(p) task.spawn(checkPasses, p); loadPlayer(p) end)
+for _, p in ipairs(Players:GetPlayers()) do task.spawn(checkPasses, p); task.spawn(loadPlayer, p) end
 Players.PlayerRemoving:Connect(function(p)
 	Left:FireAllClients(p.UserId)
 	savePlayer(p)

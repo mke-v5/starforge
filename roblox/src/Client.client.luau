@@ -423,8 +423,10 @@ local function dailyText()
 	end
 	return '<font color="#ffb347">TODAY</font>  ' .. table.concat(parts, "  ·  ")
 end
+local function creditMult() return if player:GetAttribute("VIP") then 2 else 1 end
+local function addCredits(n) state.credits += n * creditMult() end
 local function grant(xp, credits)
-	local ups = Progress.reward(state, xp, credits)
+	local ups = Progress.reward(state, xp, credits * creditMult())
 	for _, lv in ipairs(ups) do
 		local unlocked = {}
 		for _, d in ipairs(Designs) do if Progress.SHIP_LEVEL[d.key] == lv then table.insert(unlocked, d.design.name) end end
@@ -910,6 +912,9 @@ hud = require(SF.Hud).new(player, {
 	onShop = function()
 		Shop.open(hud.gui, {
 			state = function() return state end,
+			vipOn = function() return (RS:GetAttribute("VipPass") or 0) ~= 0 end,
+			vipOwned = function() return player:GetAttribute("VIP") == true end,
+			buyVip = function() game:GetService("MarketplaceService"):PromptGamePassPurchase(player, RS:GetAttribute("VipPass")) end,
 			buy = function(kind, it)
 				if state.credits < it.price then return false, string.format("You need %d more credits", it.price - state.credits) end
 				state.credits -= it.price
@@ -1168,7 +1173,7 @@ frame = function(dtRaw)
 		if ringNow.side and ringNow.side < 0 and side >= 0 and lat2 < (ringNow.r * 1.15) ^ 2 then
 			-- through the ring
 			flags.ringsPassed += 1
-			state.credits += 5
+			addCredits(5)
 			daily("rings", 1)
 			if race.next == 1 then race.startT = simTime end
 			race.next += 1
@@ -1210,7 +1215,7 @@ frame = function(dtRaw)
 			local d = math.sqrt(dE * dE + dN * dN + dU * dU)
 			if d < CRYSTAL_GRAB and not ship.dead then
 				got[key] = true
-				state.credits += 25
+				addCredits(25)
 				sfx("ring", 0.8, 1.6)
 				kick(0.4)
 				toast(string.format("Star crystal! +25 credits  (%d / %d today)", crystalCount(), #CRYSTALS))
@@ -1237,7 +1242,7 @@ frame = function(dtRaw)
 		if airborne then
 			flags.airborne = true
 			airTime += dt
-			if airTime > 15 then airTime -= 15; state.credits += 2; save() end
+			if airTime > 15 then airTime -= 15; addCredits(2); save() end
 		end
 		if E.h > 10000 then flags.wasHigh = true end
 		dailyAcc.km += E.vSurf * dt * ship.warp / 1000
@@ -1403,7 +1408,7 @@ do
 		state.streak = if state.lastDay == day - 1 then (state.streak or 0) + 1 else 1
 		state.lastDay = day
 		local bonus = 100 + 50 * math.min(state.streak - 1, 6)
-		state.credits += bonus
+		addCredits(bonus)
 		banner("DAILY BONUS", string.format("Day %d in a row  ·  +%d credits — come back tomorrow for more", state.streak, bonus), 4)
 		save()
 	end

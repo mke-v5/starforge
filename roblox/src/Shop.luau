@@ -134,6 +134,11 @@ function Shop.open(gui, cb, scale)
 					cb.equip(current, it)
 				end)
 			end
+		elseif current == "vip" then
+			local owned = cb.vipOwned and cb.vipOwned()
+			card(1, { Color3.fromRGB(255, 205, 60), Color3.fromRGB(255, 120, 40) }, "VIP pilot", "2× credits from everything",
+				if owned then "Owned ✓" else "Get VIP", if owned then Color3.fromRGB(120, 130, 140) else AMBER,
+				function() if not owned and cb.buyVip then cb.buyVip() end end)
 		else
 			for i, t in ipairs(Shop.TUNE) do
 				local have = (st.tune or 0) >= t.level
@@ -150,7 +155,9 @@ function Shop.open(gui, cb, scale)
 		end
 	end
 	local tabBtns = {}
-	for _, tdef in ipairs({ { "paint", "Paint" }, { "trail", "Trails" }, { "tune", "Engines" } }) do
+	local tabList = { { "paint", "Paint" }, { "trail", "Trails" }, { "tune", "Engines" } }
+	if cb.vipOn and cb.vipOn() then table.insert(tabList, { "vip", "⭐ VIP" }) end
+	for _, tdef in ipairs(tabList) do
 		local b = make("TextButton", { Size = UDim2.new(0, 110, 1, 0), BackgroundColor3 = Color3.fromRGB(36, 42, 54), Text = tdef[2], TextColor3 = INK, Font = FONT_B, TextSize = 15, ZIndex = 22 }, tabs)
 		corner(b, 8)
 		tabBtns[tdef[1]] = b

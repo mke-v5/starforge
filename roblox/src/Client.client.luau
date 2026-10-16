@@ -829,6 +829,17 @@ local function openHangar(title)
 	})
 end
 
+-- if the orbit still dips into the air, burn at apoapsis to lift the low point clear (skipped when it's fine)
+local function raiseOrbitStep()
+	return Control.planBurnAp("Raise orbit", function(s)
+		if s.env.body ~= EARTH then return nil end
+		local rs = Orbit.relState(s, EARTH)
+		local el = Orbit.elements(rs.r, rs.v, rs.mu)
+		if el.pe - EARTH.R > EARTH.atmoTop + 5000 or el.e >= 1 then return nil end
+		return Orbit.planCircularize(s, true)
+	end, true)
+end
+
 local function designIndex(key) for i, d in ipairs(Designs) do if d.key == key then return i end end return 1 end
 local function lockedHint()
 	local best
@@ -855,7 +866,9 @@ hud = require(SF.Hud).new(player, {
 	end,
 	onAuto = function(kind)
 		if not ship then return end
-		if kind == "orbit" then C:engage(Control.ascentAp()); toast("Autopilot: climbing to orbit")
+		if kind == "orbit" then
+			C:engage(Control.sequenceAp("Climb to orbit", { function() return Control.ascentAp() end, raiseOrbitStep }))
+			toast("Autopilot: climbing to orbit")
 		elseif kind == "land" then
 			local E = ship.env
 			local winged = #craft.wings > 0 and not craft.vertical
@@ -867,6 +880,7 @@ hud = require(SF.Hud).new(player, {
 			end
 		elseif kind == "moon" then
 			C:engage(Control.sequenceAp("Trip to the Moon", {
+				raiseOrbitStep,
 				function() return Control.planBurnAp("Moon transfer", function(s) return Orbit.planMoonTransfer(s, 100000) end) end,
 				function() return Control.planBurnAp("Course correction", function(s) return Orbit.planCorrection(s, MOON, 100000) end, true) end,
 				function() return Control.waitAp("Coast to the Moon", function(s) return s.env.body == MOON and Orbit.relState(s, MOON).r:length() - MOON.R < 3e6 end, function(s) return nil end) end,

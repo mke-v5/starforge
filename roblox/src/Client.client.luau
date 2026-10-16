@@ -995,16 +995,23 @@ hud = require(SF.Hud).new(player, {
 			-- the long way: launch window, injection, two corrections, coast, capture into Mars orbit
 			local I = require(SF.Interplanetary)
 			local DAY = 86400
+			local cacheT, cacheV = -1e18, 0
 			local function cruiseWake(s)
+				-- (a 500-day prediction is costly: reuse it for a simulated hour)
+				if math.abs(s.t - cacheT) < 3600 then return cacheV end
 				local p = Orbit.predict(s.r, s.v, s.t, { maxT = 500 * DAY, maxSteps = 20000, oneRev = false, noExtend = true, marsStop = -MARS.R * 0.9 })
-				return p.closeMars.t
+				cacheT, cacheV = s.t, p.closeMars.t
+				return cacheV
 			end
 			local steps = {}
 			if kind == "mars" then
 				table.insert(steps, raiseOrbitStep)
 				table.insert(steps, function() return Control.planBurnAp("Mars injection", function(s) return I.planMarsTransfer(s) end) end)
 				table.insert(steps, function()
-					return Control.waitAp("Leaving Earth", function(s) return s.env.body ~= EARTH end, function(s) return s.t + 6 * 3600 end)
+					return Control.waitAp("Leaving Earth", function(s) return s.env.body ~= EARTH end, function(s)
+						local p = Orbit.predict(s.r, s.v, s.t, { maxT = 30 * DAY, maxSteps = 6000, oneRev = false, noExtend = true })
+						return if p.earthOut then p.earthOut + 60 else s.t + DAY
+					end)
 				end)
 			end
 			table.insert(steps, function() return Control.planBurnAp("Course correction", function(s) return I.planPlanetCorrection(s, MARS, 300e3) end, true) end)
@@ -1029,7 +1036,12 @@ hud = require(SF.Hud).new(player, {
 			local I = require(SF.Interplanetary)
 			C:engage(Control.sequenceAp("Trip home from Mars", {
 				function() return Control.planBurnAp("Earth injection", function(s) return I.planEarthReturnFromMars(s) end) end,
-				function() return Control.waitAp("Leaving Mars", function(s) return s.env.body ~= MARS end, function(s) return s.t + 6 * 3600 end) end,
+				function()
+					return Control.waitAp("Leaving Mars", function(s) return s.env.body ~= MARS end, function(s)
+						local p = Orbit.predict(s.r, s.v, s.t, { maxT = 30 * 86400, maxSteps = 6000, oneRev = false, noExtend = true })
+						return if p.marsOut then p.marsOut + 60 else s.t + 86400
+					end)
+				end,
 				function() return Control.planBurnAp("Course correction", function(s) return I.planPlanetCorrection(s, EARTH, 300e3) end, true) end,
 				function()
 					return Control.waitAp("Coast to Earth", function(s) return s.env.body == EARTH end, function(s)

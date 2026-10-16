@@ -24,10 +24,16 @@ local function corner(o, r) make("UICorner", { CornerRadius = UDim.new(0, r or 8
 function Hangar.open(gui, opts)
 	local old = gui:FindFirstChild("HangarScreen")
 	if old then old:Destroy() end
-	local root = make("Frame", { Name = "HangarScreen", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(6, 8, 12), BackgroundTransparency = if opts.title then 0.08 else 0.25, ZIndex = 30 }, gui)
+	local root = make("Frame", { Name = "HangarScreen", Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(6, 8, 12), BackgroundTransparency = if opts.title then 0 else 0.15, ZIndex = 30 }, gui)
 	make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 0.45) }) }, root)
 	local body = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.new(0, 900, 0, 560), BackgroundTransparency = 1, ZIndex = 31 }, root)
-	make("UIScale", { Scale = opts.scale or 1 }, body)
+	local sc = make("UIScale", { Scale = 1 }, body)
+	local function fit()
+		local vp = workspace.CurrentCamera.ViewportSize
+		sc.Scale = math.min(vp.X / 940, vp.Y / 600, 1.15)
+	end
+	fit()
+	local fitConn = workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
 	local y = 0
 	if opts.title then
 		local logo = make("TextLabel", { Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, 0, 0, 84), BackgroundTransparency = 1, Text = "STARFORGE", TextColor3 = AMBER, Font = Enum.Font.GothamBlack, TextSize = 76, ZIndex = 32 }, body)
@@ -62,15 +68,15 @@ function Hangar.open(gui, opts)
 		local card = make("TextButton", { Size = UDim2.new(0, 205, 1, 0), BackgroundColor3 = Color3.fromRGB(22, 28, 38), AutoButtonColor = unlocked, Text = "", LayoutOrder = i, ZIndex = 32 }, row)
 		corner(card, 14)
 		local stroke = make("UIStroke", { Thickness = 1, Color = Color3.fromRGB(60, 70, 84), ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, card)
-		local vp = make("ViewportFrame", { Position = UDim2.new(0, 6, 0, 6), Size = UDim2.new(1, -12, 0, 170), BackgroundColor3 = Color3.fromRGB(30, 38, 52), BackgroundTransparency = 0,
-			Ambient = Color3.fromRGB(150, 150, 160), LightColor = Color3.fromRGB(255, 245, 230), LightDirection = Vector3.new(-1, -1.5, -0.6), ZIndex = 33 }, card)
+		local vp = make("ViewportFrame", { Position = UDim2.new(0, 6, 0, 6), Size = UDim2.new(1, -12, 0, 170), BackgroundColor3 = Color3.fromRGB(46, 58, 78), BackgroundTransparency = 0,
+			Ambient = Color3.fromRGB(205, 205, 215), LightColor = Color3.fromRGB(255, 245, 230), LightDirection = Vector3.new(-1, -1.5, -0.6), ZIndex = 33 }, card)
 		corner(vp, 10)
 		local model = opts.build(entry)
 		model.Parent = vp
 		local cam = make("Camera", { FieldOfView = 40 }, vp)
 		vp.CurrentCamera = cam
 		local sz = opts.size(entry)
-		local dist = sz * 1.9 + 4
+		local dist = sz * 1.25 + 3
 		cam.CFrame = CFrame.lookAt(Vector3.new(dist * 0.75, dist * 0.42, dist * 0.6), Vector3.zero)
 		table.insert(spinners, { model = model, phase = i * 1.3 })
 		if not unlocked then vp.ImageColor3 = Color3.fromRGB(70, 70, 80) end
@@ -100,6 +106,7 @@ function Hangar.open(gui, opts)
 	end)
 	local function close()
 		if conn then conn:Disconnect(); conn = nil end
+		fitConn:Disconnect()
 		root:Destroy()
 	end
 	fly.Activated:Connect(function()

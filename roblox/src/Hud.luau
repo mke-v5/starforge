@@ -152,7 +152,7 @@ function Hud.new(player, cb)
 	end
 	local function rescale()
 		local vp = workspace.CurrentCamera.ViewportSize
-		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), 0.55, 1)
+		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), 0.4, 1)
 		self.uiScale = sc
 		for _, u in ipairs(scales) do u.Scale = sc end
 		self.bannerScale.Scale = sc

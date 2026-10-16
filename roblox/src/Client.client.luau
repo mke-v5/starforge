@@ -1034,7 +1034,6 @@ end
 dbg.Parent = player:WaitForChild("PlayerScripts")
 startFlight(Designs[1])
 hud:setMission(Progress.current(state))
-openHangar(true)
 hud:setProgress(state, Progress.xpForLevel(state.level))
 if state.flights <= 1 then
 	banner("WELCOME TO STARFORGE", "Complete missions to earn XP, level up and unlock new ships", 5)
@@ -1053,3 +1052,4 @@ do
 		save()
 	end
 end
+openHangar(true)

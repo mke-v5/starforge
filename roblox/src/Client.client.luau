@@ -169,6 +169,12 @@ local cc = Lighting:FindFirstChild("StarforgeGrade") or Instance.new("ColorCorre
 cc.Name = "StarforgeGrade"; cc.Saturation = 0.12; cc.Contrast = 0.06; cc.Parent = Lighting
 local bloom = Lighting:FindFirstChildOfClass("BloomEffect") or Instance.new("BloomEffect")
 bloom.Intensity = 0.6; bloom.Size = 28; bloom.Threshold = 1.4; bloom.Parent = Lighting
+local daySky = Lighting:FindFirstChildOfClass("Sky")      -- the place's own sky, if it has one
+local spaceSky = Instance.new("Sky")
+spaceSky.Name = "StarforgeSpace"
+for _, f in ipairs({ "SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp" }) do spaceSky[f] = "rbxassetid://7148407609" end
+spaceSky.CelestialBodiesShown = false
+spaceSky.StarCount = 0
 local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
 atmosphere.Parent = Lighting
 
@@ -1124,15 +1130,11 @@ frame = function(dtRaw)
 	atmosphere.Decay = Color3.fromRGB(120, 150, 190)
 	atmosphere.Glare = 0.4 * airK
 	atmosphere.Haze = 1.2 * airK
-	local spaceA = 1 - math.clamp((alt - 22000) / 30000, 0, 1)
-	if body ~= EARTH then spaceA = 0 end
-	local R0 = 330
-	local faces = { { Vector3.new(R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) }, { Vector3.new(-R0, 0, 0), Vector3.new(10, 2 * R0, 2 * R0) },
-		{ Vector3.new(0, R0, 0), Vector3.new(2 * R0, 10, 2 * R0) }, { Vector3.new(0, -R0, 0), Vector3.new(2 * R0, 10, 2 * R0) },
-		{ Vector3.new(0, 0, R0), Vector3.new(2 * R0, 2 * R0, 10) }, { Vector3.new(0, 0, -R0), Vector3.new(2 * R0, 2 * R0, 10) } }
-	for i = 1, 6 do
-		dome[i].Size = faces[i][2]; dome[i].CFrame = CFrame.new(skyC + faces[i][1]); dome[i].Transparency = spaceA
-	end
+	-- the sky: Roblox's daytime sky low down, a star field once the air is thin
+	local inSpace = body ~= EARTH or alt > 32000
+	spaceSky.Parent = if inSpace then Lighting else nil
+	if daySky then daySky.Parent = if inSpace then nil else Lighting end
+	for i = 1, 6 do dome[i].Transparency = 1 end
 	-- the Sun's height sets the time of day for Roblox's lighting
 	local sunUp = math.asin(math.clamp(sunW.Y, -1, 1))
 	Lighting.ClockTime = 12 - (math.pi / 2 - sunUp) / (math.pi / 2) * 6 * (if sunW.X >= 0 then 1 else -1)

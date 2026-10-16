@@ -48,8 +48,11 @@ function Hud.new(player, cb)
 	-- buttons, right
 	local side = make("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 12), Size = UDim2.new(0, 170, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
+	self.side = side
+	local UIS0 = game:GetService("UserInputService")
+	local touch = UIS0.TouchEnabled and not UIS0.KeyboardEnabled
 	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, -2).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
-	button(side, "🏆 Top pilots", function() if cb.onTop then cb.onTop() end end, -1)
+	local topBtn = button(side, "🏆 Top pilots", function() if cb.onTop then cb.onTop() end end, -1)
 	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function() cb.onNextShip() end, 1)
 	-- the main autopilot button offers the next sensible step (climb to orbit, go to the Moon, fly home…)
 	self.autoKind = "orbit"
@@ -73,8 +76,25 @@ function Hud.new(player, cb)
 	end
 	local wd = button(warpRow, "◀ warp", function() cb.onWarp(-1) end); wd.Size = UDim2.new(0.5, -2, 1, 0)
 	local wu = button(warpRow, "warp ▶", function() cb.onWarp(1) end); wu.Size = UDim2.new(0.5, -2, 1, 0)
+	-- phones: keep the column short (the throttle sits under it); the rarer buttons fold behind "More"
+	if touch then
+		local extra = { topBtn, sasRow, warpRow }
+		for _, o in ipairs(extra) do o.Visible = false end
+		local more
+		more = button(side, "More ▾", function()
+			local show = not extra[1].Visible
+			for _, o in ipairs(extra) do o.Visible = show end
+			more.Text = if show then "Less ▴" else "More ▾"
+		end, 50)
+		keyRow.LayoutOrder = 4
+	end
 	-- throttle slider, bottom right
 	local thrFrame = make("Frame", { AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -24, 1, -24), Size = UDim2.new(0, 56, 0, 220), BackgroundColor3 = PANEL, BackgroundTransparency = 0.3 }, gui)
+	if touch then
+		-- phones: beside the button column instead of under it
+		thrFrame.Position = UDim2.new(1, -196, 1, -24)
+		thrFrame.Size = UDim2.new(0, 64, 0, 200)
+	end
 	corner(thrFrame, 12)
 	self.thrFill = make("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, 0), BackgroundColor3 = AMBER, BackgroundTransparency = 0.1 }, thrFrame)
 	corner(self.thrFill, 12)
@@ -133,8 +153,8 @@ function Hud.new(player, cb)
 	corner(self.xpFill, 3)
 	self.title.LayoutOrder = -1
 	-- playtime gift countdown, under the right-hand buttons
-	self.gift = make("TextLabel", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 392), Size = UDim2.new(0, 170, 0, 26), BackgroundColor3 = Color3.fromRGB(60, 40, 90), BackgroundTransparency = 0.2,
-		Text = "", TextColor3 = INK, Font = FONT_B, TextSize = 14, Visible = false }, gui)
+	self.gift = make("TextLabel", { Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = Color3.fromRGB(60, 40, 90), BackgroundTransparency = 0.2, LayoutOrder = 99,
+		Text = "", TextColor3 = INK, Font = FONT_B, TextSize = 14, Visible = false }, self.side)
 	corner(self.gift, 8)
 	-- race timer
 	self.race = make("TextLabel", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 120), Size = UDim2.new(0, 260, 0, 34), BackgroundColor3 = PANEL, BackgroundTransparency = 0.25, Text = "", TextColor3 = Color3.fromRGB(120, 255, 170), Font = FONT_B, TextSize = 20, Visible = false }, gui)
@@ -165,7 +185,8 @@ function Hud.new(player, cb)
 		-- (the area below Roblox's top bar, so the panels never sit under its menu buttons)
 		local vp = gui.AbsoluteSize
 		if vp.X < 10 then vp = workspace.CurrentCamera.ViewportSize end
-		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 700), if UIS.TouchEnabled then 0.5 else 0.4, 1)
+		-- (on phones, big enough to hit with a thumb even if the HUD then covers more of the view)
+		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 700), if touch then 0.72 else 0.4, 1)
 		self.uiScale = sc
 		root.Size = UDim2.new(1 / sc, 0, 1 / sc, 0)
 		rootScale.Scale = sc

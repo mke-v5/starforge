@@ -1145,7 +1145,10 @@ local function canWarp(level)
 	local E = ship.env
 	if level <= 4 then return true end
 	if ship.parked then return true end
-	if ship.thrustNow > 0 or ship.ctl.throttle > 0 then return false end
+	if ship.thrustNow > 0 or ship.ctl.throttle > 0 then
+		-- (an autopilot burn far out in space may run simulated at 10x)
+		return level <= 10 and C.ap ~= nil and E.rho < 1e-6 and E.agl > 20000
+	end
 	if E.body.atmoTop > 0 and E.h < E.body.atmoTop + 2000 then return false end
 	if E.agl < 10000 then return false end
 	if level > 100000 and E.body ~= Geo.SUN then return false end   -- the fastest warp is for crossing between planets
@@ -1186,7 +1189,7 @@ frame = function(dtRaw)
 		while want > 1 and want * dt * 3 > left do want = want / 10 end
 	end
 	-- long autopilot burns in vacuum run at 4x (still fully simulated)
-	if want == 1 and C.ap and not C.ap.wakeAt and ship.thrustNow > 0 and ship.env.rho < 1e-6 then want = 4 end
+	if want == 1 and C.ap and not C.ap.wakeAt and ship.thrustNow > 0 and ship.env.rho < 1e-6 then want = if canWarp(10) then 10 else 4 end
 	if not canWarp(want) then want = 1; if warpIdx > 3 then warpIdx = 1 end end
 	ship.warp = math.max(1, want)
 	-- simulate

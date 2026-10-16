@@ -11,6 +11,7 @@ ship.r:set(r, 0, 0)
 ship.v:copy(THREE.Vector3.new(0, 1, 0):cross(ship.r):normalize()):multiplyScalar(math.sqrt(EARTH.mu / r))
 ship.parked = nil; ship.ctl.gear = false
 local DAY = 86400
+local BURNWARP = BURNWARP or 1
 local function cruiseWake(s)
 	local p = O.predict(s.r, s.v, s.t, { maxT = 500 * DAY, maxSteps = 20000, oneRev = false, noExtend = true, marsStop = -MARS.R * 0.9 })
 	return p.closeMars.t
@@ -47,6 +48,7 @@ while C.ap and frames < 3e6 do
 		for _, lv in ipairs(levels) do if lv * dt * 3 < left and canWarp(lv) then want = lv end end
 		if left <= 30 then want = 1 end
 	end
+	if want == 1 and C.ap and not C.ap.wakeAt and ship.thrustNow > 0 and ship.env.rho < 1e-6 and ship.env.agl > 20000 then want = BURNWARP or 1 end
 	ship.warp = want
 	ship:step(dt, C)
 	frames += 1

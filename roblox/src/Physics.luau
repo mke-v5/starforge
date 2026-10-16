@@ -182,12 +182,15 @@ function Ship:step(dtFrame, controller)
 	if self.dead then return end
 	local craft = self.craft
 	local warp = self.warp
-	local rails = warp > 4
+	-- burns far out in vacuum may run fully simulated at up to 10x (long autopilot burns); otherwise
+	-- anything above 4x coasts on rails
+	local vacBurn = self.env.rho < 1e-6 and self.env.agl > 20000 and (self.thrustNow > 0 or self.ctl.throttle > 0)
+	local rails = warp > (if vacBurn then 10 else 4)
 	if self.parked then self:stepParked(dtFrame * warp, controller); return end
 	if rails then self:stepRails(dtFrame * warp, controller); return end
 	local total = dtFrame * warp
 	local contactish = self.contacts > 0 or self.env.agl < 50
-	local h = if contactish then 1 / 240 else 1 / 120
+	local h = if contactish then 1 / 240 elseif warp > 4 then 1 / 60 else 1 / 120
 	local n = math.min(64, math.max(1, math.ceil(total / h)))
 	local dt = total / n
 	self.lastV:copy(self.v)

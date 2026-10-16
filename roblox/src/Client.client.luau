@@ -428,6 +428,11 @@ local function startFlight(entry)
 	if paint and paint.hull then craft.colors = { hull = paint.hull, accent = paint.accent } end
 	ship = Physics.Ship.new(craft, world, eph, settings)
 	C = Control.Controller.new(settings)
+	C.onApDone = function(out)
+		-- after an autopilot lands us, leave the ship stopped instead of driving off on the old throttle
+		if ship.contacts > 0 or ship.parked then C.input.throttle = 0; C.input.brake = true end
+		if out.throttle then C.input.throttle = out.throttle end
+	end
 	local vert = craft.vertical
 	if vert then
 		ship:placeAt(EARTH, SITE.lat, SITE.lon + 0.004, craft.box.max.z - craft.com.z + 0.15, 0, math.pi / 2)
@@ -696,7 +701,7 @@ RunService.RenderStepped:Connect(function(dtRaw)
 end)
 frame = function(dtRaw)
 	local _frame0 = os.clock()
-	local dt = math.min(dtRaw, 0.05)
+	local dt = math.min(dtRaw, 0.1)   -- keep real time even on slow devices (physics substeps internally)
 	simTime += dt
 	-- inputs
 	C.input.pitch = axisKey(Enum.KeyCode.S, Enum.KeyCode.W) + hud.stickY

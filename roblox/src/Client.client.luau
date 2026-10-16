@@ -71,6 +71,154 @@ for i = 1, 6 do dome[i] = anchored("Part", { Name = "Space", Size = Vector3.new(
 local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
 atmosphere.Parent = Lighting
 
+----------------------------------------------------------------- scenery: coast, fields, a town, trees and clouds
+-- Everything is generated from the position (metres east/north of the spaceport), so it is the same for every
+-- player and every visit. Objects come from a pool of parts that is re-assigned as you fly.
+local function coastE(n) return 4800 + 600 * math.sin(n / 3500) + 300 * math.sin(n / 900 + 1.3) end
+local function isWaterAt(e, n) return e > coastE(n) end
+local function hash2(i, j, salt)
+	local h = bit32.bxor(bit32.bxor((i * 73856093) % 4294967296, (j * 19349663) % 4294967296), (salt * 83492791) % 4294967296)
+	return (h % 1000003) / 1000003
+end
+local FIELD = { Color3.fromRGB(86, 120, 64), Color3.fromRGB(98, 132, 70), Color3.fromRGB(110, 128, 66), Color3.fromRGB(76, 110, 60), Color3.fromRGB(124, 136, 78) }
+local SEA, SAND = Color3.fromRGB(28, 82, 128), Color3.fromRGB(214, 200, 150)
+local function groundStyle(e, n)
+	local c = coastE(n)
+	if e > c + 60 then return SEA, Enum.Material.SmoothPlastic end
+	if e > c - 160 then return SAND, Enum.Material.Sand end
+	local i, j = math.floor(e / 700), math.floor(n / 700)
+	return FIELD[1 + math.floor(hash2(i, j, 7) * #FIELD)], Enum.Material.Grass
+end
+
+local CELL = 250
+local cellCache = {}
+local BUILD_COLORS = { Color3.fromRGB(200, 200, 196), Color3.fromRGB(170, 172, 176), Color3.fromRGB(214, 196, 168), Color3.fromRGB(120, 126, 136), Color3.fromRGB(230, 230, 226) }
+local function cellObjects(ci, cj)
+	local key = ci .. "," .. cj
+	local c = cellCache[key]
+	if c then return c end
+	c = {}
+	local rng = Random.new(ci * 100003 + cj * 7919 + 17)
+	local e0, n0 = ci * CELL, cj * CELL
+	local town = e0 > -5200 and e0 < -1800 and n0 > -2600 and n0 < 2600
+	local function free(e, n)
+		if isWaterAt(e, n) then return false end
+		if math.abs(n) < 160 and math.abs(e) < 1750 then return false end   -- runway
+		if e > -1300 and e < -900 and n > -60 and n < 260 then return false end -- hangar
+		return true
+	end
+	if town then
+		local downtown = math.abs(e0 + 3400) < 700 and math.abs(n0) < 700
+		for _ = 1, rng:NextInteger(3, 6) do
+			local e, n = e0 + rng:NextNumber(20, CELL - 20), n0 + rng:NextNumber(20, CELL - 20)
+			if free(e, n) then
+				local tall = downtown and rng:NextNumber() < 0.5
+				local w, d = rng:NextNumber(18, 45), rng:NextNumber(18, 45)
+				local h = if tall then rng:NextNumber(60, 160) else rng:NextNumber(8, 30)
+				table.insert(c, { e = e, n = n, y = h / 2, size = Vector3.new(w, h, d), shape = Enum.PartType.Block,
+					color = if tall then Color3.fromRGB(110, 150, 190) else BUILD_COLORS[rng:NextInteger(1, #BUILD_COLORS)],
+					mat = if tall then Enum.Material.Glass else Enum.Material.Concrete, rot = rng:NextNumber(0, 0.3) })
+			end
+		end
+	else
+		local dense = hash2(math.floor(e0 / 1500), math.floor(n0 / 1500), 3)
+		local count = if dense > 0.55 then rng:NextInteger(4, 9) else rng:NextInteger(0, 2)
+		for _ = 1, count do
+			local e, n = e0 + rng:NextNumber(0, CELL), n0 + rng:NextNumber(0, CELL)
+			if free(e, n) then
+				local r = rng:NextNumber(5, 9)
+				table.insert(c, { e = e, n = n, y = r * 1.1, size = Vector3.new(2 * r, 2.2 * r, 2 * r), shape = Enum.PartType.Ball,
+					color = Color3.fromRGB(46 + rng:NextInteger(0, 20), 84 + rng:NextInteger(0, 30), 40), mat = Enum.Material.Grass, rot = 0 })
+			end
+		end
+	end
+	cellCache[key] = c
+	return c
+end
+local CLOUD_CELL = 2200
+local cloudCache = {}
+local function cloudObjects(ci, cj)
+	local key = ci .. "," .. cj
+	local c = cloudCache[key]
+	if c then return c end
+	c = {}
+	local rng = Random.new(ci * 30011 + cj * 6151 + 99)
+	if rng:NextNumber() < 0.55 then
+		local e, n, h = (ci + rng:NextNumber()) * CLOUD_CELL, (cj + rng:NextNumber()) * CLOUD_CELL, rng:NextNumber(1100, 2600)
+		local base = rng:NextNumber(120, 260)
+		for b = 1, rng:NextInteger(3, 5) do
+			local r = base * rng:NextNumber(0.6, 1.1)
+			table.insert(c, { e = e + rng:NextNumber(-1.2, 1.2) * base, n = n + rng:NextNumber(-0.8, 0.8) * base, y = h + rng:NextNumber(-0.2, 0.3) * base,
+				size = Vector3.new(2.2 * r, 1.1 * r, 1.8 * r), shape = Enum.PartType.Ball, color = Color3.fromRGB(245, 247, 250), mat = Enum.Material.SmoothPlastic, rot = 0, cloud = true })
+		end
+	end
+	cloudCache[key] = c
+	return c
+end
+
+local pool, poolUsed, poolK, poolO = {}, 0, {}, {}
+local function poolPart(i)
+	local p = pool[i]
+	if not p then
+		p = Instance.new("Part")
+		p.Anchored = true; p.CanCollide = false; p.CanQuery = false; p.CanTouch = false; p.CastShadow = false
+		p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Name = "Scenery"; p.Parent = scene
+		pool[i] = p
+	end
+	return p
+end
+local bulkParts, bulkCF = {}, {}
+-- draw scenery around (xe, xn); k = ground scale; gy = ground height in studs
+local function drawScenery(xe, xn, agl, k, gy, show)
+	table.clear(bulkParts); table.clear(bulkCF)
+	local n = 0
+	local kq = math.exp(math.floor(math.log(k) / 0.03 + 0.5) * 0.03)   -- sizes change in 3% steps
+	local function put(o)
+		n += 1
+		local p = poolPart(n)
+		if poolK[n] ~= kq or poolO[n] ~= o.id then
+			if p.Shape ~= o.shape then p.Shape = o.shape end
+			p.Size = o.size * (S * kq)
+			p.Color = o.color; p.Material = o.mat
+			p.Transparency = if o.cloud then 0.18 else 0
+			poolK[n] = kq; poolO[n] = o.id
+		end
+		bulkParts[n] = p
+		bulkCF[n] = CFrame.new((o.e - xe) * S * k, gy + o.y * S * k, -(o.n - xn) * S * k) * CFrame.Angles(0, o.rot, 0)
+	end
+	if show and agl < 2500 then
+		local R = 2600
+		local ci0, cj0 = math.floor((xe - R) / CELL), math.floor((xn - R) / CELL)
+		local ci1, cj1 = math.floor((xe + R) / CELL), math.floor((xn + R) / CELL)
+		for ci = ci0, ci1 do
+			for cj = cj0, cj1 do
+				local dx, dy = (ci + 0.5) * CELL - xe, (cj + 0.5) * CELL - xn
+				if dx * dx + dy * dy < R * R then
+					for idx, o in ipairs(cellObjects(ci, cj)) do
+						o.id = o.id or (ci * 1000 + cj) * 16 + idx
+						if n < 900 then put(o) end
+					end
+				end
+			end
+		end
+	end
+	if show then
+		local R = 14000
+		for ci = math.floor((xe - R) / CLOUD_CELL), math.floor((xe + R) / CLOUD_CELL) do
+			for cj = math.floor((xn - R) / CLOUD_CELL), math.floor((xn + R) / CLOUD_CELL) do
+				for idx, o in ipairs(cloudObjects(ci, cj)) do
+					o.id = o.id or -((ci * 1000 + cj) * 16 + idx) - 1
+					if n < 1100 then put(o) end
+				end
+			end
+		end
+	end
+	for i = n + 1, poolUsed do pool[i].Transparency = 1; poolO[i] = nil end
+	poolUsed = n
+	if n > 0 then workspace:BulkMoveTo(bulkParts, bulkCF, Enum.BulkMoveMode.FireCFrameChanged) end
+end
+
 ----------------------------------------------------------------- flight state
 local eph = Astro.Ephemeris.new():update(Astro.nowSimTime())
 local settings = { heatScale = 1, crashScale = 1, assist = "assisted" }
@@ -528,8 +676,12 @@ RunService.RenderStepped:Connect(function(dtRaw)
 			local p = tiles[idx]
 			p.Transparency = if showGround then 0 else 1
 			if showGround then
+				local wx, wz = (i - (NT + 1) / 2) * T - ox, (j - (NT + 1) / 2) * T - oz
 				p.Size = Vector3.new(T, 4, T)
-				p.CFrame = CFrame.new((i - (NT + 1) / 2) * T - ox, gy - 2, -((j - (NT + 1) / 2) * T - oz))
+				p.CFrame = CFrame.new(wx, gy - 2, -wz)
+				local col, mat = groundStyle(xe + wx / (S * k), xn + wz / (S * k))
+				if p.Color ~= col then p.Color = col end
+				if p.Material ~= mat then p.Material = mat end
 			end
 		end
 	end
@@ -547,6 +699,8 @@ RunService.RenderStepped:Connect(function(dtRaw)
 		hangar.Size = Vector3.new(60 * S * k, 22 * S * k, 50 * S * k)
 		hangar.CFrame = base * CFrame.new(-1100 * S * k, 11 * S * k, -120 * S * k)
 	end
+
+	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000)
 
 	-- ---------- rings ----------
 	local ringsVisible = showGround and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000

@@ -48,6 +48,7 @@ function Hud.new(player, cb)
 	-- buttons, right
 	local side = make("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 52), Size = UDim2.new(0, 170, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, gui)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
+	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, 0).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
 	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function() cb.onNextShip() end, 1)
 	button(side, "Auto: climb to orbit", function() cb.onAuto("orbit") end, 2)
 	button(side, "Auto: land", function() cb.onAuto("land") end, 3)
@@ -60,6 +61,12 @@ function Hud.new(player, cb)
 	end
 	local warpRow = make("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 6 }, side)
 	make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, warpRow)
+	local keyRow = make("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, LayoutOrder = 7 }, side)
+	make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, keyRow)
+	for _, m in ipairs({ { "Gear", "gear" }, { "Brake", "brake" }, { "Retry", "restart" } }) do
+		local b = button(keyRow, m[1], function() if cb.onKey then cb.onKey(m[2]) end end)
+		b.Size = UDim2.new(1 / 3, -3, 1, 0)
+	end
 	local wd = button(warpRow, "◀ warp", function() cb.onWarp(-1) end); wd.Size = UDim2.new(0.5, -2, 1, 0)
 	local wu = button(warpRow, "warp ▶", function() cb.onWarp(1) end); wu.Size = UDim2.new(0.5, -2, 1, 0)
 	-- throttle slider, bottom right
@@ -136,6 +143,21 @@ function Hud.new(player, cb)
 	-- controls help
 	make("TextLabel", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -8), Size = UDim2.new(0, 700, 0, 18), BackgroundTransparency = 1, TextColor3 = DIM, Font = FONT, TextSize = 13,
 		Text = "Shift/Ctrl throttle · Z full · X cut · W/S pitch · A/D roll · Q/E yaw · G gear · B brakes · , . warp · R restart · right-drag camera · wheel zoom", Visible = not UIS.TouchEnabled }, gui)
+	-- shrink everything on small screens (phones)
+	self.uiScale = 1
+	local scales = {}
+	for _, c in ipairs(gui:GetChildren()) do
+		if c:IsA("GuiObject") and c ~= self.banner then table.insert(scales, make("UIScale", { Scale = 1 }, c)) end
+	end
+	local function rescale()
+		local vp = workspace.CurrentCamera.ViewportSize
+		local sc = math.clamp(math.min(vp.X / 1300, vp.Y / 760), 0.55, 1)
+		self.uiScale = sc
+		for _, u in ipairs(scales) do u.Scale = sc end
+		self.bannerScale.Scale = sc
+	end
+	rescale()
+	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(rescale)
 	return self
 end
 
@@ -160,8 +182,8 @@ function Hud:showBanner(title, sub, secs)
 	self.banner.Visible = true
 	self.bannerTitle.Text = title
 	self.bannerSub.Text = sub or ""
-	self.bannerScale.Scale = 0.6
-	game:GetService("TweenService"):Create(self.bannerScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	self.bannerScale.Scale = 0.6 * self.uiScale
+	game:GetService("TweenService"):Create(self.bannerScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = self.uiScale }):Play()
 	self.bannerUntil = os.clock() + (secs or 3.5)
 end
 

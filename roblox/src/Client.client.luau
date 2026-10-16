@@ -20,6 +20,7 @@ local Orbit = require(SF.Orbit)
 local Designs = require(SF.DesignsData)
 local ShipModel = require(SF.ShipModel)
 local Progress = require(SF.Progress)
+local Shop = require(SF.Shop)
 local TweenService = game:GetService("TweenService")
 local V3 = THREE.Vector3.new
 local EARTH, MOON, D2R = Geo.EARTH, Geo.MOON, Geo.D2R
@@ -219,6 +220,52 @@ local function drawScenery(xe, xn, agl, k, gy, show)
 	if n > 0 then workspace:BulkMoveTo(bulkParts, bulkCF, Enum.BulkMoveMode.FireCFrameChanged) end
 end
 
+----------------------------------------------------------------- engine trail (bought in the shop)
+local TRAIL_N = 90
+local trailPts = {}      -- { e, n, h, t }
+local trailParts = {}
+for i = 1, TRAIL_N do trailParts[i] = anchored("Part", { Name = "Trail", Size = Vector3.one, Material = Enum.Material.Neon, CastShadow = false, Transparency = 1 }) end
+local lastTrail = 0
+local trailParts2, trailCF = {}, {}
+local function drawTrail(xe, xn, agl, k, tailE, tailN, tailU, simT, active)
+	local def = Shop.find(state.trail or "")
+	if not def or not def.color then
+		if #trailPts > 0 then table.clear(trailPts); for _, p in ipairs(trailParts) do p.Transparency = 1 end end
+		return
+	end
+	if active and simT - lastTrail > 0.07 then
+		lastTrail = simT
+		table.insert(trailPts, { tailE, tailN, tailU, simT })
+		if #trailPts > TRAIL_N then table.remove(trailPts, 1) end
+	end
+	table.clear(trailParts2); table.clear(trailCF)
+	local life = 6
+	local w = def.width * S * k
+	for i = 1, TRAIL_N do
+		local p = trailParts[i]
+		local a, b = trailPts[i], trailPts[i + 1]
+		if not a then p.Transparency = 1; continue end
+		local bE, bN, bU = if b then b[1] else tailE, if b then b[2] else tailN, if b then b[3] else tailU
+		local p0 = Vector3.new((a[1] - xe) * S * k, (a[3] - agl) * S * k, -(a[2] - xn) * S * k)
+		local p1 = Vector3.new((bE - xe) * S * k, (bU - agl) * S * k, -(bN - xn) * S * k)
+		local len = (p1 - p0).Magnitude
+		local age = simT - a[4]
+		if len < 0.01 or len > 400 * S * k or age > life then p.Transparency = 1; continue end
+		local f = age / life
+		p.Transparency = 0.15 + 0.85 * f
+		local col
+		if def.color == "rainbow" then col = Color3.fromHSV((a[4] * 0.25) % 1, 0.85, 1)
+		else col = Shop.hex(def.color) end
+		p.Color = col
+		p.Material = if def.neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+		local ww = w * (1 + f * (if def.neon then 0.3 else 2.5))
+		p.Size = Vector3.new(ww, ww, len + ww * 0.5)
+		table.insert(trailParts2, p)
+		table.insert(trailCF, CFrame.lookAt((p0 + p1) / 2, p1))
+	end
+	if #trailParts2 > 0 then workspace:BulkMoveTo(trailParts2, trailCF, Enum.BulkMoveMode.FireCFrameChanged) end
+end
+
 ----------------------------------------------------------------- flight state
 local eph = Astro.Ephemeris.new():update(Astro.nowSimTime())
 local settings = { heatScale = 1, crashScale = 1, assist = "assisted" }
@@ -232,6 +279,7 @@ local warpLevels = { 1, 2, 4, 10, 50, 100, 1000, 10000, 100000 }
 local warpIdx = 1
 
 local hud -- forward
+local airTime = 0
 local dbgStick, dbgPos, dbgNoScenery = nil, { 0, 0 }, false
 local dbgTimes = { sim = 0, scen = 0, ghost = 0, hud = 0, frame = 0 }
 
@@ -268,6 +316,16 @@ resetFlags()
 
 local bannerQueue = {}
 local function banner(title, sub, secs) table.insert(bannerQueue, { title, sub, secs }) end
+-- give xp and credits; announces level-ups and what they unlock
+local function grant(xp, credits)
+	local ups = Progress.reward(state, xp, credits)
+	for _, lv in ipairs(ups) do
+		local unlocked = {}
+		for _, d in ipairs(Designs) do if Progress.SHIP_LEVEL[d.key] == lv then table.insert(unlocked, d.design.name) end end
+		banner("LEVEL " .. lv .. "!", if #unlocked > 0 then "Unlocked: " .. table.concat(unlocked, ", ") .. " — tap the Ship button" else "Keep flying", 4)
+	end
+	save()
+end
 
 ----------------------------------------------------------------- sounds and effects
 local SoundService = game:GetService("SoundService")
@@ -349,6 +407,7 @@ local function fmtRace(t) return string.format("%d:%05.2f", math.floor(t / 60), 
 
 local function startFlight(entry)
 	if view then view.model:Destroy() end
+	table.clear(trailPts)
 	resetFlags()
 	race.next = 1; race.startT = nil
 	if hud then hud:setRace(nil); hud:setShip("Ship: " .. entry.design.name) end
@@ -356,6 +415,9 @@ local function startFlight(entry)
 	design = entry
 	eph:update(Astro.nowSimTime())
 	craft = Craft.new(entry.design)
+	craft.thrustMult = Shop.thrustMult(state)
+	local paint = Shop.find(state.paint or "")
+	if paint and paint.hull then craft.colors = { hull = paint.hull, accent = paint.accent } end
 	ship = Physics.Ship.new(craft, world, eph, settings)
 	C = Control.Controller.new(settings)
 	local vert = craft.vertical
@@ -551,6 +613,39 @@ hud = require(SF.Hud).new(player, {
 		elseif kind == "off" then C:cancelAp(); toast("Autopilot off") end
 	end,
 	onSas = function(mode) if ship then C:setSas(mode); toast("SAS: " .. mode) end end,
+	onShop = function()
+		Shop.open(hud.gui, {
+			state = function() return state end,
+			buy = function(kind, it)
+				if state.credits < it.price then return false, string.format("You need %d more credits", it.price - state.credits) end
+				state.credits -= it.price
+				if kind == "tune" then state.tune = it.level; craft.thrustMult = Shop.thrustMult(state)
+				else state.owned = state.owned or {}; state.owned[it.id] = true end
+				sfx("chime", 0.7, 1.2)
+				toast("Bought " .. it.name)
+				save(); flushSave(true)
+				return true
+			end,
+			equip = function(kind, it)
+				if kind == "paint" then
+					state.paint = it.id
+					craft.colors = if it.hull then { hull = it.hull, accent = it.accent } else (design.design.colors or craft.colors)
+					if view then view.model:Destroy() end
+					view = ShipModel.build(craft, design.design.name)
+					view.model.Parent = scene
+				else
+					state.trail = it.id
+				end
+				save()
+			end,
+		}, hud.uiScale)
+	end,
+	onKey = function(kind)
+		if not ship then return end
+		if kind == "gear" then ship.ctl.gear = not ship.ctl.gear; toast(if ship.ctl.gear then "Gear down" else "Gear up")
+		elseif kind == "brake" then C.input.brake = not C.input.brake; toast(if C.input.brake then "Brakes on" else "Brakes off")
+		elseif kind == "restart" then startFlight(design) end
+	end,
 	onWarp = function(d) warpIdx = math.clamp(warpIdx + d, 1, #warpLevels) end,
 	onThrottle = function(v) if C then C.input.throttle = v end end,
 	onStick = function(x, y) if C then C.input.roll = x; C.input.pitch = y end end,
@@ -708,6 +803,13 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	drawScenery(xe, xn, agl, k, gy, showGround and E.h < 40000 and not dbgNoScenery)
 	dbgTimes.scen = dbgTimes.scen * 0.9 + (os.clock() - _c1) * 100
 
+	-- trail from the ship's tail (the end opposite the nose)
+	do
+		local back = -cf.LookVector * (craft.size * 0.5)
+		local emitting = ship.thrustNow > 0 and not ship.dead and E.agl > 3
+		drawTrail(xe, xn, agl, k, xe + back.X, xn - back.Z, E.h + back.Y, simTime, emitting)
+	end
+
 	-- ---------- rings ----------
 	local ringsVisible = showGround and E.h < 8000 and math.abs(xe) < 30000 and math.abs(xn) < 30000
 	for i, ring in ipairs(rings) do placeRing(ring, i, xe, xn, agl, k, ringsVisible) end
@@ -725,6 +827,7 @@ RunService.RenderStepped:Connect(function(dtRaw)
 		if ringNow.side and ringNow.side < 0 and side >= 0 and lat2 < (ringNow.r * 1.15) ^ 2 then
 			-- through the ring
 			flags.ringsPassed += 1
+			state.credits += 5
 			if race.next == 1 then race.startT = simTime end
 			race.next += 1
 			sfx("ring", 0.7, 1 + race.next * 0.04)
@@ -736,7 +839,7 @@ RunService.RenderStepped:Connect(function(dtRaw)
 				local record = not best or t < best
 				if record then state.bestRace = t end
 				banner(if record then "NEW RECORD!" else "RACE COMPLETE", string.format("Time %s%s", fmtRace(t), if best then "  ·  best " .. fmtRace(math.min(best, t)) else ""), 4)
-				Progress.reward(state, if record then 40 else 15, if record then 150 else 50)
+				grant(if record then 40 else 15, if record then 150 else 50)
 				save()
 				race.next = 1; race.startT = nil
 				hud:setRace(nil)
@@ -754,7 +857,11 @@ RunService.RenderStepped:Connect(function(dtRaw)
 	-- ---------- missions ----------
 	if not ship.dead then
 		local airborne = ship.contacts == 0 and E.agl > 5
-		if airborne then flags.airborne = true end
+		if airborne then
+			flags.airborne = true
+			airTime += dt
+			if airTime > 15 then airTime -= 15; state.credits += 2; save() end
+		end
 		if E.h > 10000 then flags.wasHigh = true end
 		if flags.airborne and ship.contacts > 0 and E.vSurf < 3 and E.body == EARTH and math.abs(xn) < 60 and math.abs(xe) < 1600 then
 			flags.landedRunway = true
@@ -774,14 +881,9 @@ RunService.RenderStepped:Connect(function(dtRaw)
 		ship.lastMach = E.mach
 		local m = Progress.check(state, { E = E, key = design.key, flags = flags, orbitPe = orbitPe, ship = ship, craft = craft })
 		if m then
-			local ups = Progress.reward(state, m.xp, m.credits)
 			sfx("chime", 0.9)
 			banner("MISSION COMPLETE", string.format("%s   +%d XP   +%d credits", m.title, m.xp, m.credits), 3.5)
-			for _, lv in ipairs(ups) do
-				local unlocked = {}
-				for _, d in ipairs(Designs) do if Progress.SHIP_LEVEL[d.key] == lv then table.insert(unlocked, d.design.name) end end
-				banner("LEVEL " .. lv .. "!", if #unlocked > 0 then "Unlocked: " .. table.concat(unlocked, ", ") .. " — tap the Ship button" else "Keep flying", 4)
-			end
+			grant(m.xp, m.credits)
 			save()
 			hud:setMission(Progress.current(state))
 		end
@@ -875,4 +977,16 @@ if state.flights <= 1 then
 	banner("WELCOME TO STARFORGE", "Complete missions to earn XP, level up and unlock new ships", 5)
 else
 	banner("WELCOME BACK", string.format("Level %d  ·  %d credits", state.level, state.credits), 3)
+end
+-- daily bonus, bigger for each day in a row (up to a week)
+do
+	local day = math.floor(os.time() / 86400)
+	if state.lastDay ~= day then
+		state.streak = if state.lastDay == day - 1 then (state.streak or 0) + 1 else 1
+		state.lastDay = day
+		local bonus = 100 + 50 * math.min(state.streak - 1, 6)
+		state.credits += bonus
+		banner("DAILY BONUS", string.format("Day %d in a row  ·  +%d credits — come back tomorrow for more", state.streak, bonus), 4)
+		save()
+	end
 end

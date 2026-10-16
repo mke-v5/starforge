@@ -47,6 +47,15 @@ local function clean(s)
 	out.flights = math.clamp(math.floor(tonumber(s.flights) or 0), 0, 1e7)
 	local br = tonumber(s.bestRace)
 	if br and br > 20 and br < 36000 then out.bestRace = br end
+	out.tune = math.clamp(math.floor(tonumber(s.tune) or 0), 0, 3)
+	out.streak = math.clamp(math.floor(tonumber(s.streak) or 0), 0, 10000)
+	out.lastDay = math.clamp(math.floor(tonumber(s.lastDay) or 0), 0, 1e7)
+	if type(s.paint) == "string" and #s.paint < 32 then out.paint = s.paint end
+	if type(s.trail) == "string" and #s.trail < 32 then out.trail = s.trail end
+	out.owned = {}
+	if type(s.owned) == "table" then
+		for k, v in pairs(s.owned) do if type(k) == "string" and #k < 32 and v == true then out.owned[k] = true end end
+	end
 	if type(s.done) == "table" then
 		for k, v in pairs(s.done) do if type(k) == "string" and #k < 32 and v == true then out.done[k] = true end end
 	end

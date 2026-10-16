@@ -232,6 +232,10 @@ end
 -- ---------- engines ----------
 -- thrust (N) and isp (s) at full throttle in the engine's current mode
 function Craft:engineOutput(P, env)
+	local T, isp = self:engineOutputBase(P, env)
+	return T * (self.thrustMult or 1), isp
+end
+function Craft:engineOutputBase(P, env)
 	local E, e = P.eng, P.eng.e
 	local sig = env.rho / 1.225
 	if E.mode == "jet" or E.mode == "air" or E.mode == "scram" then

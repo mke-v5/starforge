@@ -883,7 +883,12 @@ hud = require(SF.Hud).new(player, {
 				raiseOrbitStep,
 				function() return Control.planBurnAp("Moon transfer", function(s) return Orbit.planMoonTransfer(s, 100000) end) end,
 				function() return Control.planBurnAp("Course correction", function(s) return Orbit.planCorrection(s, MOON, 100000) end, true) end,
-				function() return Control.waitAp("Coast to the Moon", function(s) return s.env.body == MOON and Orbit.relState(s, MOON).r:length() - MOON.R < 3e6 end, function(s) return nil end) end,
+				function()
+					return Control.waitAp("Coast to the Moon", function(s) return s.env.body == MOON end, function(s)
+						local p = Orbit.predict(s.r, s.v, s.t, { maxT = 7 * 86400, maxSteps = 3000, oneRev = false, maxStep = 1800 })
+						return if p.soiIn then p.soiIn + 30 else s.t + 3600
+					end)
+				end,
 				function() return Control.planBurnAp("Lunar orbit capture", function(s) return Orbit.planCapture(s, 100000) end) end,
 			}))
 			toast("Autopilot: flying to the Moon (time warp speeds up the coast)")

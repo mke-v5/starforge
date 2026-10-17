@@ -36,8 +36,9 @@ end)
 local store
 pcall(function() store = DataStoreService:GetDataStore("StarforgeV1") end)
 
--- Game passes: put the pass ids here once they are created in the Creator Hub (0 = not on sale)
-local GAMEPASS = { VIP = 0 }   -- VIP: double credits from everything
+-- Game passes (ids from the Creator Hub). Owning one sets a player attribute of the same name.
+--   VIP: double credits · SHIPS: every ship unlocked · STYLE: every paint job and trail
+local GAMEPASS = { VIP = 2037879033, SHIPS = 2040698517, STYLE = 2036787038 }
 local MarketplaceService = game:GetService("MarketplaceService")
 local function checkPasses(player)
 	for name, id in pairs(GAMEPASS) do
@@ -52,6 +53,16 @@ MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, id, b
 	for name, pid in pairs(GAMEPASS) do if pid == id then player:SetAttribute(name, true) end end
 end)
 RS:SetAttribute("VipPass", GAMEPASS.VIP)
+for name, id in pairs(GAMEPASS) do RS:SetAttribute("Pass_" .. name, id) end
+
+-- Developer products: credit packs (can be bought again and again)
+local CREDIT_PACKS = { [3719068622] = 1000, [3719068845] = 5000, [3719069036] = 15000 }
+for id, n in pairs(CREDIT_PACKS) do RS:SetAttribute("Pack_" .. n, id) end
+local Granted = remotes:FindFirstChild("Granted") or Instance.new("RemoteEvent")
+Granted.Name = "Granted"; Granted.Parent = remotes
+local receiptStore
+pcall(function() receiptStore = DataStoreService:GetDataStore("StarforgeReceiptsV1") end)
+local grantLog = {}   -- userId -> { [seq] = credits } granted this session (re-applied if a client save lags behind)
 
 -- global best race times per course (hundredths of a second, lower is better), cached for a minute
 local COURSE_STORE = { spaceport = "RaceTimesV1", coast = "RaceTimes_coast" }
@@ -97,6 +108,17 @@ end
 local cache = {}     -- userId -> state
 local loaded = {}
 
+-- give credits from the server (purchases, codes): logged so a client save that lags behind can't undo them
+local function grantCredits(player, amount)
+	local s = cache[player.UserId]
+	s.grantSeq = (s.grantSeq or 0) + 1
+	s.credits += amount
+	grantLog[player.UserId] = grantLog[player.UserId] or {}
+	grantLog[player.UserId][s.grantSeq] = amount
+	Granted:FireClient(player, s.grantSeq, amount)
+	return s.grantSeq
+end
+
 local function clean(s)
 	-- only keep plain fields of the right types and sane ranges
 	if type(s) ~= "table" then return nil end
@@ -134,6 +156,7 @@ local function clean(s)
 			if type(k) == "string" and COURSE_STORE[k] and n and n > 30 and n < 36000 then out.bestRaces[k] = n end
 		end
 	end
+	out.grantSeq = math.clamp(math.floor(tonumber(s.grantSeq) or 0), 0, 1e9)
 	out.codes = {}
 	if type(s.codes) == "table" then
 		for k, v in pairs(s.codes) do if type(k) == "string" and #k < 24 and v == true then out.codes[k] = true end end
@@ -185,6 +208,14 @@ Save.OnServerEvent:Connect(function(player, s)
 	s = clean(s)
 	if not s then return end
 	local prev = cache[player.UserId]
+	-- credit packs bought this session that this save doesn't include yet
+	if prev and (prev.grantSeq or 0) > s.grantSeq then
+		local log = grantLog[player.UserId] or {}
+		for seq = s.grantSeq + 1, prev.grantSeq do s.credits += (log[seq] or 0) end
+		s.grantSeq = prev.grantSeq
+	end
+	-- codes redeemed on the server stay redeemed
+	if prev and prev.codes then for k in pairs(prev.codes) do s.codes[k] = true end end
 	if s.bestRace and (not prev or not prev.bestRace or s.bestRace < prev.bestRace - 0.005) then task.spawn(submitRace, player, s.bestRace, "spaceport") end
 	for id, t in pairs(s.bestRaces) do
 		local old = prev and prev.bestRaces and prev.bestRaces[id]
@@ -215,9 +246,34 @@ Redeem.OnServerInvoke = function(player, code)
 	s.codes = s.codes or {}
 	if s.codes[code] then return false, "You already used that code" end
 	s.codes[code] = true
-	s.credits += amount
+	grantCredits(player, amount)
 	task.spawn(savePlayer, player)
 	return true, amount, code
+end
+
+-- purchases of credit packs: recorded once per receipt, added to the saved state, then told to the client
+MarketplaceService.ProcessReceipt = function(info)
+	local amount = CREDIT_PACKS[info.ProductId]
+	if not amount then return Enum.ProductPurchaseDecision.NotProcessedYet end
+	local player = Players:GetPlayerByUserId(info.PlayerId)
+	if not player or not loaded[info.PlayerId] then return Enum.ProductPurchaseDecision.NotProcessedYet end
+	-- already granted? (Roblox retries until we say PurchaseGranted)
+	if receiptStore then
+		local ok, done = pcall(function() return receiptStore:GetAsync(info.PurchaseId) end)
+		if not ok then return Enum.ProductPurchaseDecision.NotProcessedYet end
+		if done then return Enum.ProductPurchaseDecision.PurchaseGranted end
+	end
+	-- save first; only then hand the credits over
+	local s = cache[info.PlayerId]
+	local trial = table.clone(s)
+	trial.credits += amount; trial.grantSeq = (s.grantSeq or 0) + 1
+	if store then
+		local ok = pcall(function() store:SetAsync("u" .. info.PlayerId, trial) end)
+		if not ok then return Enum.ProductPurchaseDecision.NotProcessedYet end
+	end
+	if receiptStore then pcall(function() receiptStore:SetAsync(info.PurchaseId, true) end) end
+	grantCredits(player, amount)
+	return Enum.ProductPurchaseDecision.PurchaseGranted
 end
 
 Players.PlayerAdded:Connect(function(p) task.spawn(checkPasses, p); loadPlayer(p) end)

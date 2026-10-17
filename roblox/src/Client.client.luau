@@ -439,9 +439,14 @@ local function dailyText()
 	return '<font color="#ffb347">TODAY</font>  ' .. table.concat(parts, "  ·  ")
 end
 K.GIFTS = { { 3, 50 }, { 10, 100 }, { 20, 200 }, { 35, 350 }, { 60, 600 } }   -- { minutes, credits }
-local giftIdx, playT = 1, 0
+K.giftIdx, K.playT = 1, 0
 local function creditMult() return if player:GetAttribute("VIP") then 2 else 1 end
 local function addCredits(n) state.credits += n * creditMult() end
+-- Robux store: game passes are bought here; the server sets the matching player attribute
+function K.promptPass(name)
+	local id = RS:GetAttribute("Pass_" .. name)
+	if id and id ~= 0 then game:GetService("MarketplaceService"):PromptGamePassPurchase(player, id) end
+end
 local function grant(xp, credits)
 	local ups = Progress.reward(state, xp, credits * creditMult())
 	for _, lv in ipairs(ups) do
@@ -672,7 +677,7 @@ end
 
 -- landing rating: sink rate and accuracy give 1-3 stars and credits
 local touch = { armed = false, at = nil, auto = false }
-local lastSink = 0
+K.lastSink = 0
 local function rateLanding(td)
 	local sinkPts = if td.sink <= 1 then 3 elseif td.sink <= 2 then 2 elseif td.sink <= 3.5 then 1 else 0
 	local where, aimPts, off
@@ -924,6 +929,7 @@ local function openHangar(title)
 	Hangar.open(hud.gui, {
 		designs = Designs, current = design.key, state = state, title = title, scale = hud.uiScale,
 		unlocked = function(key) return Progress.unlocked(state, key) end,
+		onLocked = if (RS:GetAttribute("Pass_SHIPS") or 0) ~= 0 then function() K.promptPass("SHIPS") end else nil,
 		needLevel = function(key) return Progress.SHIP_LEVEL[key] or 1 end,
 		blurb = function(entry) return entry.blurb or "" end,
 		vertical = function(entry) return entry.design.vertical == true end,
@@ -1113,25 +1119,27 @@ hud = require(SF.Hud).new(player, {
 	onShop = function()
 		Shop.open(hud.gui, {
 			state = function() return state end,
-			vipOn = function() return (RS:GetAttribute("VipPass") or 0) ~= 0 end,
-			vipOwned = function() return player:GetAttribute("VIP") == true end,
-			buyVip = function() game:GetService("MarketplaceService"):PromptGamePassPurchase(player, RS:GetAttribute("VipPass")) end,
+			storeOn = function() return (RS:GetAttribute("Pass_VIP") or 0) ~= 0 end,
+			passOwned = function(name) return player:GetAttribute(name) == true end,
+			buyPass = function(name) K.promptPass(name) end,
+			buyPack = function(n)
+				local id = RS:GetAttribute("Pack_" .. n)
+				if id then game:GetService("MarketplaceService"):PromptProductPurchase(player, id) end
+			end,
 			redeem = function(code)
 				local r = remotes and remotes:FindFirstChild("Redeem")
 				if not r then return false, "Codes aren't available right now" end
 				local ok, good, amount, name = pcall(function() return r:InvokeServer(code) end)
 				if not ok then return false, "Couldn't reach the server — try again" end
 				if not good then return false, amount end
-				state.credits += amount
+				-- (the credits themselves arrive through the server's Granted event)
 				state.codes = state.codes or {}
 				state.codes[name] = true
-				sfx("chime", 0.8, 1.3)
-				banner("CODE REDEEMED", string.format("+%d credits", amount), 3)
-				save(); flushSave(true)
+				save()
 				return true, string.format("+%d credits!", amount)
 			end,
 			buy = function(kind, it)
-				if state.credits < it.price then return false, string.format("You need %d more credits", it.price - state.credits) end
+				if state.credits < it.price then return false, string.format("You need %d more credits — get more in the ⭐ Store tab", it.price - state.credits) end
 				state.credits -= it.price
 				if kind == "tune" then state.tune = it.level; craft.thrustMult = Shop.thrustMult(state)
 				else state.owned = state.owned or {}; state.owned[it.id] = true end
@@ -1541,11 +1549,11 @@ frame = function(dtRaw)
 		if design.key == "lynx" and E.agl > 10 and E.agl < 40 and E.vSurf < 3 then flags.hoverTime += dt else flags.hoverTime = 0 end
 		-- landing rating: remember the touchdown, score it once the ship has stopped
 		if ship.contacts == 0 then
-			lastSink = E.vVert
+			K.lastSink = E.vVert
 			if E.agl > 30 then touch.armed = true end
 			if C.ap then touch.auto = true end
 		elseif touch.armed and not touch.at then
-			touch.at = { sink = -math.min(lastSink, E.vVert), xe = xe, xn = xn, body = E.body, auto = touch.auto }
+			touch.at = { sink = -math.min(K.lastSink, E.vVert), xe = xe, xn = xn, body = E.body, auto = touch.auto }
 		end
 		if touch.at and ship.contacts > 0 and E.vSurf < 2 and not ship.dead then
 			rateLanding(touch.at)
@@ -1680,17 +1688,17 @@ frame = function(dtRaw)
 	local _c3 = os.clock()
 	hud:update(ship, C, craft, warpLevels[warpIdx], ship.warp, messages)
 	-- gifts for time played this session (bigger the longer you stay)
-	if giftIdx <= #K.GIFTS then
-		playT += dt
-		local g = K.GIFTS[giftIdx]
-		if playT >= g[1] * 60 then
-			giftIdx += 1
+	if K.giftIdx <= #K.GIFTS then
+		K.playT += dt
+		local g = K.GIFTS[K.giftIdx]
+		if K.playT >= g[1] * 60 then
+			K.giftIdx += 1
 			addCredits(g[2])
 			sfx("chime", 0.9, 1.1)
-			banner("🎁 PLAYTIME GIFT", string.format("+%d credits for flying %d minutes%s", g[2], g[1], if K.GIFTS[giftIdx] then string.format("  ·  next gift at %d min", K.GIFTS[giftIdx][1]) else ""), 3.5)
+			banner("🎁 PLAYTIME GIFT", string.format("+%d credits for flying %d minutes%s", g[2], g[1], if K.GIFTS[K.giftIdx] then string.format("  ·  next gift at %d min", K.GIFTS[K.giftIdx][1]) else ""), 3.5)
 			save()
 		end
-		local left = math.max(0, g[1] * 60 - playT)
+		local left = math.max(0, g[1] * 60 - K.playT)
 		hud:setGift(string.format("🎁 Gift in %d:%02d", math.floor(left / 60), math.floor(left % 60)))
 	else
 		hud:setGift(nil)
@@ -1748,6 +1756,46 @@ do
 		addCredits(bonus)
 		banner("DAILY BONUS", string.format("Day %d in a row  ·  +%d credits — come back tomorrow for more", state.streak, bonus), 4)
 		save()
+	end
+end
+-- purchases and server-side credits (credit packs, codes)
+do
+	local granted = remotes and remotes:FindFirstChild("Granted")
+	if granted then
+		granted.OnClientEvent:Connect(function(seq, amount)
+			if type(seq) ~= "number" or type(amount) ~= "number" then return end
+			if seq <= (state.grantSeq or 0) then return end
+			state.grantSeq = seq
+			state.credits += amount
+			sfx("chime", 0.9, 1.25)
+			banner("+" .. amount .. " CREDITS", "Spend them in the 🛒 Shop: paint jobs, trails and engine upgrades", 3.5)
+			save()
+		end)
+	end
+	-- game passes: the server sets an attribute when the player owns one
+	local function applyPasses(announce)
+		if player:GetAttribute("SHIPS") and not state.allShips then
+			state.allShips = true
+			if announce then banner("SHIP PASS", "Every ship is unlocked — pick one with the Ship button", 4) end
+		end
+		if player:GetAttribute("STYLE") and not state.allStyle then
+			state.allStyle = true
+			if announce then banner("STYLE PACK", "Every paint job and trail is yours — equip them in the 🛒 Shop", 4) end
+		end
+		if announce and player:GetAttribute("VIP") and not state.vipThanked then
+			state.vipThanked = true
+			banner("VIP PILOT", "Double credits from everything, forever", 4)
+		end
+	end
+	applyPasses(false)
+	-- (passes owned from before show up a moment after joining: only celebrate ones bought now)
+	local joinedAt = os.clock()
+	for _, name in ipairs({ "SHIPS", "STYLE", "VIP" }) do
+		player:GetAttributeChangedSignal(name):Connect(function()
+			local fresh = os.clock() - joinedAt > 15
+			applyPasses(fresh)
+			if fresh then sfx("chime", 1, 1.1) end
+		end)
 	end
 end
 openHangar(true)

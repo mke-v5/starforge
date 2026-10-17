@@ -29,6 +29,18 @@ Shop.TUNE = {
 	{ level = 3, name = "Engine tune III", price = 4000, mult = 1.25 },
 }
 
+-- Robux store (ids live on the server; `attr` is the player attribute a pass sets, prices match the Creator Hub)
+Shop.PASSES = {
+	{ attr = "SHIPS", name = "Ship Pass", sub = "Every ship, right now", robux = 349, c1 = "#1b3a7a", c2 = "#5fa8ff" },
+	{ attr = "VIP", name = "VIP Pilot", sub = "2× credits forever", robux = 199, c1 = "#ffcd3c", c2 = "#ff7828" },
+	{ attr = "STYLE", name = "Style Pack", sub = "All paints + trails", robux = 149, c1 = "#5a1a78", c2 = "#e070ff" },
+}
+Shop.PACKS = {
+	{ credits = 1000, label = "1,000", sub = "Small pack", robux = 49 },
+	{ credits = 5000, label = "5,000", sub = "+20% value", robux = 199 },
+	{ credits = 15000, label = "15,000", sub = "Best value", robux = 449 },
+}
+
 function Shop.find(id)
 	for _, list in ipairs({ Shop.PAINT, Shop.TRAIL }) do
 		for _, it in ipairs(list) do if it.id == id then return it end end
@@ -113,7 +125,7 @@ function Shop.open(gui, cb, scale)
 			local list = if current == "paint" then Shop.PAINT else Shop.TRAIL
 			local equipped = if current == "paint" then (st.paint or "paint_factory") else (st.trail or "trail_none")
 			for i, it in ipairs(list) do
-				local owned = it.price == 0 or (st.owned and st.owned[it.id])
+				local owned = it.price == 0 or st.allStyle or (st.owned and st.owned[it.id])
 				local sw
 				if current == "paint" then
 					sw = { if it.hull then Shop.hex(it.hull) else Color3.fromRGB(220, 225, 232), if it.accent then Shop.hex(it.accent) else AMBER }
@@ -134,11 +146,20 @@ function Shop.open(gui, cb, scale)
 					cb.equip(current, it)
 				end)
 			end
-		elseif current == "vip" then
-			local owned = cb.vipOwned and cb.vipOwned()
-			card(1, { Color3.fromRGB(255, 205, 60), Color3.fromRGB(255, 120, 40) }, "VIP pilot", "2× credits from everything",
-				if owned then "Owned ✓" else "Get VIP", if owned then Color3.fromRGB(120, 130, 140) else AMBER,
-				function() if not owned and cb.buyVip then cb.buyVip() end end)
+		elseif current == "store" then
+			-- Robux: one-time passes, then credit packs (prices as set in the Creator Hub)
+			local GREY = Color3.fromRGB(120, 130, 140)
+			for i, p in ipairs(Shop.PASSES) do
+				local owned = cb.passOwned and cb.passOwned(p.attr)
+				card(i, { Shop.hex(p.c1), Shop.hex(p.c2) }, p.name, p.sub,
+					if owned then "Owned ✓" else "R$ " .. p.robux, if owned then GREY else AMBER,
+					function() if not owned and cb.buyPass then cb.buyPass(p.attr) end end)
+			end
+			for i, p in ipairs(Shop.PACKS) do
+				card(10 + i, { Shop.hex("#1f6b3a"), Shop.hex("#6ee08f") }, string.format("%s credits", p.label), p.sub,
+					"R$ " .. p.robux, GREEN, function() if cb.buyPack then cb.buyPack(p.credits) end end)
+			end
+			note.Text = "Purchases support the game. Passes are yours forever on every server."
 		elseif current == "codes" then
 			local c = make("Frame", { BackgroundColor3 = Color3.fromRGB(28, 34, 44), LayoutOrder = 1, ZIndex = 22 }, grid)
 			corner(c, 10)
@@ -173,9 +194,9 @@ function Shop.open(gui, cb, scale)
 	end
 	local tabBtns = {}
 	local tabList = { { "paint", "Paint" }, { "trail", "Trails" }, { "tune", "Engines" }, { "codes", "🎁 Codes" } }
-	if cb.vipOn and cb.vipOn() then table.insert(tabList, { "vip", "⭐ VIP" }) end
+	if cb.storeOn and cb.storeOn() then table.insert(tabList, 1, { "store", "⭐ Store" }) end
 	for _, tdef in ipairs(tabList) do
-		local b = make("TextButton", { Size = UDim2.new(0, 110, 1, 0), BackgroundColor3 = Color3.fromRGB(36, 42, 54), Text = tdef[2], TextColor3 = INK, Font = FONT_B, TextSize = 15, ZIndex = 22 }, tabs)
+		local b = make("TextButton", { Size = UDim2.new(0, 104, 1, 0), BackgroundColor3 = Color3.fromRGB(36, 42, 54), Text = tdef[2], TextColor3 = INK, Font = FONT_B, TextSize = 15, ZIndex = 22 }, tabs)
 		corner(b, 8)
 		tabBtns[tdef[1]] = b
 		b.Activated:Connect(function()

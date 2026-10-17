@@ -86,10 +86,13 @@ function Hangar.open(gui, opts)
 		make("TextLabel", { Position = UDim2.new(0, 10, 0, 180), Size = UDim2.new(1, -20, 0, 24), BackgroundTransparency = 1, Text = entry.design.name, TextColor3 = if unlocked then INK else DIM, Font = FONT_B, TextSize = 19, ZIndex = 33 }, card)
 		make("TextLabel", { Position = UDim2.new(0, 10, 0, 206), Size = UDim2.new(1, -20, 0, 54), BackgroundTransparency = 1, Text = opts.blurb(entry), TextColor3 = DIM, Font = FONT, TextSize = 13, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 33 }, card)
 		make("TextLabel", { Position = UDim2.new(0, 10, 1, -32), Size = UDim2.new(1, -20, 0, 24), BackgroundTransparency = 1,
-			Text = if unlocked then "Ready" else string.format("🔒 Unlocks at level %d", opts.needLevel(key)), TextColor3 = if unlocked then Color3.fromRGB(110, 230, 150) else Color3.fromRGB(255, 140, 110), Font = FONT_B, TextSize = 14, ZIndex = 33 }, card)
+			Text = if unlocked then "Ready" else string.format("🔒 Level %d%s", opts.needLevel(key), if opts.onLocked then "  ·  or unlock now" else ""), TextColor3 = if unlocked then Color3.fromRGB(110, 230, 150) else Color3.fromRGB(255, 140, 110), Font = FONT_B, TextSize = 14, ZIndex = 33 }, card)
 		cards[key] = { stroke = stroke }
 		card.Activated:Connect(function()
-			if not unlocked then return end
+			if not unlocked then
+				if opts.onLocked then opts.onLocked(key) end
+				return
+			end
 			selected = key
 			refresh()
 		end)

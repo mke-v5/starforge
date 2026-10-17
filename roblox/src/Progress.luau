@@ -136,6 +136,6 @@ function P.dailyStat(state, stat, value, isMax)
 	return finished
 end
 
-function P.unlocked(state, key) return state.level >= (P.SHIP_LEVEL[key] or 1) end
+function P.unlocked(state, key) return state.allShips == true or state.level >= (P.SHIP_LEVEL[key] or 1) end
 
 return P

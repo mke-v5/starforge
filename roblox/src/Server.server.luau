@@ -27,11 +27,30 @@ end
 Pose.OnServerEvent:Connect(function(player, pose)
 	if type(pose) ~= "table" or type(pose.k) ~= "string" or #pose.k > 24 then return end
 	if not (num3(pose.p, 3) and num3(pose.v, 3) and num3(pose.q, 4)) then return end
-	local clean = { k = pose.k, p = pose.p, v = pose.v, q = pose.q, f = math.clamp(tonumber(pose.f) or 0, 0, 2), d = pose.d == true }
+	local clean = { k = pose.k, p = pose.p, v = pose.v, q = pose.q, f = math.clamp(tonumber(pose.f) or 0, 0, 2), d = pose.d == true,
+		c = if type(pose.c) == "string" and #pose.c < 32 then pose.c else nil, vip = player:GetAttribute("VIP") == true }
 	for _, other in ipairs(Players:GetPlayers()) do
 		if other ~= player then Pose:FireClient(other, player.UserId, clean) end
 	end
 end)
+
+-- light analytics (funnels and events show up in the Creator Dashboard)
+local AnalyticsService = game:GetService("AnalyticsService")
+local Track = remotes:FindFirstChild("Track") or Instance.new("RemoteEvent")
+Track.Name = "Track"; Track.Parent = remotes
+local trackCount = {}
+Track.OnServerEvent:Connect(function(player, kind, a, b)
+	trackCount[player.UserId] = (trackCount[player.UserId] or 0) + 1
+	if trackCount[player.UserId] > 200 then return end   -- no spamming
+	pcall(function()
+		if kind == "onboard" and type(a) == "number" and type(b) == "string" and a >= 1 and a <= 20 then
+			AnalyticsService:LogOnboardingFunnelStepEvent(player, math.floor(a), string.sub(b, 1, 40))
+		elseif kind == "event" and type(a) == "string" then
+			AnalyticsService:LogCustomEvent(player, string.sub(a, 1, 40), tonumber(b) or 1)
+		end
+	end)
+end)
+Players.PlayerRemoving:Connect(function(p) trackCount[p.UserId] = nil end)
 
 local store
 pcall(function() store = DataStoreService:GetDataStore("StarforgeV1") end)

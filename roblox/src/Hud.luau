@@ -54,6 +54,8 @@ function Hud.new(player, cb)
 	button(side, "🛒 Shop", function() if cb.onShop then cb.onShop() end end, -2).BackgroundColor3 = Color3.fromRGB(70, 52, 24)
 	local topBtn = button(side, "🏆 Top pilots", function() if cb.onTop then cb.onTop() end end, -1)
 	self.courseBtn = button(side, "🏁 Spaceport Loop", function() if cb.onCourse then cb.onCourse() end end, 0)
+	local inviteBtn = button(side, "👥 Invite friends", function() if cb.onInvite then cb.onInvite() end end, 0)
+	inviteBtn.BackgroundColor3 = Color3.fromRGB(28, 44, 70)
 	self.shipBtn = button(side, "Ship: " .. cb.ships[1].design.name, function() cb.onNextShip() end, 1)
 	-- the main autopilot button offers the next sensible step (climb to orbit, go to the Moon, fly home…)
 	self.autoKind = "orbit"
@@ -83,7 +85,7 @@ function Hud.new(player, cb)
 	local wu = button(warpRow, "warp ▶", function() cb.onWarp(1) end); wu.Size = UDim2.new(0.5, -2, 1, 0)
 	-- phones: keep the column short (the throttle sits under it); the rarer buttons fold behind "More"
 	if touch then
-		local extra = { topBtn, self.courseBtn, sasRow, warpRow }
+		local extra = { topBtn, self.courseBtn, inviteBtn, sasRow, warpRow }
 		for _, o in ipairs(extra) do o.Visible = false end
 		local more
 		more = button(side, "More ▾", function()

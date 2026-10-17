@@ -443,7 +443,12 @@ K.giftIdx, K.playT = 1, 0
 local function creditMult() return if player:GetAttribute("VIP") then 2 else 1 end
 local function addCredits(n) state.credits += n * creditMult() end
 -- Robux store: game passes are bought here; the server sets the matching player attribute
+function K.track(kind, a, b)
+	local r = remotes and remotes:FindFirstChild("Track")
+	if r then r:FireServer(kind, a, b) end
+end
 function K.promptPass(name)
+	K.track("event", "prompt_" .. name, 1)
 	local id = RS:GetAttribute("Pass_" .. name)
 	if id and id ~= 0 then game:GetService("MarketplaceService"):PromptGamePassPurchase(player, id) end
 end
@@ -856,7 +861,7 @@ local function sendPose()
 	local vF = ship.v:clone():sub(ship:surfaceVel(EARTH, ship.r, ship.t, _gv)):applyQuaternion(_gq2)
 	local fl, n = 0, 0
 	for _, P in ipairs(craft.engines) do if P.alive then fl += P.eng.flame; n += 1 end end
-	poseEvent:FireServer({ k = design.key, p = { pF.x, pF.y, pF.z }, v = { vF.x, vF.y, vF.z }, q = { qF.x, qF.y, qF.z, qF.w }, f = if n > 0 then fl / n else 0, d = ship.dead })
+	poseEvent:FireServer({ k = design.key, p = { pF.x, pF.y, pF.z }, v = { vF.x, vF.y, vF.z }, q = { qF.x, qF.y, qF.z, qF.w }, f = if n > 0 then fl / n else 0, d = ship.dead, c = state.paint })
 end
 local function dropGhost(id)
 	local g = ghosts[id]
@@ -881,11 +886,15 @@ if poseEvent then
 			g.tag, g.label = tag, lb
 			ghosts[userId] = g
 		end
-		if g.key ~= pose.k then
+		if g.key ~= pose.k or g.paint ~= pose.c then
+			g.paint = pose.c
 			for _, d in ipairs(Designs) do
 				if d.key == pose.k then
 					if g.view then g.view.model:Destroy() end
 					g.craft = Craft.new(d.design)
+					-- their paint job, so everyone sees what they bought
+					local it = pose.c and Shop.find(pose.c)
+					if it and it.hull then g.craft.colors = { hull = it.hull, accent = it.accent } end
 					g.view = ShipModel.build(g.craft, "Pilot_" .. userId)
 					g.view.model.Parent = scene
 					g.key = pose.k
@@ -919,7 +928,8 @@ local function drawGhosts(simT)
 		end
 		local dir = toWorld(d) / math.max(dist, 1)
 		g.tag.CFrame = CFrame.new(dir * math.min(dist * S, DMAX) + Vector3.new(0, 8, 0))
-		g.label.Text = string.format("%s\n%s · %s", g.name, g.shipName or "", Geo.fmtDist(dist))
+		g.label.Text = string.format("%s%s\n%s · %s", if P.vip then "⭐ " else "", g.name, g.shipName or "", Geo.fmtDist(dist))
+		g.label.TextColor3 = if P.vip then Color3.fromRGB(255, 214, 90) else Color3.fromRGB(255, 200, 120)
 		g.label.Visible = ship.env.body == EARTH and dist < 200000
 	end
 end
@@ -980,7 +990,7 @@ hud = require(SF.Hud).new(player, {
 		end
 		if Designs[i] == design then
 			local nxt = lockedHint()
-			if nxt then toast(string.format("Reach level %d to unlock the %s", Progress.SHIP_LEVEL[nxt.key], nxt.design.name)) end
+			if nxt then toast(string.format("Reach level %d to unlock the %s — or get every ship now with the Ship Pass (⭐ Store)", Progress.SHIP_LEVEL[nxt.key], nxt.design.name)) end
 			return
 		end
 		startFlight(Designs[i])
@@ -1116,7 +1126,18 @@ hud = require(SF.Hud).new(player, {
 		local b = courseBest(COURSES[courseIdx].id)
 		toast(string.format("Race course: %s · %d rings%s", COURSES[courseIdx].name, #rings, if b then " · your best " .. fmtRace(b) else ""))
 	end,
+	onInvite = function()
+		local SocialService = game:GetService("SocialService")
+		local ok, can = pcall(function() return SocialService:CanSendGameInviteAsync(player) end)
+		if ok and can then
+			K.track("event", "invite_open", 1)
+			pcall(function() SocialService:PromptGameInvite(player) end)
+		else
+			toast("Invites aren't available here")
+		end
+	end,
 	onShop = function()
+		K.track("event", "shop_open", 1)
 		Shop.open(hud.gui, {
 			state = function() return state end,
 			storeOn = function() return (RS:GetAttribute("Pass_VIP") or 0) ~= 0 end,
@@ -1580,6 +1601,11 @@ frame = function(dtRaw)
 			grant(m.xp, m.credits)
 			save()
 			hud:setMission(Progress.current(state))
+			-- analytics: how far new pilots get (first missions form the onboarding funnel)
+			local idx = 0
+			for i, mm in ipairs(Progress.MISSIONS) do if mm.id == m.id then idx = i end end
+			K.track("event", "mission_" .. m.id, idx)
+			if idx >= 1 and idx <= 8 then K.track("onboard", idx + 1, "mission_" .. m.id) end
 		end
 	end
 	dbgTick("miss", _cm)
@@ -1758,6 +1784,7 @@ do
 		save()
 	end
 end
+if state.flights <= 1 then K.track("onboard", 1, "joined") end
 -- purchases and server-side credits (credit packs, codes)
 do
 	local granted = remotes and remotes:FindFirstChild("Granted")
